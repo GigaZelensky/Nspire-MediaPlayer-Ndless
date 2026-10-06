@@ -2,6 +2,7 @@
  * underneath it, including fgets and buffered seeks. Native writable files
  * retain the SDK descriptor table and the player's existing write path. */
 #include "storage_read_stream.h"
+#include "../storage/usb/usb_storage.h"
 #include "storage_descriptors.h"
 #include "raw_player_io.h"
 #include "native_interrupts.h"
@@ -43,6 +44,8 @@ int __wrap__open(const char *path, int flags, ...)
     if (!path)
         return error_result(EINVAL);
     int mode = flags & O_ACCMODE;
+    if (usb_path(path) && (mode != O_RDONLY || (flags & (O_CREAT | O_TRUNC | O_APPEND))))
+        return error_result(EROFS);
     if (mode == O_WRONLY) {
         unsigned mask = native_interrupt_mask();
         raw_player_before_native();

@@ -5,6 +5,7 @@
 #include "storage_activity.h"
 #include "storage_mutation.h"
 #include "movie_crypto_session.h"
+#include "../storage/usb/usb_storage.h"
 #include "../platform/portable_reader_platform.h"
 #include "../storage/raw_file_reader.h"
 #include <errno.h>
@@ -19,6 +20,7 @@
 #define STREAM_PAGE_SECONDS 3U
 struct StorageReadStream {
     void *native;
+    UsbFile *usb;
     uint32_t bytes, inode;
     NveReader *crypt;
 };
@@ -195,6 +197,41 @@ StorageReadStream *storage_read_stream_open(const char *path, int *error)
         record_open_failure("ownership", EBUSY, 0);
         return NULL;
     }
+    if (usb_path(path)) {
+        if (!claim(false, error))
+            return NULL;
+        StorageReadStream *stream = allocate(sizeof(*stream));
+        if (!stream) {
+            active = false;
+            set_error(error, ENOMEM);
+            return NULL;
+        }
+        stream->usb = usb_file_open(path, error);
+        if (!stream->usb) {
+            open_failure.stage = "USB open";
+            open_failure.status = error ? *error : EIO;
+            dispose(stream);
+            active = false;
+            return NULL;
+        }
+        stream->bytes = usb_file_size(stream->usb);
+        const NveKeys *keys = movie_crypto_keys(path);
+        if (keys) {
+            if (keys->header.physical_bytes != stream->bytes ||
+                !(stream->crypt = allocate(sizeof(*stream->crypt)))) {
+                usb_file_close(stream->usb);
+                dispose(stream);
+                active = false;
+                set_error(error, EIO);
+                return NULL;
+            }
+            nve_reader_init(stream->crypt, keys);
+        }
+        ++handles;
+        active = false;
+        native_critical_leave(entry_mask);
+        return stream;
+    }
     if (!workspace(error)) {
         record_open_failure("workspace", ENOMEM, 0);
         active = false;
@@ -275,7 +312,7 @@ static int read_raw_at(StorageReadStream *stream, uint32_t offset, void *destina
 {
     unsigned entry_mask = native_interrupt_mask();
     set_error(error, 0);
-    if (!stream || !stream->native) {
+    if (!stream || (!stream->native && !stream->usb)) {
         set_error(error, EBADF);
         return -1;
     }
@@ -292,6 +329,12 @@ static int read_raw_at(StorageReadStream *stream, uint32_t offset, void *destina
         return 0;
     if (!claim(false, error))
         return -1;
+    if (stream->usb) {
+        int result = usb_file_read_at(stream->usb, offset, destination, bytes, error);
+        active = false;
+        native_critical_leave(entry_mask);
+        return result;
+    }
     if (!workspace(error)) {
         active = false;
         return -1;
@@ -386,7 +429,10 @@ int storage_read_stream_read_at(StorageReadStream *stream, uint32_t offset, void
 {
     if (!stream || !stream->crypt) return read_raw_at(stream, offset, destination, bytes, error);
     set_error(error, 0);
-    if (!stream->native) { set_error(error, EBADF); return -1; }
+    if (!stream->native && !stream->usb) {
+        set_error(error, EBADF);
+        return -1;
+    }
     if (active || app_task_io_in_job()) { set_error(error, EBUSY); return -1; }
     if (offset > storage_read_stream_size(stream)) { set_error(error, EINVAL); return -1; }
     if (!bytes) return 0;
@@ -409,7 +455,7 @@ int storage_read_stream_close(StorageReadStream *stream, int *error)
 {
     unsigned entry_mask = native_interrupt_mask();
     set_error(error, 0);
-    if (!stream || !stream->native) {
+    if (!stream || (!stream->native && !stream->usb)) {
         set_error(error, EBADF);
         return -1;
     }
@@ -417,7 +463,11 @@ int storage_read_stream_close(StorageReadStream *stream, int *error)
         return -1;
     if (scratch && scratch->owner == stream)
         scratch->owner = NULL;
-    int status = portable_reader_platform_close(&platform, stream->native);
+    int status = 0;
+    if (stream->usb)
+        usb_file_close(stream->usb);
+    else
+        status = portable_reader_platform_close(&platform, stream->native);
     native_critical_leave(entry_mask);
     int failure = status ? native_error() : 0;
     stream->native = NULL;

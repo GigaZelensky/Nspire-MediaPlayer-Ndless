@@ -876,3 +876,22 @@ LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
 ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+FATFS R0.16 (PATCH 2)
+====================
+
+USB filesystem support: src/storage/usb/fatfs
+Copyright (C) 2025, ChaN, all right reserved.
+
+FatFs module is an open source software. Redistribution and use of FatFs in
+source and binary forms, with or without modification, are permitted provided
+that the following condition is met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this condition and the following disclaimer.
+
+This software is provided by the copyright holder and contributors "AS IS"
+and any warranties related to this software are DISCLAIMED.
+The copyright owner or contributors be NOT LIABLE for any damages caused
+by use of this software.

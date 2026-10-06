@@ -3,6 +3,9 @@
 #include "storage_read_stream.h"
 #include "performance_clock.h"
 #include "movie_crypto_session.h"
+#include "media_browser.h"
+#include "usb_browser.h"
+#include "../storage/usb/usb_storage.h"
 #if NDVIDEO_CODEC_MODULES
 #include "codecs/codec_module_api.h"
 #include "codec_module_manifest.h"
@@ -75,6 +78,7 @@ int main(int argc, char **argv)
     strncpy(directory, argv[0], sizeof(directory) - 1);
     directory[sizeof(directory) - 1] = '\0';
     strip_filename(directory);
+    media_browser_configure(directory);
     ui_load_theme_for_directory(directory);
     /* Native startup may reject an early transition or change the clock after
      * it. Reconcile once here, with genuine SRAM and before app I/O begins. */
@@ -190,9 +194,10 @@ int main(int argc, char **argv)
         SDL_FillRect(screen, NULL, SDL_MapRGB(screen->format, 0, 0, 0));
     }
     display_power_restore(&g_display_power_state, monotonic_clock_now_ms());
-    player_standby_shutdown();
     cleanup_deferred_playback_movie();
     clear_movie_picker_cache(&g_picker_cache);
+    usb_browser_shutdown(screen, &fonts);
+    media_browser_shutdown();
 #if NDVIDEO_CODEC_MODULES
     char module_shutdown_error[192] = {0};
     if (!codec_modules_shutdown())

@@ -1,4 +1,6 @@
 #include "player_internal.h"
+#include "picker_navigation.h"
+#include "media_browser.h"
 
 SDL_Rect picker_row_rect_for_y(int row_y)
 {
@@ -1230,7 +1232,8 @@ void render_picker(
             "ND Video Player"
         );
     }
-    draw_header_shortcuts(screen, fonts, 18 + shortcuts_offset_y, shortcuts_mix);
+    draw_header_shortcuts(screen, fonts, 18 + shortcuts_offset_y, shortcuts_mix, !media_browser_at_root());
+    picker_navigation_draw(screen, fonts, shortcuts_mix, shortcuts_offset_y);
     if (count == 0) {
         uint8_t empty_mix = picker_intro_mix_for_transition(intro_started_ms, now_ms, 115U, 230U, exit_elapsed_ms);
         int empty_offset_y = picker_intro_offset(empty_mix, 7);
@@ -1244,7 +1247,7 @@ void render_picker(
         };
 
         if (empty_mix > 48) {
-            draw_ui_label(screen, fonts, 10, 54 + empty_offset_y, "No .nvp or .nvp.tns files found");
+            draw_ui_label(screen, fonts, 16, 64 + empty_offset_y, "No videos in this folder");
         }
         draw_glass_panel_faded(
             screen,
@@ -1313,6 +1316,8 @@ void render_picker(
         uint8_t metadata_mix = files[index].timing_checked
             ? ui_ease_out_cubic(now_ms - files[index].metadata_ready_ms, 120U) : 0;
         if (row_intro_mix > metadata_mix) row_intro_mix = metadata_mix;
+        row_intro_mix =
+            (uint8_t)(((unsigned)row_intro_mix * picker_navigation_mix(now_ms) + 127U) / 255U);
         int row_intro_offset_y = picker_intro_offset(row_intro_mix, 9);
         uint8_t resume_mix = resume_badge_hover_index == (int) index ? resume_badge_hover_mix : 0;
         uint8_t row_press_mix = pressed_row_index == (int) index ? press_mix : 0;
@@ -1329,10 +1334,26 @@ void render_picker(
             previous_start_mix
         );
         row.y = (Sint16) (row.y + row_intro_offset_y);
+        row.x += picker_navigation_offset(now_ms);
         draw_row = row;
         divider.y = (Sint16) (row.y + row.h - 1);
         if (has_resume_badge) {
             resume_badge.y = (Sint16) (resume_badge.y + row_intro_offset_y);
+        }
+        if (files[index].kind == PICKER_SEPARATOR) {
+            int center_y = row.y + row.h / 2;
+            Uint16 color = rgb565_lerp(picker_background_color_at_y_mix(center_y, background_mix),
+                                       UI_COLOR_WARM_WHITE, row_intro_mix / 2, 255);
+            SDL_Rect left = {row.x + 4, center_y, (Uint16)(row.w / 2 - 24), 1};
+            SDL_Rect right = {row.x + row.w / 2 + 24, center_y, (Uint16)(row.w / 2 - 28), 1};
+            fill_rect_rgb565(screen, &left, color);
+            fill_rect_rgb565(screen, &right, color);
+            if (row_intro_mix > 42)
+                draw_ui_label(screen, fonts,
+                              row.x + (row.w - nSDL_GetStringWidth(fonts->white, "USB")) / 2,
+                              center_y - NSP_FONT_HEIGHT / 2, "USB");
+            y += 20;
+            continue;
         }
         selection_mix = (uint8_t) (((uint16_t) selection_mix * row_intro_mix + 127U) / 255U);
         int text_x = row.x + 4 + ((int) selection_mix * 8 + 127) / 255 + row_press_offset_x;
@@ -1364,6 +1385,17 @@ void render_picker(
             );
         }
         if (row_intro_mix > 42) {
+            if (files[index].kind == PICKER_FOLDER) {
+                int icon_y = row.y + (row.h - 9) / 2 + row_press_offset_y;
+                SDL_Rect tab = {text_x, icon_y, 5, 3}, body = {text_x, icon_y + 2, 10, 7};
+                Uint16 color =
+                    rgb565_lerp(UI_COLOR_ACCENT_DEEP, UI_COLOR_ACCENT_HOT, row_intro_mix, 255);
+                fill_rect_rgb565(screen, &tab, color);
+                draw_vertical_gradient(screen, &body, color, UI_COLOR_ACCENT_DEEP);
+                text_x += 15;
+                text_max_width -= 23;
+                draw_ui_label(screen, fonts, row.x + row.w - 12, text_y, ">");
+            }
             if (files[index].encrypted) {
                 draw_lock_icon(screen, text_x, row.y + (row.h - 10) / 2 + row_press_offset_y, row_intro_mix);
                 text_x += 12;
@@ -1475,7 +1507,12 @@ void render_picker(
             rgb565_lerp(picker_background_color_at_y_mix(footer_accent.y, background_mix), ui_theme()->footer_accent_top, footer_mix, 255),
             rgb565_lerp(picker_background_color_at_y_mix(footer_accent.y, background_mix), UI_COLOR_ACCENT_DEEP, footer_mix, 255)
         );
-        snprintf(footer, sizeof(footer), "%lu %s", (unsigned long) count, count == 1 ? "file" : "files");
+        size_t items = count;
+        for (size_t item = 0; item < count; ++item)
+            if (files[item].kind == PICKER_SEPARATOR)
+                --items;
+        snprintf(footer, sizeof(footer), "%lu %s", (unsigned long)items,
+                 items == 1 ? "item" : "items");
         clock_menu_draw_footer(screen, fonts, footer_offset_y, footer_mix);
         if (footer_mix > 54) {
             draw_ui_label(screen, fonts, 12, SCREEN_H - 17 + footer_offset_y, credit);

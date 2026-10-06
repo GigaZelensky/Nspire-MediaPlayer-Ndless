@@ -55,7 +55,7 @@ static inline void player_prefetch_data(const void *ptr)
 #define STATUS_BADGE_EXIT_ANIM_MS 95U
 #define TAB_HOLD_FRAME_REPEAT_DELAY_MS 250U
 #define TAB_HOLD_FRAME_REPEAT_FALLBACK_INTERVAL_MS 80U
-#define PICKER_MAX_FILES 128
+#define PICKER_MAX_FILES 1024
 #define PICKER_VISIBLE_ROWS 8
 #define PICKER_TOOLTIP_DWELL_MS 450U
 #define PICKER_SELECTION_ANIM_MS 155U
@@ -204,6 +204,7 @@ typedef struct {
     bool encrypted;
     uint32_t metadata_ready_ms;
     struct NveHeader *encrypted_header;
+    enum { PICKER_MOVIE, PICKER_FOLDER, PICKER_SEPARATOR } kind;
 } MovieFile;
 
 typedef struct {
@@ -1240,7 +1241,7 @@ void draw_playback_title_strip( SDL_Surface *screen, const Fonts *fonts, const S
 void draw_centered_text_badge(SDL_Surface *screen, const Fonts *fonts, int center_x, int y, const char *label);
 int header_shortcut_badge_width(const Fonts *fonts, const char *key, const char *action);
 void draw_header_shortcut_badge( SDL_Surface *screen, const Fonts *fonts, int x, int y, const char *key, const char *action, uint8_t mix );
-void draw_header_shortcuts(SDL_Surface *screen, const Fonts *fonts, int y, uint8_t mix);
+void draw_header_shortcuts(SDL_Surface *screen, const Fonts *fonts, int y, uint8_t mix, bool can_back);
 void draw_surface_panel(SDL_Surface *screen, SDL_Surface *surface, int x, int y);
 void draw_seek_preview_panel(SDL_Surface *screen, SDL_Surface *surface, int x, int y, int marker_x, uint8_t panel_mix);
 void draw_screenshot_preview_osd( SDL_Surface *screen, const Fonts *fonts, const ScreenshotPreviewState *preview, uint32_t now_ms );

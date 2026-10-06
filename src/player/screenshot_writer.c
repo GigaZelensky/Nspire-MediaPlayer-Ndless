@@ -1,4 +1,5 @@
 #include "screenshot_writer.h"
+#include "media_browser.h"
 #include "app_task_io.h"
 #include "storage_activity.h"
 
@@ -158,6 +159,7 @@ bool screenshot_writer_has_capacity(void)
 ScreenshotWriteStatus screenshot_writer_submit(const char *directory, uint8_t *bmp, size_t bytes,
                                                uint32_t *id)
 {
+    directory = media_local_directory(directory);
     char prefix[SCREENSHOT_WRITER_PATH_CAP];
     size_t length = 0;
     unsigned saved;

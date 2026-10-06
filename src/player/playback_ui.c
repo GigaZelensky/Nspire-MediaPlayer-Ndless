@@ -1017,7 +1017,7 @@ void draw_header_shortcut_badge(
     }
 }
 
-void draw_header_shortcuts(SDL_Surface *screen, const Fonts *fonts, int y, uint8_t mix)
+void draw_header_shortcuts(SDL_Surface *screen, const Fonts *fonts, int y, uint8_t mix, bool can_back)
 {
     const char *keys[] = {
         "ENTER",
@@ -1027,7 +1027,7 @@ void draw_header_shortcuts(SDL_Surface *screen, const Fonts *fonts, int y, uint8
     const char *actions[] = {
         "OPEN",
         "CHOOSE",
-        "EXIT"
+        can_back ? "BACK" : "EXIT"
     };
     int widths[3];
     int total_w = 0;

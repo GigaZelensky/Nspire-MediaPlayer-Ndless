@@ -10,6 +10,7 @@
 #include "movie_crypto_session.h"
 #include "../platform/portable_reader_platform.h"
 #include "../storage/raw_file_reader.h"
+#include "../storage/usb/usb_storage.h"
 #define REG(a) (*(volatile uint32_t *)(uintptr_t)(a))
 typedef struct {
     uint32_t failures, retries, recovered;
@@ -593,6 +594,8 @@ void raw_player_cancel(RawPlayerIo *ctx)
 bool raw_player_prepare_native(void)
 {
     native_requested = true;
+    if (!usb_storage_park())
+        return false;
     RawPlayerIo *ctx = live;
     if (!ctx)
         return true;
@@ -619,7 +622,11 @@ bool raw_player_prepare_native(void)
     ctx->park = false;
     return !ctx->view && !ctx->running && provider_quiescent(ctx);
 }
-void raw_player_native_released(void) { native_requested = false; }
+void raw_player_native_released(void)
+{
+    native_requested = false;
+    usb_storage_unpark();
+}
 static void before_foreground_io(bool native)
 {
     /* Ordinary foreground file/directory calls cannot reenter a suspended

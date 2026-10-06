@@ -2,7 +2,7 @@
 
 Native Ndless video player and PC-side encoder for the TI-Nspire CX and CX II line.
 
-This project targets the **TI-Nspire CX**, **TI-Nspire CX II**, and **TI-Nspire CX II-T**, and plays streamed `.nvp` movies from calculator storage. The player binary and the movie data stay separate:
+This project targets the **TI-Nspire CX**, **TI-Nspire CX II**, and **TI-Nspire CX II-T**, and plays streamed `.nvp` movies from calculator storage. CX II models can also read movies from a USB flash drive. The player binary and the movie data stay separate:
 
 - `_ndvideo.tns`: the Ndless launcher
 - `*.nvp.tns`: movie containers produced by the encoder
@@ -36,7 +36,8 @@ The `.nvp` format used by the current player is:
 
 - native Ndless runtime
 - CX and CX II LCD paths through Ndless' native framebuffer modes
-- streamed playback from calculator storage
+- streamed playback from calculator storage, or a USB flash drive on CX II
+- folder navigation with breadcrumbs and Back on both storage sources
 - password-protected videos with authenticated AES-256 encryption
 - H.264 decode through `h264bsd`
 - H.265 / HEVC decode through an optimized `libde265` port
@@ -83,6 +84,34 @@ builds load their decoder with the app and remain the smallest download.
 
 - no audio playback (CX and CX II calculators have no built-in speakers)
 
+## USB Drives and Folders
+
+On CX II, place videos and folders inside `ndvideo` at the root of a USB drive:
+
+```text
+ndvideo/
+  Rick and Morty/
+    Season 1/
+      S01E01.nvp.tns
+      S01E02.nvp.tns
+```
+
+Use a Mini-USB **OTG host adapter** and a high-speed USB drive formatted as
+FAT16, FAT32 or exFAT. MBR and GPT partitions are supported. In the player,
+select **USB** above the list or press `U`, then connect the drive as shown.
+If it was already connected, reconnect only the flash drive to the adapter;
+leave the adapter plugged into the calculator.
+
+USB entries appear below the centered USB separator. Open one folder at a
+time; **Back** or `Esc` returns to its parent. Calculator folders work the
+same way. Automatic playback stays within the current folder.
+
+USB reads run cooperatively alongside decoding and use a small DMA workspace.
+There is no extra software CRC pass during playback; encrypted videos retain
+their normal authentication. The USB filesystem is read-only. Its resume
+history, screenshots and debug logs are saved beside the player on the
+calculator. Disconnecting the drive stops playback with an in-player notice.
+
 ## Battery Life
 
 Battery Life: ~9.5 hours of continuous H.264 playback at 100% brightness on a CX II-T.
@@ -95,11 +124,12 @@ Battery Life: ~9.5 hours of continuous H.264 playback at 100% brightness on a CX
 - touchpad: move cursor
 - touchpad hover: show the title, filename metadata and video duration
 - touchpad click: open highlighted movie
-- `Enter` or keypad `5`: open movie
+- `Enter` or keypad `5`: open movie or folder
+- `U` or the USB button: connect/rescan a USB drive (CX II)
 - `C`: cycle theme color
 - `S`: save a BMP screenshot
 - `Scratchpad`: save state and open OS Scratchpad
-- `Esc`: exit
+- `Esc`: parent folder, or exit from the library
 
 ### Movie Filename Metadata
 

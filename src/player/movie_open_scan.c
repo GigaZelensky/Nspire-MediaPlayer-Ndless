@@ -3,8 +3,10 @@
 #include <errno.h>
 #include "movie/nvp_validation.h"
 #include "timing_math.h"
-#include "raw_player_io.h"
+#include "player_reader.h"
 #include "movie_crypto_session.h"
+#include "media_browser.h"
+#include "../storage/usb/usb_storage.h"
 
 bool load_subtitles(
     Movie *movie,
@@ -450,6 +452,8 @@ int compare_movie_files(const void *lhs, const void *rhs)
 {
     const MovieFile *a = (const MovieFile *) lhs;
     const MovieFile *b = (const MovieFile *) rhs;
+    if (a->kind != b->kind)
+        return a->kind == PICKER_FOLDER ? -1 : 1;
     int result = strcmp(a->name ? a->name : "", b->name ? b->name : "");
     if (result != 0) {
         return result;
@@ -472,15 +476,15 @@ bool strings_equal_ignore_case(const char *lhs, const char *rhs)
     return *lhs == '\0' && *rhs == '\0';
 }
 
-static RawPlayerIo *picker_timing_reader;
+static PlayerReader *picker_timing_reader;
 static MovieFile *picker_timing_file;
 
 void movie_picker_timing_stop(void)
 {
-    RawPlayerIo *reader = picker_timing_reader;
+    PlayerReader *reader = picker_timing_reader;
     picker_timing_reader = NULL;
     picker_timing_file = NULL;
-    raw_player_destroy(reader);
+    player_reader_destroy(reader);
 }
 
 void movie_picker_timing_tick(MovieFile *files, size_t count, size_t preferred)
@@ -502,7 +506,7 @@ void movie_picker_timing_tick(MovieFile *files, size_t count, size_t preferred)
                 return;
         }
         picker_timing_file = &files[preferred];
-        picker_timing_reader = raw_player_create(picker_timing_file->path);
+        picker_timing_reader = player_reader_create(picker_timing_file->path);
         if (!picker_timing_reader) {
             picker_timing_file->timing_checked = true;
             picker_timing_file->metadata_ready_ms = monotonic_clock_now_ms();
@@ -511,11 +515,12 @@ void movie_picker_timing_tick(MovieFile *files, size_t count, size_t preferred)
         }
     }
 
-    raw_player_service(8U);
-    uint32_t file_bytes = raw_player_file_bytes(picker_timing_reader);
+    player_reader_service(8U);
+    uint32_t file_bytes = player_reader_file_bytes(picker_timing_reader);
     size_t prefix_bytes = file_bytes < sizeof(prefix) ? file_bytes : sizeof(prefix);
     int result = prefix_bytes >= sizeof(header)
-        ? raw_player_read(picker_timing_reader, 0, prefix, prefix_bytes, false) : -1;
+                     ? player_reader_read(picker_timing_reader, 0, prefix, prefix_bytes, false)
+                     : -1;
     if (result == 0)
         return;
 
@@ -554,78 +559,105 @@ void movie_picker_timing_tick(MovieFile *files, size_t count, size_t preferred)
     movie_picker_timing_stop();
 }
 
+typedef struct {
+    MovieFile *files;
+    size_t count, capacity;
+    const char *directory;
+    const HistoryStore *history;
+    bool failed;
+} MovieScan;
+static bool scan_entry(void *context, const char *name, bool directory, uint32_t bytes)
+{
+    (void)bytes;
+    MovieScan *scan = context;
+    if (name[0] == '.' ||
+        (!directory && !has_suffix(name, ".nvp") && !has_suffix(name, ".nvp.tns")))
+        return true;
+    if (scan->count >= PICKER_MAX_FILES)
+        return false;
+    char path[MAX_PATH_LEN];
+    int length = snprintf(path, sizeof(path), "%s/%s", scan->directory, name);
+    if (length < 0 || (size_t)length >= sizeof(path))
+        return true;
+    if (scan->count == scan->capacity) {
+        size_t capacity = scan->capacity ? scan->capacity * 2 : 16;
+        MovieFile *next = realloc(scan->files, capacity * sizeof(*next));
+        if (!next) {
+            scan->failed = true;
+            return false;
+        }
+        scan->files = next;
+        scan->capacity = capacity;
+    }
+    MovieFile *file = &scan->files[scan->count];
+    memset(file, 0, sizeof(*file));
+    file->kind = directory ? PICKER_FOLDER : PICKER_MOVIE;
+    file->path = dup_string(path);
+    if (directory) {
+        file->name = dup_string(name);
+        file->timing_checked = true;
+    } else
+        movie_display_fields_for_filename(name, &file->name, &file->detail);
+    ++scan->count;
+    if (!file->name || !file->path) {
+        scan->failed = true;
+        return false;
+    }
+    if (!directory && scan->history) {
+        for (size_t i = 0; i < scan->history->count; ++i) {
+            if (strcmp(scan->history->entries[i].path, path))
+                continue;
+            file->has_resume = scan->history->entries[i].has_resume;
+            file->resume_frame = scan->history->entries[i].frame;
+            break;
+        }
+    }
+    return true;
+}
 MovieFile *scan_movies(const char *directory, size_t *out_count)
 {
-    DIR *dir = opendir(directory);
-    struct dirent *entry;
-    MovieFile *files;
+    *out_count = 0;
     char history_path[MAX_PATH_LEN];
     HistoryStore history;
-    bool have_history = false;
-    size_t count = 0;
-    if (!dir) {
-        *out_count = 0;
-        return NULL;
-    }
-    files = (MovieFile *) calloc(PICKER_MAX_FILES, sizeof(MovieFile));
-    if (!files) {
-        closedir(dir);
-        *out_count = 0;
-        return NULL;
-    }
     history_path_for_directory(directory, history_path, sizeof(history_path));
-    have_history = load_history_store_from_path(history_path, &history);
-    while ((entry = readdir(dir)) && count < PICKER_MAX_FILES) {
-        char joined[MAX_PATH_LEN];
-        int joined_len;
-        size_t history_index;
-        if (entry->d_name[0] == '.') {
-            continue;
+    bool have_history = load_history_store_from_path(history_path, &history);
+    MovieScan scan = {.directory = directory, .history = have_history ? &history : NULL};
+    if (usb_path(directory)) {
+        int error = 0;
+        if (!usb_directory_list(directory, scan_entry, &scan, &error))
+            scan.failed = true;
+    } else {
+        DIR *dir = opendir(directory);
+        struct dirent *entry;
+        if (!dir)
+            scan.failed = true;
+        while (dir && (entry = readdir(dir))) {
+            if (entry->d_name[0] == '.')
+                continue;
+            char path[MAX_PATH_LEN];
+            struct nuc_stat status;
+            int length = snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name);
+            if (length < 0 || (size_t)length >= sizeof(path))
+                continue;
+            if (nuc_stat(path, &status))
+                continue;
+            bool folder = (status.st_mode & 0170000) == 0040000;
+            if (!scan_entry(&scan, entry->d_name, folder, status.st_size))
+                break;
         }
-        if (!has_suffix(entry->d_name, ".nvp") && !has_suffix(entry->d_name, ".nvp.tns")) {
-            continue;
-        }
-        joined_len = snprintf(joined, sizeof(joined), "%s/%s", directory, entry->d_name);
-        if (joined_len < 0 || (size_t) joined_len >= sizeof(joined)) {
-            continue;
-        }
-        if (!movie_display_fields_for_filename(entry->d_name, &files[count].name, &files[count].detail)) {
+        if (dir)
             closedir(dir);
-            if (have_history) {
-                free_history_store(&history);
-            }
-            free_movie_files(files, count + 1);
-            *out_count = 0;
-            return NULL;
-        }
-        files[count].path = dup_string(joined);
-        if (!files[count].name || !files[count].path) {
-            closedir(dir);
-            if (have_history) {
-                free_history_store(&history);
-            }
-            free_movie_files(files, count + 1);
-            *out_count = 0;
-            return NULL;
-        }
-        if (have_history) {
-            for (history_index = 0; history_index < history.count; ++history_index) {
-                if (strcmp(history.entries[history_index].path, files[count].path) == 0) {
-                    files[count].has_resume = history.entries[history_index].has_resume;
-                    files[count].resume_frame = history.entries[history_index].frame;
-                    break;
-                }
-            }
-        }
-        count++;
     }
-    closedir(dir);
-    if (have_history) {
+    if (have_history)
         free_history_store(&history);
+    if (scan.failed) {
+        free_movie_files(scan.files, scan.count);
+        return NULL;
     }
-    qsort(files, count, sizeof(MovieFile), compare_movie_files);
-    *out_count = count;
-    return files;
+    if (scan.count > 1)
+        qsort(scan.files, scan.count, sizeof(*scan.files), compare_movie_files);
+    *out_count = scan.count;
+    return scan.files;
 }
 
 void ensure_movie_picker_cache(MoviePickerCache *cache, const char *directory)
@@ -640,13 +672,30 @@ void ensure_movie_picker_cache(MoviePickerCache *cache, const char *directory)
     clear_movie_picker_cache(cache);
     snprintf(cache->directory, sizeof(cache->directory), "%s", directory);
     cache->files = scan_movies(directory, &cache->count);
+    if (!strcmp(directory, media_browser_root()) && usb_storage_mounted()) {
+        size_t usb_count = 0;
+        MovieFile *usb_files = scan_movies(usb_storage_root(), &usb_count);
+        if (usb_files && usb_count) {
+            size_t combined = cache->count + 1 + usb_count;
+            MovieFile *all = realloc(cache->files, combined * sizeof(*all));
+            if (all) {
+                cache->files = all;
+                MovieFile separator = {.kind = PICKER_SEPARATOR, .timing_checked = true};
+                all[cache->count] = separator;
+                memcpy(all + cache->count + 1, usb_files, usb_count * sizeof(*all));
+                cache->count = combined;
+                free(usb_files);
+                usb_files = NULL;
+            }
+        }
+        free_movie_files(usb_files, usb_count);
+    }
     cache->valid = true;
 }
 
 static bool find_adjacent_movie_path(const char *current_path, char *target_path, size_t target_path_size, int direction)
 {
     char directory[MAX_PATH_LEN];
-    const char *current_filename;
     MovieFile *files;
     size_t count = 0;
     size_t index;
@@ -659,7 +708,6 @@ static bool find_adjacent_movie_path(const char *current_path, char *target_path
 
     snprintf(directory, sizeof(directory), "%s", current_path);
     strip_filename(directory);
-    current_filename = filename_from_path(current_path);
     if (g_picker_cache.valid && strcmp(g_picker_cache.directory, directory) == 0) {
         files = g_picker_cache.files;
         count = g_picker_cache.count;
@@ -672,15 +720,21 @@ static bool find_adjacent_movie_path(const char *current_path, char *target_path
     }
 
     for (index = 0; index < count; ++index) {
-        if (strings_equal_ignore_case(filename_from_path(files[index].path), current_filename)) {
-            if (direction > 0 && index + 1 < count) {
-                strncpy(target_path, files[index + 1].path, target_path_size - 1);
-                target_path[target_path_size - 1] = '\0';
+        if (files[index].kind == PICKER_MOVIE &&
+            strings_equal_ignore_case(files[index].path, current_path)) {
+            for (int next = (int)index + direction; next >= 0 && (size_t)next < count;
+                 next += direction) {
+                if (files[next].kind != PICKER_MOVIE)
+                    continue;
+                /* The mixed root list must not autoplay onto another drive. */
+                char parent[MAX_PATH_LEN];
+                snprintf(parent, sizeof(parent), "%s", files[next].path);
+                strip_filename(parent);
+                if (!strings_equal_ignore_case(parent, directory))
+                    continue;
+                snprintf(target_path, target_path_size, "%s", files[next].path);
                 found = true;
-            } else if (direction < 0 && index > 0) {
-                strncpy(target_path, files[index - 1].path, target_path_size - 1);
-                target_path[target_path_size - 1] = '\0';
-                found = true;
+                break;
             }
             break;
         }

@@ -24,6 +24,10 @@ void player_standby_shutdown(void)
     if (standby_guard.supported)
         (void)sram_with_native_mapping(standby_release, NULL);
 }
+bool player_standby_guard_active(void)
+{
+    return standby_guard.active;
+}
 
 static bool standby_acquire(void)
 {

@@ -2,7 +2,10 @@
  * and flush/close machinery. Read-only refills use the independent reader and
  * do not invalidate its warm filesystem view. */
 #include "raw_player_io.h"
+#include "../storage/usb/usb_storage.h"
 #include <dirent.h>
+#include <errno.h>
+#include <string.h>
 
 extern FILE *__real_fopen(const char *, const char *);
 extern size_t __real_fread(void *, size_t, size_t, FILE *);
@@ -13,6 +16,10 @@ extern int __real_fflush(FILE *);
 
 FILE *__wrap_fopen(const char *path, const char *mode)
 {
+    if (usb_path(path) && (!mode || mode[0] != 'r' || strchr(mode, '+'))) {
+        errno = EROFS;
+        return NULL;
+    }
     raw_player_before_native();
     return __real_fopen(path, mode);
 }
@@ -49,6 +56,10 @@ extern int __real_nuc_closedir(DIR *);
 
 int __wrap_remove(const char *path)
 {
+    if (usb_path(path)) {
+        errno = EROFS;
+        return -1;
+    }
     raw_player_before_native();
     return __real_remove(path);
 }

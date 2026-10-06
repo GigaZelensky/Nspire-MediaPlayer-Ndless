@@ -1,5 +1,6 @@
 #include "player_internal.h"
 #include "performance_clock.h"
+#include "media_browser.h"
 #include <errno.h>
 
 void strip_filename(char *path)
@@ -17,6 +18,7 @@ void strip_filename(char *path)
 
 void history_path_for_directory(const char *directory, char *history_path, size_t history_path_size)
 {
+    directory = media_local_directory(directory);
     if (!history_path || history_path_size == 0) {
         return;
     }
@@ -787,6 +789,7 @@ void flush_queued_history_save(DeferredHistorySave *request, const char *reason)
 
 bool save_screenshot_bitmap_in_directory(SDL_Surface *screen, const char *directory, char *saved_path, size_t saved_path_size)
 {
+    directory = media_local_directory(directory);
     char screenshot_directory[MAX_PATH_LEN];
     int index;
 

@@ -1,5 +1,9 @@
 #include "player_internal.h"
 #include "native_screen_power.h"
+#include "media_browser.h"
+#include "../storage/usb/usb_storage.h"
+#include "../storage/usb/usb_controller.h"
+#include <errno.h>
 
 bool ensure_debug_ring_storage(void)
 {
@@ -313,7 +317,7 @@ static void report_path_for_movie(const char *movie_path, const char *name, char
     }
     if (slash) {
         *slash = '\0';
-        snprintf(log_path, log_path_size, "%s/%s", directory, name);
+        snprintf(log_path, log_path_size, "%s/%s", media_local_directory(directory), name);
     } else {
         snprintf(log_path, log_path_size, "%s", name);
     }
@@ -357,6 +361,11 @@ void report_movie_decode_failure(Movie *movie, const char *movie_path, const cha
     movie_async_stop(movie);
     screenshot_writer_shutdown();
 
+    if (usb_path(movie_path) && usb_controller_error() == ENODEV) {
+        queue_player_message("USB disconnected",
+                             "Playback stopped because the USB drive was disconnected.");
+        return;
+    }
     if (movie) {
         debug_tracef(
             "decode failed reason=%s frame=%lu loaded_chunk=%d decoded_local=%d prefetched=%lu",
@@ -381,6 +390,10 @@ void report_movie_decode_failure(Movie *movie, const char *movie_path, const cha
 
 void report_movie_open_failure(const char *movie_path, MovieCodec missing_codec)
 {
+    if (usb_path(movie_path) && usb_controller_error() == ENODEV) {
+        queue_player_message("USB disconnected", "Reconnect the USB drive to open this video.");
+        return;
+    }
     char text[192];
     const char *codec = NULL;
     switch (missing_codec) {

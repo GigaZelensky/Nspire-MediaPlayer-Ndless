@@ -1,4 +1,9 @@
 #include "player_internal.h"
+#include "media_browser.h"
+#include "picker_navigation.h"
+#include "usb_browser.h"
+#include "../storage/usb/usb_storage.h"
+#include "../storage/usb/usb_fs_worker.h"
 
 typedef struct {
     const Fonts *fonts;
@@ -33,6 +38,54 @@ static void draw_message_backdrop(SDL_Surface *screen, void *context, uint32_t c
     draw_unlock_backdrop(screen, context, closing_elapsed_ms);
 }
 
+static void animate_folder_close(SDL_Surface *screen, PickerUnlockBackdrop *view)
+{
+    uint32_t start = monotonic_clock_now_ms();
+    picker_navigation_animate(start, true);
+    do {
+        uint32_t now = monotonic_clock_now_ms();
+        view->scene_ms = now;
+        draw_unlock_backdrop(screen, view, now - start);
+        present_screen(screen);
+        if (now - start >= 100U)
+            break;
+        player_delay_ms(16);
+    } while (1);
+}
+
+typedef struct {
+    SDL_Surface *screen;
+    const Fonts *fonts;
+    PointerState *pointer;
+    uint32_t started;
+    bool previous_escape, cancelled;
+} PickerScanView;
+static void draw_folder_scan(void *context)
+{
+    PickerScanView *view = context;
+    uint32_t now = monotonic_clock_now_ms();
+    pointer_update(view->pointer);
+    bool escape = isKeyPressed(KEY_NSPIRE_ESC);
+    if (escape && !view->previous_escape) {
+        view->cancelled = true;
+        usb_fs_cancel_active();
+    }
+    view->previous_escape = escape;
+    if (now - view->started < 90U)
+        return;
+    PointerState hidden = *view->pointer;
+    hidden.visible = false;
+    render_picker(view->screen, view->fonts, NULL, 0, 0, 0, 0, 0, 0, 0, 0, -1, 0, -1, 0, -1, 0, -1,
+                  -1, 0, &hidden, NULL, now, now - PICKER_INTRO_TOTAL_ANIM_MS, PICKER_EXIT_INACTIVE,
+                  0, NULL, 0, false);
+    uint8_t mix = ui_ease_out_cubic(now - view->started - 90U, UI_LOADING_ANIM_MS);
+    draw_overlay_backdrop_dim(view->screen, mix);
+    draw_loading_overlay_mix(view->screen, view->fonts, "Loading", (now / 180U) % 3U, mix, true);
+    if (view->pointer->visible)
+        draw_cursor(view->screen, view->pointer->x, view->pointer->y);
+    present_screen(view->screen);
+}
+
 int pick_movie(
     SDL_Surface *screen,
     const Fonts *fonts,
@@ -52,6 +105,7 @@ int pick_movie(
     bool prev_on = false;
     bool prev_c = false;
     bool prev_s = false;
+    bool prev_u = false;
     bool prev_2 = false;
     bool prev_4 = false;
     bool prev_5 = false;
@@ -89,23 +143,62 @@ int pick_movie(
     bool keyboard_resume_focused = false;
     bool deferred_movie_cleanup_done = false;
     int enter_press_stage = 0;
+    bool restore_navigation_position = false;
+    size_t restored_selected = 0, restored_scroll = 0;
+    uint32_t usb_generation = usb_storage_generation();
+    bool picker_has_opened = false;
+    bool animate_navigation_pending = false;
+    pointer_init(&pointer);
+    pointer_update(&pointer);
 
+reload_directory:
     memset(&screenshot_preview, 0, sizeof(screenshot_preview));
     memset(&resume_badge_anim, 0, sizeof(resume_badge_anim));
     memset(&resume_tooltip_anim, 0, sizeof(resume_tooltip_anim));
     memset(&movie_tooltip_anim, 0, sizeof(movie_tooltip_anim));
     memset(&picker_press_anim, 0, sizeof(picker_press_anim));
     memset(&scroll_anim, 0, sizeof(scroll_anim));
-    ensure_movie_picker_cache(&g_picker_cache, directory);
+    picker_navigation_reset();
+    pressed_row_index = pressed_resume_badge_index = -1;
+    enter_press_stage = 0;
+    keyboard_resume_focused = pressed_selected_fallback = picker_press_canceled = false;
+    resume_badge_anim_index = resume_tooltip_anim_index = movie_tooltip_anim_index = -1;
+    hover_scroll_direction = key_scroll_direction = 0;
+    selection_anim_started_ms = 0;
+    selected_start_mix = previous_start_mix = 0;
+    PickerScanView scan_view = {
+        screen, fonts, &pointer, monotonic_clock_now_ms(), isKeyPressed(KEY_NSPIRE_ESC), false};
+    usb_fs_set_progress(draw_folder_scan, &scan_view);
+    ensure_movie_picker_cache(&g_picker_cache, media_browser_directory());
+    usb_fs_set_progress(NULL, NULL);
+    if (scan_view.cancelled && !media_browser_at_root()) {
+        clear_movie_picker_cache(&g_picker_cache);
+        media_browser_back(&restored_selected, &restored_scroll);
+        restore_navigation_position = true;
+        goto reload_directory;
+    }
     files = g_picker_cache.files;
     count = g_picker_cache.count;
-    if (count > 0 && g_picker_cache.has_position) {
+    if (restore_navigation_position) {
+        selected = count ? (restored_selected < count ? restored_selected : count - 1) : 0;
+        scroll_start = picker_scroll_start_for_selection(count, selected, restored_scroll);
+        restore_navigation_position = false;
+    } else if (count > 0 && g_picker_cache.has_position) {
         selected = g_picker_cache.selected_index < count ? g_picker_cache.selected_index : count - 1;
         scroll_start = picker_scroll_start_for_selection(count, selected, g_picker_cache.scroll_start);
     } else {
+        selected = 0;
+        while (selected < count && files[selected].kind == PICKER_SEPARATOR)
+            ++selected;
+        if (selected == count)
+            selected = 0;
         scroll_start = picker_scroll_start_centered(count, selected);
     }
     previous_selected = selected;
+    if (count && files[selected].kind == PICKER_SEPARATOR) {
+        selected = selected + 1 < count ? selected + 1 : selected ? selected - 1 : 0;
+        previous_selected = selected;
+    }
     if (resume_without_prompt) {
         *resume_without_prompt = false;
     }
@@ -121,6 +214,7 @@ int pick_movie(
     prev_on = on_key_pressed() ? true : false;
     prev_c = isKeyPressed(KEY_NSPIRE_C);
     prev_s = isKeyPressed(KEY_NSPIRE_S);
+    prev_u = isKeyPressed(KEY_NSPIRE_U);
     prev_2 = isKeyPressed(KEY_NSPIRE_2);
     prev_4 = isKeyPressed(KEY_NSPIRE_4);
     prev_5 = isKeyPressed(KEY_NSPIRE_5);
@@ -129,8 +223,25 @@ int pick_movie(
     pointer_hover_guard_reset(&hover_guard);
     pointer_hover_guard_lock(&hover_guard, &pointer);
     picker_tooltip_hover_reset(&tooltip_hover);
-    intro_started_ms = monotonic_clock_now_ms();
+    intro_started_ms =
+        monotonic_clock_now_ms() - (picker_has_opened ? PICKER_INTRO_TOTAL_ANIM_MS : 0U);
+    picker_has_opened = true;
+    if (animate_navigation_pending) {
+        picker_navigation_animate(monotonic_clock_now_ms(), false);
+        animate_navigation_pending = false;
+    }
     while (1) {
+        usb_storage_poll_connection();
+        if (usb_generation != usb_storage_generation()) {
+            usb_generation = usb_storage_generation();
+            movie_picker_timing_stop();
+            if (usb_path(media_browser_directory())) {
+                media_browser_to_root();
+                queue_player_message("USB disconnected", "The USB drive is no longer connected.");
+            }
+            clear_movie_picker_cache(&g_picker_cache);
+            goto reload_directory;
+        }
         PlayerMessage message;
         if (take_player_message(&message)) {
             /* Recoverable errors return here after movie/key cleanup. Draw
@@ -220,6 +331,18 @@ int pick_movie(
         bool down_down = !ctrl_down && (prev_down || prev_2);
         bool left_edge = key_pressed_edge(KEY_NSPIRE_LEFT, &prev_left) || (!ctrl_down && keypad_4_edge);
         bool right_edge = key_pressed_edge(KEY_NSPIRE_RIGHT, &prev_right) || (!ctrl_down && keypad_6_edge);
+        bool navigation_input = false;
+        int navigation_action = picker_navigation_poll(&pointer, enter_edge, enter_down, esc_edge,
+                                                       now_ms, &navigation_input);
+        if (key_pressed_edge(KEY_NSPIRE_U, &prev_u) && is_cx2 && !ctrl_down)
+            navigation_action = PICKER_NAV_USB;
+        footer_input = footer_input || navigation_input;
+        if (navigation_input) {
+            pointer_click = false;
+            enter_edge = false;
+            if (!enter_press_stage)
+                enter_down = false;
+        }
         bool pointer_hover_allowed = !footer_input && pointer_hover_guard_allows(&hover_guard, &pointer);
         int next_hover_scroll_direction = pointer_hover_allowed && !pointer.down
             ? picker_hover_scroll_direction(count, scroll_start, &pointer)
@@ -331,6 +454,8 @@ int pick_movie(
         hovered_index = pointer_hover_allowed
             ? picker_row_index_at(count, scroll_draw_start, scroll_draw_offset_y, pointer.x, pointer.y)
             : -1;
+        if (hovered_index >= 0 && files[hovered_index].kind == PICKER_SEPARATOR)
+            hovered_index = -1;
         resume_hovered_index = pointer_hover_allowed
             ? picker_resume_badge_index_at(fonts, files, count, scroll_draw_start, scroll_draw_offset_y, pointer.x, pointer.y)
             : -1;
@@ -498,7 +623,56 @@ int pick_movie(
             UI_PRESS_ANIM_MS,
             PICKER_PRESS_RELEASE_ANIM_MS
         );
+        if ((esc_edge && !canceled_press_with_esc && !media_browser_at_root()) ||
+            navigation_action ||
+            (activated_index >= 0 && files[activated_index].kind == PICKER_FOLDER)) {
+            PickerUnlockBackdrop view = {.fonts = fonts,
+                                         .files = files,
+                                         .count = count,
+                                         .scroll_start = scroll_draw_start,
+                                         .scroll_offset_y = scroll_draw_offset_y,
+                                         .selected = selected,
+                                         .previous_selected = previous_selected,
+                                         .selection_started_ms = selection_anim_started_ms,
+                                         .selected_mix = selected_start_mix,
+                                         .previous_mix = previous_start_mix,
+                                         .pressed_row = pressed_row_index,
+                                         .pressed_resume = pressed_resume_badge_index,
+                                         .initial_press_mix = picker_press_mix,
+                                         .scene_ms = now_ms,
+                                         .intro_started_ms = intro_started_ms,
+                                         .pointer = pointer,
+                                         .preview = &screenshot_preview};
+            if (navigation_action == PICKER_NAV_USB) {
+                movie_picker_timing_stop();
+                cleanup_deferred_playback_movie();
+                deferred_movie_cleanup_done = true;
+                view.pointer.visible = false;
+                bool connected =
+                    usb_browser_connect(screen, fonts, &pointer, draw_message_backdrop, &view);
+                usb_generation = usb_storage_generation();
+                if (connected || (usb_path(media_browser_directory()) && !usb_storage_mounted()))
+                    media_browser_to_root();
+            } else {
+                animate_folder_close(screen, &view);
+                if (activated_index >= 0) {
+                    if (!media_browser_enter(files[activated_index].path, selected, scroll_start))
+                        queue_player_message("Folder unavailable",
+                                             "Not enough memory to open this folder.");
+                    restored_selected = restored_scroll = 0;
+                } else
+                    media_browser_back(&restored_selected, &restored_scroll);
+                restore_navigation_position = true;
+            }
+            movie_picker_timing_stop();
+            clear_screenshot_preview(&screenshot_preview);
+            clear_movie_picker_cache(&g_picker_cache);
+            animate_navigation_pending = true;
+            goto reload_directory;
+        }
         if (activated_index >= 0) {
+            if (files[activated_index].kind != PICKER_MOVIE)
+                continue;
             /* A cached unlock does not touch storage. Keep any background
              * metadata handle until the dialog closes instead of draining
              * and closing it on the click-to-animation path. */
@@ -698,6 +872,9 @@ int pick_movie(
             }
             if (move_direction != 0) {
                 size_t next_selected = picker_adjacent_selection(count, selected, move_direction);
+                for (size_t skipped = 0;
+                     skipped < count && files[next_selected].kind == PICKER_SEPARATOR; ++skipped)
+                    next_selected = picker_adjacent_selection(count, next_selected, move_direction);
 
                 keyboard_resume_focused = false;
                 picker_set_selected_row(
