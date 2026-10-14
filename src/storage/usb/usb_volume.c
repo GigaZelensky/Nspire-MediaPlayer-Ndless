@@ -5,6 +5,7 @@
 #include "fatfs/diskio.h"
 #include <errno.h>
 #include <limits.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -12,13 +13,15 @@
  * request owns its result until collected; another reader cannot overwrite it. */
 struct UsbFile {
     FIL file;
-    uint32_t generation, bytes;
+    uint32_t generation;
+    uint64_t bytes;
     unsigned readers;
 };
 struct UsbRead {
     UsbFsJob job;
     UsbFile *file;
-    uint32_t offset, bytes;
+    uint64_t offset;
+    uint32_t bytes;
     void *destination;
     int result;
 };
@@ -135,7 +138,7 @@ DRESULT disk_ioctl(BYTE drive, BYTE command, void *data)
 DRESULT disk_read(BYTE drive, BYTE *data, LBA_t sector, UINT count)
 {
     uint32_t size = usb_controller_sector_size(), generation = usb_controller_generation();
-    if (drive || !count || !data || !size || sector > UINT32_MAX ||
+    if (drive || !count || !data || !size ||
         sector > usb_controller_last_sector() || count - 1 > usb_controller_last_sector() - sector)
         return RES_PARERR;
     while (count) {
@@ -143,10 +146,10 @@ DRESULT disk_read(BYTE drive, BYTE *data, LBA_t sector, UINT count)
             generation != usb_controller_generation())
             return RES_ERROR;
         unsigned amount = count;
-        if (amount > 4096U / size)
-            amount = 4096U / size;
+        if (amount > usb_controller_max_read_bytes() / size)
+            amount = usb_controller_max_read_bytes() / size;
         UsbCommand request = {0};
-        while (!usb_controller_begin_read(&request, (uint32_t)sector, amount, data)) {
+        while (!usb_controller_begin_read(&request, sector, amount, data)) {
             if (!usb_controller_online() || usb_fs_cancelled())
                 return RES_ERROR;
             usb_fs_yield();
@@ -241,11 +244,6 @@ static void open_job(void *argument)
 {
     OpenJob *job = argument;
     FRESULT r = f_open(&job->file->file, job->path, FA_READ);
-    if (r == FR_OK && f_size(&job->file->file) > UINT32_MAX) {
-        f_close(&job->file->file);
-        job->job.error = EFBIG;
-        return;
-    }
     job->job.error = failure(r);
 }
 UsbFile *usb_file_open(const char *path, int *error)
@@ -273,11 +271,11 @@ UsbFile *usb_file_open(const char *path, int *error)
         free(file);
         return NULL;
     }
-    file->bytes = (uint32_t)f_size(&file->file);
+    file->bytes = (uint64_t)f_size(&file->file);
     file->generation = mounted_generation;
     return file;
 }
-uint32_t usb_file_size(const UsbFile *file)
+uint64_t usb_file_size(const UsbFile *file)
 {
     return file ? file->bytes : 0;
 }
@@ -302,15 +300,32 @@ static void read_job(void *argument)
         read->job.error = ENODEV;
         return;
     }
+#if FF_FS_TINY
+    FIL checkpoint = file->file;
+#else
+    /* Save the small cursor/object state, not the up-to-4-KiB sector buffer.
+     * read_job always seeks before reading, so invalidating the cache on a
+     * rollback forces a fresh fill without taxing every normal read. */
+    unsigned char checkpoint[offsetof(FIL, buf)];
+    memcpy(checkpoint, &file->file, sizeof(checkpoint));
+#endif
     FRESULT r = f_lseek(&file->file, read->offset);
     UINT bytes = 0;
     if (r == FR_OK)
         r = f_read(&file->file, read->destination, read->bytes, &bytes);
     if (read->job.cancelled && live(file) && usb_controller_online()) {
-        /* Our cooperative cancellation is represented as a disk error inside
-         * FatFs. It is safe to clear only this software-generated error; a
-         * genuine USB failure marks the controller offline. */
-        file->file.err = 0;
+        /* FatFs can abort after overwriting its sector buffer but before
+         * updating the corresponding sector number. Clearing err alone then
+         * exposes those bytes as the old cached sector on a later seek.
+         * Restore the read-only cursor/object state and invalidate the cache.
+         * The worker has retired the disk command before returning.
+         * A real transport failure/offline volume is not recoverable here. */
+#if FF_FS_TINY
+        file->file = checkpoint;
+#else
+        memcpy(&file->file, checkpoint, sizeof(checkpoint));
+        file->file.sect = 0; /* Not a file-data sector; f_lseek must refill it. */
+#endif
         read->job.error = ECANCELED;
         return;
     }
@@ -332,7 +347,7 @@ UsbRead *usb_read_create(UsbFile *file)
     ++file->readers;
     return read;
 }
-bool usb_read_begin(UsbRead *read, uint32_t offset, void *destination, uint32_t bytes)
+bool usb_read_begin(UsbRead *read, uint64_t offset, void *destination, uint32_t bytes)
 {
     if (!read || read->job.pending)
         return false;
@@ -381,7 +396,7 @@ void usb_read_destroy(UsbRead *read)
     --read->file->readers;
     free(read);
 }
-int usb_file_read_at(UsbFile *file, uint32_t offset, void *destination, uint32_t bytes, int *error)
+int usb_file_read_at(UsbFile *file, uint64_t offset, void *destination, uint32_t bytes, int *error)
 {
     if (error)
         *error = 0;
@@ -416,6 +431,91 @@ static void directory_job(void *argument)
                                       : f_closedir(&job->dir);
     job->job.error = failure(r);
 }
+
+struct UsbDirectory {
+    DirectoryJob work;
+    uint32_t generation;
+    bool submitted, opened, complete;
+};
+
+UsbDirectory *usb_directory_open(const char *path, int *error)
+{
+    if (error) *error = 0;
+    UsbDirectory *cursor = calloc(1, sizeof(*cursor));
+    if (!cursor) {
+        if (error) *error = ENOMEM;
+        return NULL;
+    }
+    if (!relative_path(path, cursor->work.path, sizeof(cursor->work.path))) {
+        if (error) *error = usb_storage_mounted() ? EINVAL : ENODEV;
+        free(cursor);
+        return NULL;
+    }
+    cursor->generation = mounted_generation;
+    cursor->work.job.run = directory_job;
+    cursor->work.job.argument = &cursor->work;
+    return cursor;
+}
+
+int usb_directory_next(UsbDirectory *cursor, const char **name, bool *folder, int *error)
+{
+    if (error) *error = 0;
+    if (!cursor || !name || !folder) {
+        if (error) *error = EINVAL;
+        return -1;
+    }
+    if (!usb_storage_mounted() || cursor->generation != mounted_generation) {
+        if (error) *error = ENODEV;
+        return -1;
+    }
+    if (cursor->complete)
+        return 2;
+    DirectoryJob *work = &cursor->work;
+    if (!cursor->submitted) {
+        if (!usb_fs_submit(&work->job)) {
+            if (error) *error = work->job.error;
+            return work->job.error ? -1 : 0;
+        }
+        cursor->submitted = true;
+    }
+    usb_fs_service(8U);
+    if (work->job.pending)
+        return 0;
+    if (work->job.error) {
+        if (error) *error = work->job.error;
+        return -1;
+    }
+    cursor->submitted = false;
+    if (!cursor->opened) {
+        cursor->opened = true;
+        work->operation = 1;
+        return 0;
+    }
+    if (!work->info.fname[0]) {
+        cursor->complete = true;
+        return 2;
+    }
+    if (work->info.fname[0] == '.' || (work->info.fattrib & (AM_HID | AM_SYS)))
+        return 0;
+    *name = work->info.fname;
+    *folder = (work->info.fattrib & AM_DIR) != 0;
+    return 1;
+}
+
+void usb_directory_close(UsbDirectory *cursor)
+{
+    if (!cursor)
+        return;
+    if (cursor->work.job.pending) {
+        usb_fs_cancel(&cursor->work.job);
+        usb_fs_wait(&cursor->work.job);
+    }
+    /* Read-only FatFs close has no I/O or shared lock bookkeeping. */
+    if (cursor->opened && usb_storage_mounted() && cursor->generation == mounted_generation)
+        f_closedir(&cursor->work.dir);
+    free(cursor);
+}
+
 bool usb_directory_list(const char *path, UsbDirectoryEntry callback, void *context, int *error)
 {
     if (error)
@@ -448,12 +548,11 @@ bool usb_directory_list(const char *path, UsbDirectoryEntry callback, void *cont
         }
         if (!job.info.fname[0])
             break;
-        if (job.info.fname[0] == '.' || (job.info.fattrib & (AM_HID | AM_SYS)) ||
-            job.info.fsize > UINT32_MAX)
+        if (job.info.fname[0] == '.' || (job.info.fattrib & (AM_HID | AM_SYS)))
             continue;
         /* The visitor can allocate and render: it runs on the main stack. */
         if (!callback(context, job.info.fname, (job.info.fattrib & AM_DIR) != 0,
-                      (uint32_t)job.info.fsize))
+                      (uint64_t)job.info.fsize))
             break;
     }
     int status = job.job.error;

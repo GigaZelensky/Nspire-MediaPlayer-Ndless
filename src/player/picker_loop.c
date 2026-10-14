@@ -38,16 +38,39 @@ static void draw_message_backdrop(SDL_Surface *screen, void *context, uint32_t c
     draw_unlock_backdrop(screen, context, closing_elapsed_ms);
 }
 
-static void animate_folder_close(SDL_Surface *screen, PickerUnlockBackdrop *view)
+static void animate_folder_close(SDL_Surface *screen, PickerUnlockBackdrop *view, bool backwards)
 {
     uint32_t start = monotonic_clock_now_ms();
-    picker_navigation_animate(start, true);
+    picker_navigation_animate(start, true, backwards);
     do {
         uint32_t now = monotonic_clock_now_ms();
         view->scene_ms = now;
         draw_unlock_backdrop(screen, view, now - start);
         present_screen(screen);
-        if (now - start >= 100U)
+        if (!picker_navigation_mix(now))
+            break;
+        player_delay_ms(16);
+    } while (1);
+}
+
+static void animate_picker_exit(SDL_Surface *screen, PickerUnlockBackdrop *view)
+{
+    const uint32_t duration_ms = 220U;
+    uint32_t started = monotonic_clock_now_ms();
+    view->pointer.visible = false;
+    do {
+        uint32_t now = monotonic_clock_now_ms(), elapsed = now - started;
+        uint32_t timeline = elapsed >= duration_ms ? PICKER_EXIT_TOTAL_ANIM_MS
+                            : elapsed * PICKER_EXIT_TOTAL_ANIM_MS / duration_ms;
+        uint8_t release = ui_ease_smoothstep(elapsed, PICKER_PRESS_RELEASE_ANIM_MS);
+        uint8_t press = view->initial_press_mix - view->initial_press_mix * release / 255U;
+        render_picker(screen, view->fonts, view->files, view->count, view->scroll_start,
+                      view->scroll_offset_y, view->selected, view->previous_selected,
+                      view->selection_started_ms, view->selected_mix, view->previous_mix,
+                      -1, 0, -1, 0, -1, 0, view->pressed_row, view->pressed_resume, press,
+                      &view->pointer, NULL, now, view->intro_started_ms, timeline,
+                      0, NULL, 0, true);
+        if (elapsed >= duration_ms)
             break;
         player_delay_ms(16);
     } while (1);
@@ -147,7 +170,8 @@ int pick_movie(
     size_t restored_selected = 0, restored_scroll = 0;
     uint32_t usb_generation = usb_storage_generation();
     bool picker_has_opened = false;
-    bool animate_navigation_pending = false;
+    bool animate_navigation_pending = false, navigation_backwards = false;
+    bool folder_key_active = false;
     pointer_init(&pointer);
     pointer_update(&pointer);
 
@@ -161,6 +185,7 @@ reload_directory:
     picker_navigation_reset();
     pressed_row_index = pressed_resume_badge_index = -1;
     enter_press_stage = 0;
+    folder_key_active = false;
     keyboard_resume_focused = pressed_selected_fallback = picker_press_canceled = false;
     resume_badge_anim_index = resume_tooltip_anim_index = movie_tooltip_anim_index = -1;
     hover_scroll_direction = key_scroll_direction = 0;
@@ -172,6 +197,7 @@ reload_directory:
     ensure_movie_picker_cache(&g_picker_cache, media_browser_directory());
     usb_fs_set_progress(NULL, NULL);
     if (scan_view.cancelled && !media_browser_at_root()) {
+        navigation_backwards = true;
         clear_movie_picker_cache(&g_picker_cache);
         media_browser_back(&restored_selected, &restored_scroll);
         restore_navigation_position = true;
@@ -211,7 +237,7 @@ reload_directory:
     prev_enter = isKeyPressed(KEY_NSPIRE_ENTER);
     prev_esc = isKeyPressed(KEY_NSPIRE_ESC);
     prev_scratchpad = isKeyPressed(KEY_NSPIRE_SCRATCHPAD);
-    prev_on = on_key_pressed() ? true : false;
+    prev_on = nspire_on_key_pressed() ? true : false;
     prev_c = isKeyPressed(KEY_NSPIRE_C);
     prev_s = isKeyPressed(KEY_NSPIRE_S);
     prev_u = isKeyPressed(KEY_NSPIRE_U);
@@ -227,13 +253,14 @@ reload_directory:
         monotonic_clock_now_ms() - (picker_has_opened ? PICKER_INTRO_TOTAL_ANIM_MS : 0U);
     picker_has_opened = true;
     if (animate_navigation_pending) {
-        picker_navigation_animate(monotonic_clock_now_ms(), false);
+        picker_navigation_animate(monotonic_clock_now_ms(), false, navigation_backwards);
         animate_navigation_pending = false;
     }
     while (1) {
         usb_storage_poll_connection();
         if (usb_generation != usb_storage_generation()) {
             usb_generation = usb_storage_generation();
+            if (!usb_storage_mounted()) usb_browser_note_disconnect();
             movie_picker_timing_stop();
             if (usb_path(media_browser_directory())) {
                 media_browser_to_root();
@@ -253,7 +280,7 @@ reload_directory:
             size_t draw_start;
             int draw_offset;
             uint32_t message_now = monotonic_clock_now_ms();
-            picker_scroll_anim_view(&scroll_anim, scroll_start, message_now, &draw_start, &draw_offset);
+            picker_scroll_anim_view(files, &scroll_anim, scroll_start, message_now, &draw_start, &draw_offset);
             PickerUnlockBackdrop backdrop = {
                 .fonts = fonts, .files = files, .count = count,
                 .scroll_start = draw_start, .scroll_offset_y = draw_offset,
@@ -281,7 +308,7 @@ reload_directory:
             prev_up = isKeyPressed(KEY_NSPIRE_UP); prev_down = isKeyPressed(KEY_NSPIRE_DOWN);
             prev_left = isKeyPressed(KEY_NSPIRE_LEFT); prev_right = isKeyPressed(KEY_NSPIRE_RIGHT);
             prev_enter = isKeyPressed(KEY_NSPIRE_ENTER); prev_esc = isKeyPressed(KEY_NSPIRE_ESC);
-            prev_scratchpad = isKeyPressed(KEY_NSPIRE_SCRATCHPAD); prev_on = on_key_pressed();
+            prev_scratchpad = isKeyPressed(KEY_NSPIRE_SCRATCHPAD); prev_on = nspire_on_key_pressed();
             prev_c = isKeyPressed(KEY_NSPIRE_C); prev_s = isKeyPressed(KEY_NSPIRE_S);
             prev_2 = isKeyPressed(KEY_NSPIRE_2); prev_4 = isKeyPressed(KEY_NSPIRE_4);
             prev_5 = isKeyPressed(KEY_NSPIRE_5); prev_6 = isKeyPressed(KEY_NSPIRE_6);
@@ -296,7 +323,7 @@ reload_directory:
         bool pointer_click = pointer_update(&pointer);
         if (clock_menu_poll(screen, fonts, NULL, &pointer, true, directory)) {
             prev_esc = isKeyPressed(KEY_NSPIRE_ESC); prev_enter = isKeyPressed(KEY_NSPIRE_ENTER);
-            prev_on = on_key_pressed();
+            prev_on = nspire_on_key_pressed();
             pressed_row_index = pressed_resume_badge_index = -1;
             enter_press_stage = 0;
             ui_transition_init(&picker_press_anim, false);
@@ -332,9 +359,12 @@ reload_directory:
         bool left_edge = key_pressed_edge(KEY_NSPIRE_LEFT, &prev_left) || (!ctrl_down && keypad_4_edge);
         bool right_edge = key_pressed_edge(KEY_NSPIRE_RIGHT, &prev_right) || (!ctrl_down && keypad_6_edge);
         bool navigation_input = false;
-        int navigation_action = picker_navigation_poll(&pointer, enter_edge, enter_down, esc_edge,
+        int navigation_action = picker_navigation_poll(fonts, &pointer, enter_edge, enter_down, esc_edge,
                                                        now_ms, &navigation_input);
-        if (key_pressed_edge(KEY_NSPIRE_U, &prev_u) && is_cx2 && !ctrl_down)
+        if (key_pressed_edge(KEY_NSPIRE_U, &prev_u) && usb_storage_supported() && !ctrl_down)
+            navigation_action = PICKER_NAV_USB;
+        if (!navigation_action && !pointer.down && !enter_press_stage &&
+            !g_display_power_state.off && usb_browser_auto_pending(now_ms))
             navigation_action = PICKER_NAV_USB;
         footer_input = footer_input || navigation_input;
         if (navigation_input) {
@@ -342,6 +372,19 @@ reload_directory:
             enter_edge = false;
             if (!enter_press_stage)
                 enter_down = false;
+        }
+        if (!ctrl_down && left_edge && !enter_press_stage && !media_browser_at_root())
+            navigation_action = PICKER_NAV_BACK;
+        if (!footer_input && !ctrl_down && right_edge && !enter_press_stage &&
+            count && files[selected].kind == PICKER_FOLDER) {
+            folder_key_active = true;
+            enter_edge = true;
+            pointer_hover_guard_lock(&hover_guard, &pointer);
+        }
+        if (folder_key_active) {
+            bool held = !ctrl_down && (prev_right || prev_6);
+            enter_down = enter_down || held;
+            if (!held) folder_key_active = false;
         }
         bool pointer_hover_allowed = !footer_input && pointer_hover_guard_allows(&hover_guard, &pointer);
         int next_hover_scroll_direction = pointer_hover_allowed && !pointer.down
@@ -450,9 +493,9 @@ reload_directory:
                 hover_scroll_last_ms = 0;
             }
         }
-        picker_scroll_anim_view(&scroll_anim, scroll_start, now_ms, &scroll_draw_start, &scroll_draw_offset_y);
+        picker_scroll_anim_view(files, &scroll_anim, scroll_start, now_ms, &scroll_draw_start, &scroll_draw_offset_y);
         hovered_index = pointer_hover_allowed
-            ? picker_row_index_at(count, scroll_draw_start, scroll_draw_offset_y, pointer.x, pointer.y)
+            ? picker_row_index_at(files, count, scroll_draw_start, scroll_draw_offset_y, pointer.x, pointer.y)
             : -1;
         if (hovered_index >= 0 && files[hovered_index].kind == PICKER_SEPARATOR)
             hovered_index = -1;
@@ -644,17 +687,26 @@ reload_directory:
                                          .pointer = pointer,
                                          .preview = &screenshot_preview};
             if (navigation_action == PICKER_NAV_USB) {
+                navigation_backwards = false;
                 movie_picker_timing_stop();
                 cleanup_deferred_playback_movie();
                 deferred_movie_cleanup_done = true;
                 view.pointer.visible = false;
+                bool was_mounted = usb_storage_mounted();
                 bool connected =
                     usb_browser_connect(screen, fonts, &pointer, draw_message_backdrop, &view);
                 usb_generation = usb_storage_generation();
-                if (connected || (usb_path(media_browser_directory()) && !usb_storage_mounted()))
+                if ((connected && !was_mounted) ||
+                    (usb_path(media_browser_directory()) && !usb_storage_mounted()))
                     media_browser_to_root();
+                else if (connected) {
+                    restored_selected = selected;
+                    restored_scroll = scroll_start;
+                    restore_navigation_position = true;
+                }
             } else {
-                animate_folder_close(screen, &view);
+                navigation_backwards = activated_index < 0;
+                animate_folder_close(screen, &view, navigation_backwards);
                 if (activated_index >= 0) {
                     if (!media_browser_enter(files[activated_index].path, selected, scroll_start))
                         queue_player_message("Folder unavailable",
@@ -738,7 +790,7 @@ reload_directory:
                     PICKER_PRESS_RELEASE_ANIM_MS
                 );
 
-                picker_scroll_anim_view(&scroll_anim, scroll_start, exit_now_ms, &scroll_draw_start, &scroll_draw_offset_y);
+                picker_scroll_anim_view(files, &scroll_anim, scroll_start, exit_now_ms, &scroll_draw_start, &scroll_draw_offset_y);
                 render_picker(
                     screen,
                     fonts,
@@ -791,7 +843,7 @@ reload_directory:
         }
         if (theme_edge) {
             ui_cycle_theme();
-            ui_save_theme_for_directory(directory);
+            ui_queue_theme_save();
         }
         render_picker(
             screen,
@@ -832,6 +884,9 @@ reload_directory:
             player_delay_ms(16);
             continue;
         }
+        if (!pointer.down && !enter_press_stage && !g_display_power_state.off &&
+            (uint32_t)(now_ms - intro_started_ms) >= PICKER_INTRO_TOTAL_ANIM_MS + 80U)
+            usb_browser_idle_discovery(screen, monotonic_clock_now_ms());
         if (!deferred_movie_cleanup_done &&
             g_deferred_playback_movie &&
             (int32_t) (now_ms - (intro_started_ms + PICKER_INTRO_ANIM_MS + 80U)) >= 0 &&
@@ -897,8 +952,19 @@ reload_directory:
             }
         }
         if (esc_edge && !canceled_press_with_esc) {
-            movie_picker_timing_stop();
             clear_screenshot_preview(&screenshot_preview);
+            PickerUnlockBackdrop view = {
+                .fonts = fonts, .files = files, .count = count,
+                .scroll_start = scroll_draw_start, .scroll_offset_y = scroll_draw_offset_y,
+                .selected = selected, .previous_selected = previous_selected,
+                .selection_started_ms = selection_anim_started_ms,
+                .selected_mix = selected_start_mix, .previous_mix = previous_start_mix,
+                .pressed_row = pressed_row_index, .pressed_resume = pressed_resume_badge_index,
+                .initial_press_mix = picker_press_mix, .intro_started_ms = intro_started_ms,
+                .pointer = pointer
+            };
+            animate_picker_exit(screen, &view);
+            movie_picker_timing_stop();
             return -1;
         }
         /* Resolve visible rows during the entrance; their title and lock
@@ -907,15 +973,15 @@ reload_directory:
             uint64_t metadata_started = monotonic_clock_now_ticks();
             for (unsigned step = 0; step < 8; ++step) {
                 size_t metadata_index = count;
-                if (count && !files[selected].timing_checked) metadata_index = selected;
+                if (count && movie_picker_metadata_pending(files + selected)) metadata_index = selected;
                 if (metadata_index == count) {
                     for (size_t i = scroll_start; i < count && i < scroll_start + PICKER_VISIBLE_ROWS; ++i) {
-                        if (!files[i].timing_checked) { metadata_index = i; break; }
+                        if (movie_picker_metadata_pending(files + i)) { metadata_index = i; break; }
                     }
                 }
                 if (metadata_index == count) {
                     for (size_t i = 0; i < count; ++i) {
-                        if (!files[i].timing_checked) { metadata_index = i; break; }
+                        if (movie_picker_metadata_pending(files + i)) { metadata_index = i; break; }
                     }
                 }
                 if (metadata_index == count) break;

@@ -1,7 +1,6 @@
 #include "player_internal.h"
 
 #define SUBTITLE_OUTLINE_PX 1
-#define SUBTITLE_SCALE_PAD_PX 1
 #define SUBTITLE_LINE_GAP_PX 2
 
 const char *active_subtitle_track_name(const Movie *movie)
@@ -26,10 +25,11 @@ void draw_outlined_text(SDL_Surface *surface, nSDL_Font *white_font, nSDL_Font *
 
 static int subtitle_text_padding_px(int scale_num, int scale_den)
 {
+    if (scale_num <= 0 || scale_den <= 0) return 0;
     if (scale_num == scale_den) {
         return SUBTITLE_OUTLINE_PX * 2;
     }
-    return SUBTITLE_SCALE_PAD_PX * 2;
+    return 2 * ((scale_num + scale_den - 1) / scale_den);
 }
 
 static int subtitle_text_draw_inset_px(int scale_num, int scale_den)
@@ -59,7 +59,7 @@ static int subtitle_rendered_text_width(nSDL_Font *font, const char *text, int s
         return 0;
     }
     text_w = nSDL_GetStringWidth(font, text);
-    return subtitle_scaled_extent(text_w + subtitle_text_padding_px(scale_num, scale_den), scale_num, scale_den);
+    return subtitle_scaled_extent(text_w, scale_num, scale_den) + subtitle_text_padding_px(scale_num, scale_den);
 }
 
 static int subtitle_rendered_text_height(nSDL_Font *font, const char *text, int scale_num, int scale_den)
@@ -70,7 +70,7 @@ static int subtitle_rendered_text_height(nSDL_Font *font, const char *text, int 
         return 0;
     }
     text_h = nSDL_GetStringHeight(font, text);
-    return subtitle_scaled_extent(text_h + subtitle_text_padding_px(scale_num, scale_den), scale_num, scale_den);
+    return subtitle_scaled_extent(text_h, scale_num, scale_den) + subtitle_text_padding_px(scale_num, scale_den);
 }
 
 static int subtitle_wrap_limit_width(int wrap_width, int scale_num, int scale_den)
@@ -84,7 +84,7 @@ static int subtitle_wrap_limit_width(int wrap_width, int scale_num, int scale_de
     if (scale_num == scale_den) {
         limit = wrap_width - padding;
     } else {
-        limit = (wrap_width * scale_den) / scale_num - padding;
+        limit = ((wrap_width - padding) * scale_den) / scale_num;
     }
     return limit > 0 ? limit : 1;
 }
@@ -733,107 +733,76 @@ void subtitle_fonts_for_style(const Fonts *fonts, size_t subtitle_font_index, nS
 }
 
 void draw_scaled_outlined_text(
-    SDL_Surface *screen,
-    nSDL_Font *white_font,
-    nSDL_Font *outline_font,
-    int x,
-    int y,
-    const char *text,
-    int scale_num,
-    int scale_den
+    SDL_Surface *screen, nSDL_Font *white_font, nSDL_Font *outline_font,
+    int x, int y, const char *text, int scale_num, int scale_den
 )
 {
+    if (!screen || !white_font || !text || scale_num <= 0 || scale_den <= 0) return;
+    if (scale_num == scale_den || screen->format->BitsPerPixel != 16) {
+        draw_outlined_text(screen, white_font, outline_font, x, y, text);
+        return;
+    }
     int text_w = nSDL_GetStringWidth(white_font, text);
     int text_h = nSDL_GetStringHeight(white_font, text);
-    SDL_Surface *text_surface;
-    Uint32 key;
-    int dst_w;
-    int dst_h;
-    int dst_x;
-    int dst_y;
-    Uint16 key16;
-    Uint16 *src_pixels;
-    Uint16 *dst_pixels;
-    int src_pitch;
-    int dst_pitch;
-    if (scale_num <= 0 || scale_den <= 0) {
-        return;
-    }
-    if (scale_num == scale_den) {
+    int glyph_w = subtitle_scaled_extent(text_w, scale_num, scale_den);
+    int glyph_h = subtitle_scaled_extent(text_h, scale_num, scale_den);
+    int radius = subtitle_text_padding_px(scale_num, scale_den) / 2;
+    if (text_w <= 0 || text_h <= 0 || glyph_w <= 0 || glyph_h <= 0 || radius <= 0 ||
+        (size_t)glyph_w > SIZE_MAX / (size_t)glyph_h) return;
+    SDL_Surface *glyphs = create_rgb565_surface(text_w, text_h);
+    uint8_t *mask = malloc((size_t)glyph_w * glyph_h);
+    if (!glyphs || !mask) {
+        if (glyphs) SDL_FreeSurface(glyphs);
+        free(mask);
         draw_outlined_text(screen, white_font, outline_font, x, y, text);
         return;
     }
-    text_surface = SDL_CreateRGBSurface(
-        SDL_SWSURFACE,
-        text_w + (SUBTITLE_SCALE_PAD_PX * 2),
-        text_h + (SUBTITLE_SCALE_PAD_PX * 2),
-        screen->format->BitsPerPixel,
-        screen->format->Rmask,
-        screen->format->Gmask,
-        screen->format->Bmask,
-        screen->format->Amask
-    );
-    if (!text_surface) {
-        draw_outlined_text(screen, white_font, outline_font, x, y, text);
-        return;
-    }
-    key = SDL_MapRGB(text_surface->format, 255, 0, 255);
-    SDL_FillRect(text_surface, NULL, key);
-    draw_outlined_text(text_surface, white_font, outline_font, SUBTITLE_SCALE_PAD_PX, SUBTITLE_SCALE_PAD_PX, text);
-    dst_w = (text_surface->w * scale_num) / scale_den;
-    dst_h = (text_surface->h * scale_num) / scale_den;
-    if (dst_w <= 0 || dst_h <= 0 || screen->format->BitsPerPixel != 16 || text_surface->format->BitsPerPixel != 16) {
-        SDL_FreeSurface(text_surface);
-        draw_outlined_text(screen, white_font, outline_font, x, y, text);
-        return;
-    }
-    if (SDL_MUSTLOCK(text_surface)) {
-        SDL_LockSurface(text_surface);
-    }
-    if (SDL_MUSTLOCK(screen)) {
-        SDL_LockSurface(screen);
-    }
-    key16 = (Uint16) key;
-    src_pixels = (Uint16 *) text_surface->pixels;
-    dst_pixels = (Uint16 *) screen->pixels;
-    src_pitch = text_surface->pitch / 2;
-    dst_pitch = screen->pitch / 2;
-    for (dst_y = 0; dst_y < dst_h; ++dst_y) {
-        int src_y;
-        int draw_y = y + dst_y;
-        if (draw_y < 0 || draw_y >= screen->h) {
-            continue;
-        }
-        if (dst_h > 1 && text_surface->h > 1) {
-            src_y = (dst_y * (text_surface->h - 1) + ((dst_h - 1) / 2)) / (dst_h - 1);
-        } else {
-            src_y = 0;
-        }
-        for (dst_x = 0; dst_x < dst_w; ++dst_x) {
-            int src_x;
-            Uint16 sample;
-            int draw_x = x + dst_x;
-            if (draw_x < 0 || draw_x >= screen->w) {
-                continue;
-            }
-            if (dst_w > 1 && text_surface->w > 1) {
-                src_x = (dst_x * (text_surface->w - 1) + ((dst_w - 1) / 2)) / (dst_w - 1);
-            } else {
-                src_x = 0;
-            }
-            sample = src_pixels[src_y * src_pitch + src_x];
-            if (sample != key16) {
-                dst_pixels[draw_y * dst_pitch + draw_x] = sample;
-            }
+    Uint16 key = (Uint16)SDL_MapRGB(glyphs->format, 255, 0, 255);
+    SDL_FillRect(glyphs, NULL, key);
+    nSDL_DrawString(glyphs, white_font, 0, 0, "%s", text);
+    bool source_locked = SDL_MUSTLOCK(glyphs), target_locked = SDL_MUSTLOCK(screen);
+    if (source_locked && SDL_LockSurface(glyphs) != 0) goto free_glyphs;
+    const Uint16 *source = glyphs->pixels;
+    int pitch = glyphs->pitch / 2;
+    /* Scale only the letters. Pixel-centre sampling gives both ends the same
+     * treatment; the border is generated afterwards in destination pixels. */
+    for (int gy = 0; gy < glyph_h; ++gy) {
+        int sy = ((2 * gy + 1) * text_h) / (2 * glyph_h);
+        for (int gx = 0; gx < glyph_w; ++gx) {
+            int sx = ((2 * gx + 1) * text_w) / (2 * glyph_w);
+            mask[gy * glyph_w + gx] = source[sy * pitch + sx] != key;
         }
     }
-    if (SDL_MUSTLOCK(screen)) {
-        SDL_UnlockSurface(screen);
+    if (source_locked) SDL_UnlockSurface(glyphs);
+    if (target_locked && SDL_LockSurface(screen) != 0) goto free_glyphs;
+    Uint16 *pixels = screen->pixels;
+    Uint16 white = (Uint16)SDL_MapRGB(screen->format, 255, 255, 255);
+    Uint16 black = (Uint16)SDL_MapRGB(screen->format, 0, 0, 0);
+    SDL_Rect clip = screen->clip_rect;
+    for (int oy = 0; oy < glyph_h + 2 * radius; ++oy) {
+        int py = y + oy, gy = oy - radius;
+        if (py < 0 || py >= screen->h || py < clip.y || py >= clip.y + clip.h) continue;
+        for (int ox = 0; ox < glyph_w + 2 * radius; ++ox) {
+            int px = x + ox, gx = ox - radius;
+            if (px < 0 || px >= screen->w || px < clip.x || px >= clip.x + clip.w) continue;
+            bool inside = gx >= 0 && gx < glyph_w && gy >= 0 && gy < glyph_h && mask[gy * glyph_w + gx];
+            bool border = inside;
+            for (int dy = -radius; !border && dy <= radius; ++dy) {
+                int my = gy + dy;
+                if (my < 0 || my >= glyph_h) continue;
+                for (int dx = -radius; dx <= radius; ++dx) {
+                    int mx = gx + dx;
+                    if (dx * dx + dy * dy <= radius * radius && mx >= 0 && mx < glyph_w &&
+                        mask[my * glyph_w + mx]) { border = true; break; }
+                }
+            }
+            if (border) pixels[py * (screen->pitch / 2) + px] = inside ? white : black;
+        }
     }
-    if (SDL_MUSTLOCK(text_surface)) {
-        SDL_UnlockSurface(text_surface);
-    }
-    SDL_FreeSurface(text_surface);
+    if (target_locked) SDL_UnlockSurface(screen);
+free_glyphs:
+    SDL_FreeSurface(glyphs);
+    free(mask);
 }
 
 bool ensure_subtitle_surface_cache(

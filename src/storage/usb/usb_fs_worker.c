@@ -12,7 +12,7 @@
 typedef struct {
     UsbFsContext context;
     UsbFsJob *job;
-    uint32_t started, budget;
+    uint32_t started, budget, cpu_polls;
     bool running, broken;
     uint32_t stack[STACK_WORDS + 2 * GUARD_WORDS];
 } UsbFsWorker;
@@ -63,20 +63,25 @@ static void entry(void *argument)
         usb_fs_context_yield(&w->context);
     }
 }
-bool usb_fs_submit(UsbFsJob *job)
+bool usb_fs_prepare(void)
 {
-    if (!job || !job->run || job->pending)
-        return false;
     if (!worker) {
         worker = calloc(1, sizeof(*worker));
-        if (!worker) {
-            job->error = ENOMEM;
-            return false;
-        }
+        if (!worker) return false;
         for (unsigned i = 0; i < STACK_WORDS + 2 * GUARD_WORDS; ++i)
             worker->stack[i] = GUARD_VALUE;
         usb_fs_context_init(&worker->context, worker->stack + GUARD_WORDS,
                             STACK_WORDS * sizeof(uint32_t), entry, worker);
+    }
+    return !worker->broken;
+}
+bool usb_fs_submit(UsbFsJob *job)
+{
+    if (!job || !job->run || job->pending)
+        return false;
+    if (!usb_fs_prepare()) {
+        job->error = worker ? EOVERFLOW : ENOMEM;
+        return false;
     }
     if (worker->broken) {
         job->error = EOVERFLOW;
@@ -103,6 +108,7 @@ void usb_fs_service(uint32_t budget)
     }
     worker->started = tick();
     worker->budget = budget;
+    worker->cpu_polls = 0;
     worker->running = true;
     usb_fs_context_resume(&worker->context);
     worker->running = false;
@@ -123,7 +129,10 @@ bool ndvideo_usb_fs_poll(void)
 {
     if (!worker || !worker->running)
         return true;
-    if ((uint32_t)(tick() - worker->started) >= worker->budget)
+    /* A stopped timer must not trap the foreground in cached FAT traversal.
+     * The CPU bound is a yield opportunity, never a transfer timeout. */
+    if (++worker->cpu_polls >= 256U ||
+        (uint32_t)(tick() - worker->started) >= worker->budget)
         usb_fs_yield();
     return !usb_fs_cancelled();
 }
@@ -141,10 +150,18 @@ void usb_fs_cancel_active(void)
 }
 void usb_fs_wait(UsbFsJob *job)
 {
+    unsigned services = 0;
+    uint32_t previous = tick();
     while (job && job->pending && !worker->broken) {
         usb_fs_service(8U);
         uint32_t current = tick();
-        if (progress_callback && (uint32_t)(current - progress_last) >= 512U) {
+        if (current != previous) {
+            previous = current;
+            services = 0;
+        } else ++services;
+        if (progress_callback && (services >= 64U ||
+                                  (uint32_t)(current - progress_last) >= 512U)) {
+            services = 0;
             progress_last = current;
             progress_callback(progress_context);
         }
@@ -157,6 +174,26 @@ bool usb_fs_idle(void)
 size_t usb_fs_memory_bytes(void)
 {
     return worker ? sizeof(*worker) : 0;
+}
+void usb_fs_debug(FILE *file)
+{
+    if(!file) return;
+    fprintf(file,"usb_fs_worker allocated=%u running=%u broken=%u foreground=%08lx background=%08lx stack=%08lx guards=%u job=%08lx\n",
+        worker ? 1U : 0U, worker ? worker->running : 0, worker ? worker->broken : 0,
+        (unsigned long)(uintptr_t)(worker ? worker->context.foreground : NULL),
+        (unsigned long)(uintptr_t)(worker ? worker->context.background : NULL),
+        (unsigned long)(uintptr_t)(worker ? worker->stack+GUARD_WORDS : NULL),
+        worker ? guards(worker) : 0,(unsigned long)(uintptr_t)(worker ? worker->job : NULL));
+#if defined(__arm__)
+    if(worker && worker->context.background) {
+        uint32_t *sp=worker->context.background;
+        if(sp>=worker->stack+GUARD_WORDS && sp<=worker->stack+GUARD_WORDS+STACK_WORDS-10U) {
+            fprintf(file,"usb_fs_frame");
+            for(unsigned n=0;n<10;++n) fprintf(file," r%u=%08lx",n,(unsigned long)sp[n]);
+            fputc('\n',file);
+        }
+    }
+#endif
 }
 void usb_fs_shutdown(void)
 {

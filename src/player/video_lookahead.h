@@ -29,7 +29,7 @@ typedef struct {
     uint32_t planar_frame_start_guard_ticks, planar_chunk_start_guard_ticks;
     uint32_t max_background_pump_ticks, max_background_color_ticks;
     /* Independent peaks accumulated during active capture periods for this
-     * movie. One planar unit is a complete HEVC CTU or AV1 superblock. */
+     * movie. One planar unit is a HEVC CTU, AV1 superblock or MPEG-4 frame. */
     uint32_t captured_planar_pumps, captured_submission_pumps;
     uint32_t captured_single_no_submit_pumps, captured_multi_no_submit_pumps;
     uint32_t captured_max_pump_ticks, captured_max_pump_units;

@@ -22,17 +22,9 @@ int progress_bar_marker_x_from_pointer(const SDL_Rect *bar, int pointer_x)
 
 uint32_t progress_bar_ms_for_marker(const Movie *movie, const SDL_Rect *bar, int marker_x)
 {
-    uint32_t duration_ms;
-
-    if (!movie || !bar) {
-        return 0;
-    }
-    duration_ms = movie_duration_ms(movie);
-    if (duration_ms == 0) {
-        return 0;
-    }
-    marker_x = progress_bar_marker_x_from_pointer(bar, marker_x);
-    return (uint32_t) (((uint64_t) duration_ms * (uint32_t) (marker_x - bar->x)) / progress_bar_denominator(bar));
+    uint32_t frame;
+    return progress_bar_target_frame_for_marker(movie, bar, marker_x, &frame, NULL)
+        ? movie_frame_time_ms(movie, frame) : 0;
 }
 
 bool progress_bar_target_frame_for_marker(const Movie *movie, const SDL_Rect *bar, int marker_x, uint32_t *out_target_frame, uint32_t *out_target_ms)
@@ -40,20 +32,30 @@ bool progress_bar_target_frame_for_marker(const Movie *movie, const SDL_Rect *ba
     uint32_t target_ms;
     uint32_t target_frame;
 
-    if (!movie || !bar || !out_target_frame || movie->header.frame_count == 0) {
+    if (!movie || !bar || !bar->w || !out_target_frame || movie->header.frame_count == 0) {
         return false;
     }
 
-    target_ms = progress_bar_ms_for_marker(movie, bar, marker_x);
-    target_frame = movie_frames_from_ms(movie, target_ms);
-    if (target_frame >= movie->header.frame_count) {
-        target_frame = movie->header.frame_count - 1U;
-    }
+    /* Share the same endpoint-inclusive pixel grid with the rendered cap.
+     * Going through milliseconds and flooring twice biases the result left. */
+    marker_x = progress_bar_marker_x_from_pointer(bar, marker_x);
+    uint32_t denominator = progress_bar_denominator(bar);
+    target_frame = (uint32_t)(((uint64_t)(movie->header.frame_count - 1U) *
+        (uint32_t)(marker_x - bar->x) + denominator / 2U) / denominator);
+    target_ms = movie_frame_time_ms(movie, target_frame);
     *out_target_frame = target_frame;
     if (out_target_ms) {
         *out_target_ms = target_ms;
     }
     return true;
+}
+
+uint32_t progress_bar_width_for_frame(const Movie *movie, const SDL_Rect *bar, uint32_t frame)
+{
+    if (!movie || !bar || !bar->w || !movie->header.frame_count) return 0;
+    uint32_t last = movie->header.frame_count - 1U;
+    if (bar->w == 1 || frame >= last) return bar->w;
+    return 1U + (uint32_t)(((uint64_t)frame * progress_bar_denominator(bar) + last / 2U) / last);
 }
 
 
@@ -778,6 +780,12 @@ Uint16 picker_background_color_at_y_mix(int y, uint8_t mix)
     return rgb565_lerp(UI_COLOR_BLACK, picker_background_color_at_y(y), mix, 255);
 }
 
+Uint16 picker_text_color(bool secondary)
+{
+    return rgb565_lerp(secondary ? ui_theme()->scroll_thumb : UI_COLOR_WARM_WHITE,
+                      UI_COLOR_WHITE, secondary ? 144 : 176, 255);
+}
+
 int ui_mix_int(int from, int to, uint8_t mix)
 {
     return from + (((to - from) * (int) mix + 127) / 255);
@@ -1290,6 +1298,42 @@ void draw_ui_label(SDL_Surface *screen, const Fonts *fonts, int x, int y, const 
         return;
     }
     nSDL_DrawString(screen, fonts->white, x, y, "%s", label);
+}
+
+/* Reuse the existing glyphs for muted metadata; no duplicate font atlas. */
+void draw_ui_label_tint(SDL_Surface *screen, const Fonts *fonts, int x, int y,
+    const char *label, Uint16 color, uint8_t mix)
+{
+    if (!screen || !fonts || !fonts->white || !label || !mix || screen->format->BitsPerPixel != 16)
+        return;
+    SDL_Rect clip;
+    SDL_GetClipRect(screen, &clip);
+    bool locked = SDL_MUSTLOCK(screen);
+    if (locked && SDL_LockSurface(screen)) return;
+    nSDL_Font *font = fonts->white;
+    while (*label) {
+        unsigned char ch = (unsigned char)*label++;
+        SDL_Surface *glyph = font->chars[ch];
+        int width = font->monospaced ? NSP_FONT_WIDTH : font->char_width[ch];
+        bool glyph_locked = glyph && SDL_MUSTLOCK(glyph);
+        bool usable = glyph && (!glyph_locked || SDL_LockSurface(glyph) == 0);
+        if (usable) {
+            for (int row = 0; row < glyph->h; ++row) {
+                int py = y + row;
+                if (py < clip.y || py >= clip.y + clip.h) continue;
+                Uint16 *pixels = (Uint16 *)((Uint8 *)screen->pixels + py * screen->pitch);
+                for (int col = 0; col < width && col < glyph->w; ++col) {
+                    int px = x + col;
+                    if (px >= clip.x && px < clip.x + clip.w && surface_pixel_has_ink(glyph, col, row))
+                        pixels[px] = mix == 255 ? color : rgb565_lerp(pixels[px], color, mix, 255);
+                }
+            }
+            if (glyph_locked) SDL_UnlockSurface(glyph);
+        }
+        x += width + font->hspacing;
+        if (x >= clip.x + clip.w) break;
+    }
+    if (locked) SDL_UnlockSurface(screen);
 }
 
 typedef struct {

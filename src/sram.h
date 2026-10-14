@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 bool sram_init(void);
 void sram_shutdown(void);
@@ -21,5 +22,9 @@ size_t sram_bytes_capacity(void);
 uint32_t sram_active_ttbr(void);
 uint32_t sram_expected_ttbr(void);
 const char *sram_status_message(void);
+/* Recorded during initialization; logging does not probe or modify SRAM. */
+void sram_debug(FILE *file);
+/* Read-only snapshots in NDVIDEO_CX_SRAM_SURVEY builds; no-op otherwise. */
+void sram_survey_checkpoint(const char *phase);
 
 #endif

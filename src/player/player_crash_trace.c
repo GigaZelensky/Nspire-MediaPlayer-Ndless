@@ -1,3 +1,4 @@
+#include "player_data.h"
 #include "player_internal.h"
 #include "crash_recorder.h"
 #include "native_runtime_stats.h"
@@ -153,7 +154,7 @@ void player_crash_trace_begin(const Movie *movie, const char *path, bool paused,
     uint64_t session = ((uint64_t)(uint32_t)time(NULL) << 32) | (uint32_t)now;
     memset(&crash_trace, 0, sizeof(crash_trace));
     crash_trace.attempted = true;
-    if (!crash_recorder_start(directory, session))
+    if (!player_data_prepare() || !crash_recorder_start(directory, session))
         return;
     crash_trace.active = true;
     crash_trace.movie = movie;

@@ -13,7 +13,8 @@ typedef struct {
     UsbFile *file;
     UsbRead *read;
     NveReader *crypt;
-    uint32_t offset, bytes, started, ended, completed;
+    uint64_t offset;
+    uint32_t bytes, started, ended, completed;
     uint32_t cpu_ticks, crypto_ticks, max_step, max_crypto, commands;
     RawPlayerWaitStats wait;
     bool requested, ready, reading;
@@ -180,7 +181,7 @@ static void step(UsbPlayerReader *usb)
         advance_crypto(usb);
         return;
     }
-    uint32_t offset = usb->crypt ? nve_reader_physical_offset(usb->crypt) : usb->offset;
+    uint64_t offset = usb->crypt ? nve_reader_physical_offset(usb->crypt) : usb->offset;
     uint32_t bytes = usb->crypt ? usb->crypt->unit_bytes + NVE_TAG_BYTES : usb->bytes;
     void *target = usb->crypt ? usb->crypt->block : usb->buffer;
     if (usb_read_begin(usb->read, offset, target, bytes)) {
@@ -241,13 +242,13 @@ int player_reader_read(PlayerReader *reader, uint64_t offset, void *destination,
     if (reader->raw)
         return raw_player_read(reader->raw, offset, destination, bytes, wait);
     UsbPlayerReader *usb = reader->usb;
-    uint32_t length = player_reader_file_bytes(reader);
+    uint64_t length = player_reader_file_bytes(reader);
     if (!usb || usb->error || !destination || !bytes || bytes > sizeof(usb->buffer) ||
         offset > length || bytes > length - offset)
         return -1;
     if (!usb->requested || usb->offset != offset || usb->bytes != bytes) {
         player_reader_cancel(reader);
-        usb->offset = (uint32_t)offset;
+        usb->offset = offset;
         usb->bytes = (uint32_t)bytes;
         usb->requested = true;
         usb->started = 0U - usb_controller_ticks();
@@ -302,6 +303,10 @@ bool player_reader_needs_request(const PlayerReader *r)
 {
     return r && (r->raw ? raw_player_needs_request(r->raw) : !r->usb->requested || r->usb->ready);
 }
+bool player_reader_full_speed_usb(const PlayerReader *r)
+{
+    return r && r->usb && usb_controller_link_speed() == 2U;
+}
 void player_reader_after_clock_reset(PlayerReader *r)
 {
     if (!r)
@@ -317,7 +322,7 @@ int player_reader_error(const PlayerReader *r)
 {
     return r ? (r->raw ? raw_player_error(r->raw) : r->usb->error) : create_error;
 }
-uint32_t player_reader_file_bytes(const PlayerReader *r)
+uint64_t player_reader_file_bytes(const PlayerReader *r)
 {
     return !r              ? 0
            : r->raw        ? raw_player_file_bytes(r->raw)

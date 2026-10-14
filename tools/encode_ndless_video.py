@@ -31,6 +31,7 @@ except ImportError:
 MAGIC = b"NVP1"
 VERSION = 10
 CODEC_TAGGED_VERSION = 11
+LARGE_FILE_VERSION = 12
 CODEC_FLAG_H264 = 0
 CODEC_FLAG_MPEG4 = 1
 CODEC_FLAG_HEVC = 2
@@ -41,6 +42,8 @@ SCREEN_W = 320
 SCREEN_H = 240
 HEADER_STRUCT = struct.Struct("<4sHHHHHHHHHHHHIIIII")
 CHUNK_INDEX_STRUCT = struct.Struct("<IIIIII")
+LARGE_HEADER_STRUCT = struct.Struct("<4s12H3I2Q")
+LARGE_CHUNK_INDEX_STRUCT = struct.Struct("<Q5I")
 START_CODE_RE = re.compile(rb"\x00\x00(?:\x00)?\x01")
 MPEG4_START_CODE_RE = re.compile(rb"\x00\x00\x01(.)", re.DOTALL)
 SUBTITLE_LINE_BREAK_RE = re.compile(r"(?i)<br\s*/?>|\\N|\\n")
@@ -2394,7 +2397,7 @@ def write_header(
 ) -> None:
     handle.seek(0)
     handle.write(
-        HEADER_STRUCT.pack(
+        (LARGE_HEADER_STRUCT if version == LARGE_FILE_VERSION else HEADER_STRUCT).pack(
             MAGIC,
             version,
             flags,
@@ -4376,6 +4379,14 @@ def encode(args: argparse.Namespace) -> EncodeStats:
             header_version = CODEC_TAGGED_VERSION
             header_flags = CODEC_FLAG_MPEG4
 
+        header_struct, index_struct = HEADER_STRUCT, CHUNK_INDEX_STRUCT
+        if expected_output_size > 0xFFFFFFFF:
+            header_struct, index_struct = LARGE_HEADER_STRUCT, LARGE_CHUNK_INDEX_STRUCT
+            expected_output_size += (header_struct.size - HEADER_STRUCT.size) + len(chunks) * (index_struct.size - CHUNK_INDEX_STRUCT.size)
+            header_version = LARGE_FILE_VERSION
+        if expected_output_size > 0x7FFFFFFFFFFFFFFF:
+            raise ValueError("Movie exceeds the 64-bit container range.")
+
         chunk_frame_counts = [len(chunk) for chunk in chunks]
         max_observed_chunk_frames = max(chunk_frame_counts) if chunk_frame_counts else 0
         header_chunk_frames = min(max_observed_chunk_frames, 0xFFFF)
@@ -4418,12 +4429,12 @@ def encode(args: argparse.Namespace) -> EncodeStats:
             password = read_password(args.password_file)
             output_stream = EncryptedWriter(output_path, expected_output_size,
                 frame_count * 1000000 // int(round(fps * 1000)), password,
-                frame_count, int(round(fps * 1000)), 1000)
+                frame_count, int(round(fps * 1000)), 1000, CODEC_NAMES.index(args.codec) + 1)
         else:
             output_stream = output_path.open("wb")
         with output_stream as output_handle:
             output_started = True
-            output_handle.write(b"\0" * HEADER_STRUCT.size)
+            output_handle.write(b"\0" * header_struct.size)
 
             chunk_index: list[tuple[int, int, int, int, int, int]] = []
             frame_cursor = 0
@@ -4459,7 +4470,7 @@ def encode(args: argparse.Namespace) -> EncodeStats:
                 progress = (chunk_number / len(chunks)) * 100.0
                 written_size = output_handle.tell()
                 remaining_size = max(0, expected_output_size - written_size)
-                pack_rate = ((written_size - HEADER_STRUCT.size) / pack_elapsed) if pack_elapsed > 0.0 else 0.0
+                pack_rate = ((written_size - header_struct.size) / pack_elapsed) if pack_elapsed > 0.0 else 0.0
                 eta = (remaining_size / pack_rate) if pack_rate > 0.0 and remaining_size > 0 else 0.0
                 log(
                     f"Chunk {chunk_number:03d}: {progress:5.1f}% | ETA {format_duration_hms(eta)} | "
@@ -4472,7 +4483,7 @@ def encode(args: argparse.Namespace) -> EncodeStats:
 
             index_offset = output_handle.tell()
             for entry in chunk_index:
-                output_handle.write(CHUNK_INDEX_STRUCT.pack(*entry))
+                output_handle.write(index_struct.pack(*entry))
 
             subtitle_offset = output_handle.tell()
             if subtitle_tracks:

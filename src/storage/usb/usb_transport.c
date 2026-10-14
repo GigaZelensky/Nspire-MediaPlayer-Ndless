@@ -42,13 +42,27 @@ static void phase(UsbTransport *t, UsbTransferPhase value)
 {
     t->phase = value;
     t->phase_started = now(t);
+    t->phase_last_tick = t->phase_started;
     t->phase_polls = 0;
 }
 static bool expired(UsbTransport *t, unsigned milliseconds)
 {
-    /* A stopped clock cannot create an infinite retry loop. */
+    /* Count only consecutive polls with no timer progress. A fast CPU can
+     * legitimately poll more than 65536 times while a flash drive is busy. */
     uint64_t timeout = ((uint64_t)t->tick_hz * milliseconds + 999U) / 1000U;
-    return ++t->phase_polls >= 65536U || (uint32_t)(now(t) - t->phase_started) >= timeout;
+    uint32_t current = now(t);
+    if (current != t->phase_last_tick) {
+        t->phase_last_tick = current;
+        t->phase_polls = 0;
+    } else
+        ++t->phase_polls;
+    uint32_t elapsed = current - t->phase_started;
+    if (t->phase_polls < 65536U && elapsed < timeout)
+        return false;
+    t->timeout_phase = t->phase;
+    t->timeout_elapsed = elapsed;
+    t->timeout_polls = t->phase_polls;
+    return true;
 }
 void usb_transport_init(UsbTransport *t, UsbBus bus, uint8_t *bounce, UsbQueueHead *queue,
                         UsbQtd *descriptor, uint32_t bounce_pa, uint32_t queue_pa,
@@ -63,6 +77,9 @@ void usb_transport_init(UsbTransport *t, UsbBus bus, uint8_t *bounce, UsbQueueHe
     t->queue_physical = queue_pa;
     t->descriptor_physical = descriptor_pa;
     t->tick_hz = tick_hz;
+    t->max_bytes = USB_READ_BYTES;
+    t->packet_in = t->packet_out = 512;
+    t->high_speed = true;
 }
 bool usb_transport_quiescent(const UsbTransport *t)
 {
@@ -90,10 +107,13 @@ static void restore(UsbTransport *t)
 }
 bool usb_transport_begin(UsbTransport *t, bool input, const void *data, unsigned bytes)
 {
-    if (!t || t->owns_schedule || t->poisoned || !bytes || bytes > 4096 || (!input && !data) ||
+    if (!t || t->owns_schedule || t->poisoned || !bytes || bytes > t->max_bytes || bytes > USB_READ_BYTES || (!input && !data) ||
         !t->address || t->address > 127 || !(t->endpoint_in & 15) || !(t->endpoint_out & 15) ||
         (t->bounce_physical & 4095) || (t->queue_physical & 31) || (t->descriptor_physical & 31) ||
         !t->tick_hz)
+        return false;
+    unsigned packet = input ? t->packet_in : t->packet_out;
+    if (t->high_speed ? packet != 512 : (packet != 8 && packet != 16 && packet != 32 && packet != 64))
         return false;
     t->error = USB_TRANSPORT_OK;
     t->cancelled = false;
@@ -102,6 +122,8 @@ bool usb_transport_begin(UsbTransport *t, bool input, const void *data, unsigned
     t->input = input;
     t->started = now(t);
     t->total_polls = 0;
+    t->timeout_phase = USB_TRANSFER_IDLE;
+    t->timeout_elapsed = t->timeout_polls = 0;
     t->original_command = read_reg(t, HC_COMMAND);
     t->original_pending = read_reg(t, HC_STATUS);
     if (!(read_reg(t, HC_PORT) & 1)) {
@@ -127,13 +149,16 @@ bool usb_transport_begin(UsbTransport *t, bool input, const void *data, unsigned
                            ((input ? t->toggle_in : t->toggle_out) ? TD_TOGGLE : 0) | 0x8000U |
                            (3U << 10) | (input ? 0x100U : 0) | TD_ACTIVE;
     t->descriptor->buffer[0] = t->bounce_physical;
+    for (unsigned i = 1; i < (bytes + 4095U) / 4096U; ++i)
+        t->descriptor->buffer[i] = t->bounce_physical + i * 4096U;
     t->queue->link = t->queue_physical | 2;
     t->queue->endpoint = t->address | (((input ? t->endpoint_in : t->endpoint_out) & 15U) << 8) |
-                         (2U << 12) | (1U << 14) | (1U << 15) | (512U << 16) | (4U << 28);
+                         ((t->high_speed ? 2U : 0U) << 12) | (1U << 14) | (1U << 15) |
+                         (packet << 16) | (4U << 28);
     t->queue->capabilities = 1U << 30;
     t->queue->next = t->descriptor_physical;
     t->queue->alternate = 1;
-    t->bus.clean(t->bus.context, t->bounce, 4096);
+    t->bus.clean(t->bus.context, t->bounce, (bytes + 31U) & ~31U);
     t->bus.clean(t->bus.context, t->queue, 64);
     t->bus.clean(t->bus.context, t->descriptor, 32);
     barrier(t);
@@ -223,7 +248,7 @@ int usb_transport_step(UsbTransport *t)
                 t->actual = t->bytes - remaining;
                 if (t->input) {
                     t->toggle_in = !!(t->last_token & TD_TOGGLE);
-                    t->bus.invalidate(t->bus.context, t->bounce, 4096);
+                    t->bus.invalidate(t->bus.context, t->bounce, (t->bytes + 31U) & ~31U);
                 } else
                     t->toggle_out = !!(t->last_token & TD_TOGGLE);
             }

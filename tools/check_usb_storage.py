@@ -36,6 +36,12 @@ def main():
             config = re.sub(r"(#define\s+" + key + r"\s+)[^\r\n]+", lambda match: match[1] + str(value), config)
         (fixture / "ffconf.h").write_text(config)
         common = [compiler, "-std=c99", "-O2", "-Wall", "-Wextra"]
+        run(*common, "-I" + str(SRC), TEST / "registers.c", "-o", work / "registers.exe")
+        run(work / "registers.exe")
+        run(*common, "-I" + str(ROOT / "src/platform"), TEST / "cpu_alias.c", "-o", work / "cpu_alias.exe")
+        run(work / "cpu_alias.exe")
+        run(*common, "-I" + str(SRC), TEST / "autoconnect.c", "-o", work / "autoconnect.exe")
+        run(work / "autoconnect.exe")
         run(*common, "-I" + str(SRC), TEST / "transport.c", SRC / "usb_transport.c", SRC / "usb_scsi.c", "-o", work / "transport.exe")
         run(work / "transport.exe")
         run(*common, "-I" + str(fixture), TEST / "fixture.c", fixture / "ff.c", fixture / "ffunicode.c", "-o", work / "fixture.exe")

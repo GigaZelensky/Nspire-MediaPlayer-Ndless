@@ -27,4 +27,5 @@ void movie_async_service(struct Movie *, unsigned budget_ticks);
 bool movie_async_crypto_step(struct Movie *, uint32_t spare_ticks);
 bool movie_async_read_step(struct Movie *, uint32_t spare_ticks);
 bool movie_async_needs_request(const struct Movie *);
+bool movie_async_full_speed_usb(const struct Movie *);
 #endif

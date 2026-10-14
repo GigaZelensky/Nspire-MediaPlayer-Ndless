@@ -7,6 +7,7 @@
 
 #include "decoder.h"
 #include "xvid.h"
+#include "image/colorspace.h"
 #if defined(NDVIDEO_BUILD_MPEG4_MODULE) && NDVIDEO_BUILD_MPEG4_MODULE
 #include "xvid/utils/mem_align.h"
 #endif
@@ -148,6 +149,7 @@ static bool mpeg4_xvid_decode_iteration(
     int height,
     bool output,
     bool discontinuity,
+    VideoFrame *picture,
     int *out_consumed,
     int *out_type
 )
@@ -168,7 +170,13 @@ static bool mpeg4_xvid_decode_iteration(
     frame.general = XVID_LOWDELAY | XVID_DEC_FAST | (discontinuity ? XVID_DISCONTINUITY : 0);
     frame.bitstream = (void *) data;
     frame.length = data_size > (size_t) INT32_MAX ? INT32_MAX : (int) data_size;
-    if (output) {
+    if (picture) {
+        frame.output.csp = XVID_CSP_INTERNAL;
+        /* Xvid checks for a destination before publishing INTERNAL planes.
+         * It replaces these pointers without writing through the placeholder. */
+        frame.output.plane[0] = handle;
+        frame.output.stride[0] = width;
+    } else if (output) {
         if (!rgb565) {
             mpeg4_xvid_set_error("xvid decode failed: RGB565 output missing");
             return false;
@@ -209,12 +217,32 @@ static bool mpeg4_xvid_decode_iteration(
         return false;
     }
 
+    if (picture && (stats.type == XVID_TYPE_IVOP || stats.type == XVID_TYPE_PVOP)) {
+        if (!mpeg4_xvid_planar_supported(handle)) {
+            mpeg4_xvid_set_error("MPEG-4 planar output requires progressive video");
+            return false;
+        }
+        VideoFrame view = {0};
+        for (unsigned plane = 0; plane < 3U; ++plane) {
+            unsigned plane_width = (unsigned)width >> (plane != 0);
+            if (!frame.output.plane[plane] || frame.output.stride[plane] < (int)plane_width) {
+                mpeg4_xvid_set_error("MPEG-4 decoder did not publish valid YUV planes");
+                return false;
+            }
+            view.plane[plane] = frame.output.plane[plane];
+            view.stride[plane] = frame.output.stride[plane];
+        }
+        view.width = view.coded_width = (unsigned)width;
+        view.height = view.coded_height = (unsigned)height;
+        *picture = view;
+    }
+
     *out_consumed = result;
     *out_type = stats.type;
     return true;
 }
 
-bool mpeg4_xvid_decode_frame(
+static bool mpeg4_xvid_decode_output(
     void *handle,
     const uint8_t *data,
     size_t data_size,
@@ -222,7 +250,8 @@ bool mpeg4_xvid_decode_frame(
     int width,
     int height,
     bool output,
-    bool discontinuity
+    bool discontinuity,
+    VideoFrame *picture
 )
 {
     size_t offset = 0;
@@ -241,6 +270,7 @@ bool mpeg4_xvid_decode_frame(
                 height,
                 output,
                 discontinuity && offset == 0,
+                picture,
                 &consumed,
                 &type)) {
             return false;
@@ -274,4 +304,46 @@ bool mpeg4_xvid_decode_frame(
 const char *mpeg4_xvid_last_error(void)
 {
     return g_xvid_error[0] ? g_xvid_error : "xvid error";
+}
+
+bool mpeg4_xvid_decode_frame(void *handle, const uint8_t *data, size_t bytes,
+    uint16_t *rgb565, int width, int height, bool output, bool discontinuity)
+{
+    return mpeg4_xvid_decode_output(handle, data, bytes, rgb565, width, height,
+                                   output, discontinuity, NULL);
+}
+
+bool mpeg4_xvid_decode_picture(void *handle, const uint8_t *data, size_t bytes,
+    int width, int height, bool discontinuity, VideoFrame *picture)
+{
+    if (!picture || width <= 0 || height <= 0 || ((width | height) & 1)) return false;
+    memset(picture, 0, sizeof(*picture));
+    return mpeg4_xvid_decode_output(handle, data, bytes, NULL, width, height,
+                                   false, discontinuity, picture);
+}
+
+bool mpeg4_xvid_planar_supported(void *handle)
+{
+    return handle && !((const DECODER *)handle)->interlacing;
+}
+
+bool mpeg4_xvid_blit_picture_rows(const VideoFrame *picture, uint16_t *pixels,
+    size_t pitch, size_t first, size_t rows)
+{
+    if (!g_xvid_initialized || !picture || !pixels || !rows || ((first | rows) & 1U) ||
+        !picture->width || !picture->height || ((picture->width | picture->height) & 1U) ||
+        picture->width > INT_MAX || picture->height > INT_MAX || rows > INT_MAX ||
+        pitch > INT_MAX / sizeof(uint16_t) ||
+        (uint64_t)picture->height * pitch > SIZE_MAX / sizeof(uint16_t) ||
+        pitch < picture->width || first > picture->height || rows > picture->height - first ||
+        !picture->plane[0] || !picture->plane[1] || !picture->plane[2] ||
+        picture->stride[0] < (int)picture->width ||
+        picture->stride[1] < (int)(picture->width / 2U) ||
+        picture->stride[1] != picture->stride[2]) return false;
+    yv12_to_rgb565((uint8_t *)(pixels + first * pitch), (int)(pitch * sizeof(uint16_t)),
+        (uint8_t *)(picture->plane[0] + first * (size_t)picture->stride[0]),
+        (uint8_t *)(picture->plane[1] + (first / 2U) * (size_t)picture->stride[1]),
+        (uint8_t *)(picture->plane[2] + (first / 2U) * (size_t)picture->stride[2]),
+        picture->stride[0], picture->stride[1], (int)picture->width, (int)rows, 0);
+    return true;
 }

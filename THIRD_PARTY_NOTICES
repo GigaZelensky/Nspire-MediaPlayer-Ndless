@@ -45,6 +45,11 @@ Vendored decoder sources from the Xvid MPEG-4 video codec project, under
 GPL-2.0-or-later. Individual authors and copyright notices are preserved in
 the source files. The player uses src/codecs/mpeg4_xvid.c and builds with
 XVID_DECODER_ONLY; the upstream encoder sources and plugins are not compiled.
+TI-Nspire SRAM allocation/tables and the packed RGB565 conversion were adapted
+from giraf-fe's nvid2, also GPL-2.0-or-later:
+https://github.com/giraf-fe/nvid2
+Reference reviewed: cd53d5acb4a35ec787451c80231a5f6c34ad6f09.
+Its decoded-frame queue also informed the player's MPEG-4 lookahead integration.
 
 Cryptography: src/crypto/bearssl
 BearSSL by Thomas Pornin, under the MIT license reproduced below.

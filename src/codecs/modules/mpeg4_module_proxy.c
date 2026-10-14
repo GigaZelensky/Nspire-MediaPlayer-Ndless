@@ -22,7 +22,8 @@ static const Mpeg4ModuleApi *acquire_api(void)
     const Mpeg4ModuleApi *api = (const Mpeg4ModuleApi *)module->codec_api;
     if (module->abi_version != CODEC_MODULE_ABI_VERSION || module->struct_size < sizeof(*module) ||
         module->codec_id != CODEC_MODULE_MPEG4 || module->codec_api_size < sizeof(*api) ||
-        !api || !api->global_init || !api->create || !api->destroy || !api->decode || !api->last_error) {
+        !api || !api->global_init || !api->create || !api->destroy || !api->decode || !api->last_error ||
+        !api->decode_picture || !api->planar_supported || !api->blit_picture_rows) {
         save_error("MPEG-4 module ABI mismatch");
         codec_module_release(CODEC_MODULE_MPEG4);
         return NULL;
@@ -133,5 +134,35 @@ const char *mpeg4_xvid_last_error(void)
 {
     /* Never return a pointer into an image which the idle cache may unload. */
     return saved_error[0] ? saved_error : "xvid error";
+}
+
+bool mpeg4_xvid_decode_picture(void *handle, const uint8_t *data, size_t bytes,
+    int width, int height, bool discontinuity, VideoFrame *picture)
+{
+    if (!handle || !active_api || !picture) {
+        save_error("MPEG-4 planar decoder missing");
+        return false;
+    }
+    if (!active_api->decode_picture(handle, data, bytes, width, height, discontinuity, picture)) {
+        save_error(active_api->last_error());
+        return false;
+    }
+    saved_error[0] = '\0';
+    return true;
+}
+
+bool mpeg4_xvid_planar_supported(void *handle)
+{
+    return handle && active_api && active_api->planar_supported(handle);
+}
+
+bool mpeg4_xvid_blit_picture_rows(const VideoFrame *picture, uint16_t *pixels,
+    size_t pitch, size_t first, size_t rows)
+{
+    if (!active_api || !active_api->blit_picture_rows(picture, pixels, pitch, first, rows)) {
+        save_error("MPEG-4 picture conversion failed");
+        return false;
+    }
+    return true;
 }
 #endif

@@ -1,14 +1,15 @@
 #include "private_writer.h"
-#include "native_firmware.h"
+#include "native_writer_platform.h"
 #include "storage_mutation.h"
 #include "../platform/arm926_ram_span.h"
 #include <string.h>
 #include <os.h>
 
 #define WORD(a) (*(volatile uint32_t *)(uintptr_t)(a))
-#define TASK_POINTER 0x1148F060U
-#define SPI_POINTER 0x113C4268U
-#define SPI_CALLBACK 0x1001A9FCU
+static const NativeWriterApi *writer_api;
+#define TASK_POINTER (writer_api->task_global)
+#define SPI_POINTER (writer_api->spi_global)
+#define SPI_CALLBACK (writer_api->spi_callback)
 #define STACK_GUARD 0xBADC0FFEU
 static PrivateWriter *executing;
 extern void private_context_swap(uint32_t **save_sp, uint32_t *next_sp);
@@ -88,26 +89,8 @@ static bool span(uint32_t address, uint32_t bytes, PrivateWriterInitDiagnostic *
 }
 bool private_writer_supported(void)
 {
-    if (!native_firmware_memory())
-        return false;
-    /* Require the driver ABI we can yield through, regardless of OS label. */
-    static const struct {
-        uint32_t address, words[4];
-    } code[] = {{0x1042B5F0U, {0xE51F0210U, 0xE5900000U, 0xE3500000U, 0xE3A03000U}},
-                {0x103A3310U, {0xE92D4038U, 0xE1A04000U, 0xE1A05001U, 0xEB0220B3U}},
-                {0x10074FCCU, {0xE3510000U, 0xE92D4070U, 0x08BD8070U, 0xE3500000U}},
-                {0x1001A9FCU, {0xE92D4030U, 0xE59F21E8U, 0xE5913000U, 0xE3A05000U}},
-                {0x1048D768U, {0xE92D4008U, 0xEBFE6EA3U, 0xE3500000U, 0x059F0014U}},
-                {0x10423C64U, {0xE92D40F0U, 0xE1A07000U, 0xE24DD044U, 0xE1A06001U}},
-                {0x10423E08U, {0xE92D45F8U, 0xE2534000U, 0xE1A06000U, 0xE1A07001U}},
-                {0x1042429CU, {0xE92D47F0U, 0xE2534000U, 0xE1A05000U, 0xE1A07001U}},
-                {0x104236E4U, {0xE92D4038U, 0xE1A04000U, 0xEBFFFFC4U, 0xE3500000U}},
-                {0x10493C78U, {0xE92D4070U, 0xE24DDD09U, 0xE1A05001U, 0xE1A04000U}}};
-    for (unsigned i = 0; i < sizeof(code) / sizeof(*code); ++i)
-        for (unsigned j = 0; j < 4; ++j)
-            if (WORD(code[i].address + j * 4U) != code[i].words[j])
-                return false;
-    return WORD(0x10429230U) == TASK_POINTER;
+    if (!writer_api) writer_api = native_writer_platform();
+    return writer_api != NULL;
 }
 static bool spi_idle(void)
 {
@@ -353,9 +336,10 @@ unsigned private_writer_init(PrivateWriter *writer, void *stack, size_t bytes)
     error = PW_BAD_SPI;
     if (!span(device, 132U, diagnostic, PW_INIT_SPI_SPAN))
         goto finish;
-    if (WORD(device + 116U) || WORD(device + 64U) != device || WORD(device + 72U) != 0x10074FCCU ||
+    if (WORD(device + 116U) || WORD(device + 64U) != device || WORD(device + 72U) != writer_api->spi_control ||
         WORD(device + 100U) != 16U || WORD(device + 112U) != SPI_CALLBACK ||
-        WORD(device + 76U) != 0x10C534F4U || WORD(0x10C534F4U) != 0xB8000000U) {
+        WORD(device + 76U) != writer_api->spi_context ||
+        !native_writer_span(writer_api->spi_context, 4) || WORD(writer_api->spi_context) != 0xB8000000U) {
         diagnostic->stage = PW_INIT_SPI_DESCRIPTOR;
         goto finish;
     }
@@ -363,7 +347,7 @@ unsigned private_writer_init(PrivateWriter *writer, void *stack, size_t bytes)
         diagnostic->stage = PW_INIT_SPI_BUSY;
         goto finish;
     }
-    int *native_errno = ((int *(*)(void))0x1048D768U)();
+    int *native_errno = ((int *(*)(void))(uintptr_t)writer_api->function[WR_ERRNO])();
     diagnostic->errno_address = (uint32_t)(uintptr_t)native_errno;
     diagnostic->valid |= PW_INIT_HAVE_ERRNO_ADDRESS;
     if (!span((uint32_t)(uintptr_t)native_errno, 4U, diagnostic, PW_INIT_ERRNO_SPAN)) {

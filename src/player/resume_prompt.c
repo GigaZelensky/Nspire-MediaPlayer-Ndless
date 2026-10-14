@@ -170,7 +170,7 @@ int prompt_resume_position(
     prev_6 = isKeyPressed(KEY_NSPIRE_6);
     prev_esc = isKeyPressed(KEY_NSPIRE_ESC);
     prev_scratchpad = isKeyPressed(KEY_NSPIRE_SCRATCHPAD);
-    prev_on = on_key_pressed() ? true : false;
+    prev_on = nspire_on_key_pressed() ? true : false;
     prev_c = isKeyPressed(KEY_NSPIRE_C);
     prev_s = isKeyPressed(KEY_NSPIRE_S);
     pointer_hover_guard_reset(&hover_guard);
@@ -181,7 +181,7 @@ int prompt_resume_position(
         bool pointer_click = pointer_update(&pointer);
         if (!prompt_closing && clock_menu_poll(screen, fonts, movie, &pointer, false, path)) {
             prev_esc = isKeyPressed(KEY_NSPIRE_ESC); prev_enter = isKeyPressed(KEY_NSPIRE_ENTER);
-            prev_on = on_key_pressed();
+            prev_on = nspire_on_key_pressed();
             pressed_button = -1; enter_button_press_stage = 0;
             ui_transition_init(&button_press_anim, false);
             pointer_hover_guard_lock(&hover_guard, &pointer);
@@ -471,7 +471,7 @@ int prompt_resume_position(
 
         if (theme_edge) {
             ui_cycle_theme();
-            ui_save_theme_for_movie(path);
+            ui_queue_theme_save();
         }
         if (!prompt_closing && loading_snapshot && *loading_snapshot) {
             SDL_BlitSurface(*loading_snapshot, NULL, screen, NULL);

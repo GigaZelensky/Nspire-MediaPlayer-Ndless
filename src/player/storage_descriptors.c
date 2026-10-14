@@ -85,7 +85,7 @@ int __wrap__read(int fd, char *destination, int bytes)
         return error_result(EINVAL);
     if (!bytes)
         return 0;
-    uint32_t size = storage_read_stream_size(entry->stream);
+    uint64_t size = storage_read_stream_size(entry->stream);
     if (entry->position >= size)
         return 0;
     uint32_t count = (uint32_t)bytes;

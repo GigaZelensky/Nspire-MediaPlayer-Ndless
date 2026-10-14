@@ -111,7 +111,8 @@ int show_player_message(SDL_Surface *screen, const Fonts *fonts, PointerState *p
     MessageInput input = {message_keys(), 0, player_touchpad_button_down(), false};
     UiTransition hover = {0}, press = {0};
     ScreenshotPreviewState preview = {0};
-    bool previous_on = on_key_pressed(), previous_scratch = isKeyPressed(KEY_NSPIRE_SCRATCHPAD);
+    bool previous_on = nspire_on_key_pressed(), previous_scratch = isKeyPressed(KEY_NSPIRE_SCRATCHPAD);
+    bool previous_s = isKeyPressed(KEY_NSPIRE_S);
     bool closing = false;
     int result = 0;
     uint32_t started = monotonic_clock_now_ms(), closed = 0;
@@ -123,9 +124,11 @@ int show_player_message(SDL_Surface *screen, const Fonts *fonts, PointerState *p
         bool pad_down = player_touchpad_button_down();
         unsigned keys = message_keys();
         uint32_t now = monotonic_clock_now_ms();
+        screenshot_preview_tick(&preview, now);
         bool was_off = g_display_power_state.off || g_display_power_state.off_fade_active;
         bool on = on_key_pressed_edge(&previous_on);
         bool scratch = key_pressed_edge(KEY_NSPIRE_SCRATCHPAD, &previous_scratch);
+        bool screenshot = key_pressed_edge(KEY_NSPIRE_S, &previous_s);
         night_mode_poll(now, false);
         clock_menu_sync_shortcut();
         if (pointer->moved || pointer->down || any_key_pressed()) {
@@ -204,7 +207,19 @@ int show_player_message(SDL_Surface *screen, const Fonts *fonts, PointerState *p
             end_faded_region_draw(screen, layer, &panel, &old_clip, mix);
         }
         if (pointer->visible) draw_cursor(screen, pointer->x, pointer->y);
+        if (screenshot && !closing && !was_off) {
+            /* Capture the dialog before drawing the save notice, using the
+             * existing async writer and protected-content rules. */
+            request_screenshot_in_directory(screen, directory, &preview);
+            if (preview.surface) {
+                SDL_FreeSurface(preview.surface);
+                preview.surface = NULL;
+            }
+        }
+        if (preview.label[0])
+            draw_centered_text_badge(screen, fonts, SCREEN_W / 2, SCREEN_H - 14, preview.label);
         present_screen(screen);
+        player_service_writes(NULL);
         if (closing && !mix) break;
         display_power_tick_idle(&g_display_power_state, screen, monotonic_clock_now_ms(), true, true);
         player_delay_ms(16);

@@ -42,11 +42,12 @@ uint32_t usb_controller_generation(void)
 {
     return generation;
 }
+unsigned usb_controller_max_read_bytes(void){return USB_READ_BYTES;}
 uint32_t usb_controller_sector_size(void)
 {
     return 512;
 }
-uint32_t usb_controller_last_sector(void)
+uint64_t usb_controller_last_sector(void)
 {
     return 131071;
 }
@@ -56,7 +57,7 @@ void usb_controller_set_error(const char *t, int e)
     (void)t;
     (void)e;
 }
-bool usb_controller_begin_read(UsbCommand *r, uint32_t s, unsigned n, void *p)
+bool usb_controller_begin_read(UsbCommand *r, uint64_t s, unsigned n, void *p)
 {
     assert(irqmask == 0xc0);
     if (!online || parked || owner)
@@ -100,7 +101,7 @@ void usb_storage_unpark(void)
 {
     parked = false;
 }
-static bool entry(void *unused, const char *name, bool dir, uint32_t bytes)
+static bool entry(void *unused, const char *name, bool dir, uint64_t bytes)
 {
     (void)unused;
     assert(irqmask == 0);
@@ -117,7 +118,7 @@ static void progress_noop(void *unused)
 {
     (void)unused;
 }
-static bool cancel_directory(void *unused, const char *name, bool directory, uint32_t bytes)
+static bool cancel_directory(void *unused, const char *name, bool directory, uint64_t bytes)
 {
     (void)unused;
     (void)name;
@@ -145,6 +146,39 @@ int main(int argc, char **argv)
     char root[32], path[1024];
     strcpy(root, usb_storage_root());
     assert(usb_directory_list(root, entry, NULL, &error) && nodes == 1);
+    /* Incremental directory counts share the worker without blocking a frame. */
+    UsbDirectory *directory = usb_directory_open(root, &error);
+    assert(directory && !error);
+    const char *name = NULL;
+    bool folder = false;
+    unsigned found = 0, steps = 0;
+    int step;
+    do {
+        step = usb_directory_next(directory, &name, &folder, &error);
+        assert(step >= 0 && !error && ++steps < 100000 && irqmask == 0);
+        if (step == 1) {
+            assert(folder && !strcmp(name, "Rick and Morty"));
+            ++found;
+        }
+    } while (step != 2);
+    assert(found == 1);
+    usb_directory_close(directory);
+    /* Closing during an outstanding disk operation must drain its DMA owner. */
+    directory = usb_directory_open(root, &error);
+    steps = 0;
+    while (!owner) {
+        assert(usb_directory_next(directory, &name, &folder, &error) >= 0);
+        assert(++steps < 100000);
+    }
+    usb_directory_close(directory);
+    assert(!owner && usb_fs_idle());
+    /* A replacement drive cannot reuse a stale directory cursor. */
+    directory = usb_directory_open(root, &error);
+    ++generation;
+    assert(usb_directory_next(directory, &name, &folder, &error) == -1 && error == ENODEV);
+    usb_directory_close(directory);
+    usb_volume_unmount();
+    assert(usb_volume_mount(&error));
     usb_fs_set_progress(progress_noop, NULL);
     assert(!usb_directory_list(root, cancel_directory, NULL, &error) && error == ECANCELED);
     usb_fs_set_progress(NULL, NULL);
@@ -182,6 +216,31 @@ int main(int argc, char **argv)
     }
     assert(!usb_read_error(r));
     check(buffer, 777, sizeof(buffer));
+    /* Cancel a seek's sector-cache fill after DMA has started, then return
+     * to the previously cached sector. No error may leave new bytes tagged
+     * with the old sector number in the FIL object. */
+    assert(usb_file_read_at(f, 1, buffer, 1, &error) == 1);
+    check(buffer, 1, 1);
+    assert(usb_read_begin(r, 9989, buffer, 1));
+    while (!owner) assert(usb_read_step(r) == 0);
+    usb_read_cancel(r);
+    assert(!owner && usb_read_error(r) == ECANCELED);
+    assert(usb_file_read_at(f, 1, buffer, 1, &error) == 1);
+    check(buffer, 1, 1);
+    /* Cancel at different worker yields across seek and data-read stages. */
+    for (unsigned stop = 0; stop < 24; ++stop) {
+        assert(usb_file_read_at(f, 1, buffer, 64, &error) == 64);
+        check(buffer, 1, 64);
+        assert(usb_read_begin(r, 9989, buffer, sizeof(buffer)));
+        int completed = 0;
+        for (unsigned step = 0; step < stop && !completed; ++step)
+            completed = usb_read_step(r);
+        assert(completed >= 0);
+        usb_read_cancel(r);
+        assert(!owner && (usb_read_error(r) == 0 || usb_read_error(r) == ECANCELED));
+        assert(usb_file_read_at(f, 1, buffer, 64, &error) == 64);
+        check(buffer, 1, 64);
+    }
     /* Background completion followed by another handle must keep its result. */
     assert(usb_read_begin(r, 900, buffer, sizeof(buffer)));
     UsbFile *g = usb_file_open(path, &error);

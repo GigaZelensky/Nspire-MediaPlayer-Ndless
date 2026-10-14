@@ -27,6 +27,13 @@
 #define SRAM_SECTION_TYPE 0x2U
 #define SRAM_SECTION_BIT4 (1U << 4)
 
+#ifndef NDVIDEO_CX_SRAM_SURVEY
+#define NDVIDEO_CX_SRAM_SURVEY 0
+#endif
+#ifndef NDVIDEO_CX_SRAM_EXPERIMENTAL
+#define NDVIDEO_CX_SRAM_EXPERIMENTAL 0
+#endif
+
 static uint32_t g_sram_original_ttbr0;
 static uint32_t *g_sram_ttb = NULL;
 static void *g_sram_clone = NULL;
@@ -43,6 +50,21 @@ static bool g_sram_native_mapping = false;
 static uint32_t g_sram_table_offset;
 static uint32_t g_sram_saved_zero, g_sram_saved_alias, g_sram_saved_pool;
 static char g_sram_status_message[96] = "not initialized";
+static struct {
+    const char *stage;
+    uint32_t checks, table, control, domain, self, descriptor;
+    uint32_t address, actual, expected;
+} g_cx_layout = {.stage = "not requested"};
+
+static bool sram_cx_reject(const char *stage, uint32_t address, uint32_t actual,
+                           uint32_t expected)
+{
+    g_cx_layout.stage = stage;
+    g_cx_layout.address = address;
+    g_cx_layout.actual = actual;
+    g_cx_layout.expected = expected;
+    return false;
+}
 
 static void sram_set_status_message(const char *message)
 {
@@ -114,22 +136,22 @@ static uint32_t sram_l1_index(uintptr_t address)
 
 static size_t sram_hardware_pool_size(void)
 {
-    return is_cx2 ? SRAM_CX2_POOL_SIZE : SRAM_CX_POOL_SIZE;
+    return nspire_is_cx2() ? SRAM_CX2_POOL_SIZE : SRAM_CX_POOL_SIZE;
 }
 
 static size_t sram_hardware_size(void)
 {
-    return is_cx2 ? SRAM_CX2_HARDWARE_SIZE : SRAM_CX_HARDWARE_SIZE;
+    return nspire_is_cx2() ? SRAM_CX2_HARDWARE_SIZE : SRAM_CX_HARDWARE_SIZE;
 }
 
 static size_t sram_hardware_pool_offset(void)
 {
-    return is_cx2 ? SRAM_CX2_POOL_OFFSET : SRAM_CX_POOL_OFFSET;
+    return nspire_is_cx2() ? SRAM_CX2_POOL_OFFSET : SRAM_CX_POOL_OFFSET;
 }
 
 static const char *sram_enabled_message(void)
 {
-    return is_cx2 ? "enabled cx2 high 128K" : "enabled cx high 16K";
+    return nspire_is_cx2() ? "enabled cx2 high 128K" : "enabled cx high 16K";
 }
 
 static void *sram_alloc_aligned(size_t size, size_t alignment, void **raw_allocation)
@@ -199,30 +221,48 @@ static bool sram_cx_layout(uint32_t table)
     uint32_t control, domain;
     __asm__ volatile("mrc p15,0,%0,c1,c0,0" : "=r"(control));
     __asm__ volatile("mrc p15,0,%0,c3,c0,0" : "=r"(domain));
-    if (!(control & 1U) || ((domain & 3U) != 1U && (domain & 3U) != 3U) || table < 0x10000000U ||
-        table > 0x13ffc000U)
-        return false;
+    ++g_cx_layout.checks;
+    g_cx_layout.table = table;
+    g_cx_layout.control = control;
+    g_cx_layout.domain = domain;
+    g_cx_layout.self = g_cx_layout.descriptor = 0;
+    g_cx_layout.address = g_cx_layout.actual = g_cx_layout.expected = 0;
+    if (!(control & 1U)) return sram_cx_reject("mmu", 0, control, 1);
+    if ((domain & 3U) != 1U && (domain & 3U) != 3U)
+        return sram_cx_reject("domain", 0, domain, 1);
+    if (table < 0x10000000U || table > 0x13ffc000U)
+        return sram_cx_reject("ttbr_range", 0, table, 0);
     uint32_t self = sram_read_word(table + (table >> 20) * 4U, NULL);
+    g_cx_layout.self = self;
     if ((self & 0x1e3U) != 2U || !(self & 0xc00U) || (self & 0xfff00000U) != (table & 0xfff00000U))
-        return false;
+        return sram_cx_reject("ttbr_self", table + (table >> 20) * 4U, self,
+                              (table & 0xfff00000U) | 2U);
     /* Preserve the established native write-through attributes; no synonyms
      * or new page-table entries are introduced. */
-    if (sram_read_word(table + 0xa40U * 4U, NULL) != 0xa4000c1aU ||
-        !sram_ram_span(0x10000000U, 0x2acU, table))
-        return false;
+    g_cx_layout.descriptor = sram_read_word(table + 0xa40U * 4U, NULL);
+    if (g_cx_layout.descriptor != 0xa4000c1aU)
+        return sram_cx_reject("sram_descriptor", table + 0xa40U * 4U,
+                              g_cx_layout.descriptor, 0xa4000c1aU);
+    if (!sram_ram_span(0x10000000U, 0x2acU, table))
+        return sram_cx_reject("startup_span", 0x10000000U, 0, 0x2acU);
     uint32_t reset = sram_read_word(0x10000020U, NULL);
-    if (reset < 0x10000100U || reset > 0x11fff000U || (reset & 3U) ||
-        !sram_ram_span(reset - 0x98U, 0xb4U, table))
-        return false;
+    if (reset < 0x10000100U || reset > 0x11fff000U || (reset & 3U))
+        return sram_cx_reject("reset_vector", 0x10000020U, reset, 0);
+    if (!sram_ram_span(reset - 0x98U, 0xb4U, table))
+        return sram_cx_reject("reset_span", reset - 0x98U, 0, 0xb4U);
     static const uint32_t reset_code[] = {0xee110f10U, 0xe10f0000U, 0xe3c0001fU, 0xe3800013U,
                                           0xe38000c0U, 0xe12ff000U, 0xe51fd0b8U};
     static const uint32_t stack_offsets[] = {0x98U, 0x94U, 0x84U, 0x80U, 0x7cU, 0x78U, 0x74U};
     static const uint32_t stack_values[] = {0xa4009f00U, 0xa400a304U, 0xa400a80cU, 0xa400a910U,
                                             0xa400aa14U, 0xa400ab18U, 0xa400a308U};
-    for (unsigned i = 0; i < 7U; ++i)
-        if (sram_read_word(reset + i * 4U, NULL) != reset_code[i] ||
-            sram_read_word(reset - stack_offsets[i], NULL) != stack_values[i])
-            return false;
+    for (unsigned i = 0; i < 7U; ++i) {
+        uint32_t word = sram_read_word(reset + i * 4U, NULL);
+        if (word != reset_code[i])
+            return sram_cx_reject("reset_code", reset + i * 4U, word, reset_code[i]);
+        word = sram_read_word(reset - stack_offsets[i], NULL);
+        if (word != stack_values[i])
+            return sram_cx_reject("stack_literal", reset - stack_offsets[i], word, stack_values[i]);
+    }
     /* Two native SRAM code-copy extents, including their actual PC-relative
      * literal loads and size subtraction. Branch destinations may relocate. */
     static const uint32_t startup_code[] = {
@@ -233,22 +273,120 @@ static bool sram_cx_layout(uint32_t table)
         if (startup_code[i] == 0xeb000000U)
             word &= 0xff000000U;
         if (word != startup_code[i])
-            return false;
+            return sram_cx_reject("startup_code", 0x10000050U + i * 4U, word, startup_code[i]);
     }
     static const uint32_t extents[] = {0xa4009b00U, 0xa4009700U, 0xa400ab1cU, 0xa400ae5cU};
-    for (unsigned i = 0; i < 4U; ++i)
-        if (sram_read_word(0x10000298U + i * 4U, NULL) != extents[i])
-            return false;
+    for (unsigned i = 0; i < 4U; ++i) {
+        uint32_t word = sram_read_word(0x10000298U + i * 4U, NULL);
+        if (word != extents[i])
+            return sram_cx_reject("copy_extent", 0x10000298U + i * 4U, word, extents[i]);
+    }
     static const unsigned modes[] = {0x1fU, 0x11U, 0x12U, 0x13U, 0x17U, 0x1bU};
     for (unsigned i = 0; i < 6U; ++i) {
         uint32_t sp = sram_banked_sp(modes[i]);
         if ((sp >= 0xa401c000U && sp <= 0xa4020000U) || (sp >= 0x1c000U && sp <= 0x20000U))
-            return false;
+            return sram_cx_reject("active_stack", modes[i], sp, 0);
     }
-    for (uint32_t at = 0xa401c000U; at < 0xa4020000U; at += 4U)
-        if (sram_read_word(at, NULL))
-            return false;
+    for (uint32_t at = 0xa401c000U; at < 0xa4020000U; at += 4U) {
+        uint32_t word = sram_read_word(at, NULL);
+        if (word) return sram_cx_reject("pool_occupied", at, word, 0);
+    }
+    g_cx_layout.stage = "validated";
     return true;
+}
+
+#if NDVIDEO_CX_SRAM_SURVEY
+/* Diagnostic snapshots stay in owned DRAM. No candidate pool is borrowed in
+ * this build, and the live SRAM mapping/cache attributes are never changed. */
+typedef struct {
+    const char *phase;
+    bool valid;
+    uint32_t table, control, domain, stacks[6];
+    uint32_t words[SRAM_CX_HARDWARE_SIZE / 4U];
+} SramSurveySnapshot;
+static SramSurveySnapshot g_sram_survey[3];
+static unsigned g_sram_survey_count;
+
+static bool sram_survey_mapping(uint32_t table, uint32_t control, uint32_t domain)
+{
+    if (!(control & 1U) || ((domain & 3U) != 1U && (domain & 3U) != 3U) ||
+        table < 0x10000000U || table > 0x13ffc000U)
+        return false;
+    uint32_t self = sram_read_word(table + (table >> 20) * 4U, NULL);
+    return (self & 0x1e3U) == 2U && (self & 0xc00U) &&
+        (self & 0xfff00000U) == (table & 0xfff00000U) &&
+        sram_read_word(table + 0xa40U * 4U, NULL) == 0xa4000c1aU;
+}
+
+static void sram_survey_debug(FILE *file)
+{
+    for (unsigned n = 0; n < g_sram_survey_count; ++n) {
+        const SramSurveySnapshot *snapshot = &g_sram_survey[n];
+        fprintf(file, "sram_survey_snapshot index=%u phase=%s valid=%u ttbr=%08lx "
+            "control=%08lx domain=%08lx\n", n, snapshot->phase, snapshot->valid ? 1U : 0U,
+            (unsigned long)snapshot->table, (unsigned long)snapshot->control,
+            (unsigned long)snapshot->domain);
+        if (!snapshot->valid) continue;
+        fprintf(file, "sram_survey_stacks index=%u sys=%08lx fiq=%08lx irq=%08lx "
+            "svc=%08lx abort=%08lx undef=%08lx\n", n,
+            (unsigned long)snapshot->stacks[0], (unsigned long)snapshot->stacks[1],
+            (unsigned long)snapshot->stacks[2], (unsigned long)snapshot->stacks[3],
+            (unsigned long)snapshot->stacks[4], (unsigned long)snapshot->stacks[5]);
+        for (unsigned offset = 0; offset < SRAM_CX_HARDWARE_SIZE; offset += 128U) {
+            static const char hex[] = "0123456789abcdef";
+            char data[257];
+            unsigned position = 0;
+            for (unsigned at = offset / 4U; at < (offset + 128U) / 4U; ++at) {
+                uint32_t word = snapshot->words[at];
+                for (unsigned byte = 0; byte < 4U; ++byte) {
+                    unsigned value = (word >> (byte * 8U)) & 0xffU;
+                    data[position++] = hex[value >> 4];
+                    data[position++] = hex[value & 15U];
+                }
+            }
+            data[position] = '\0';
+            fprintf(file, "sram_survey_hex index=%u offset=%05x data=%s\n", n, offset, data);
+        }
+    }
+}
+#endif
+
+void sram_survey_checkpoint(const char *phase)
+{
+#if NDVIDEO_CX_SRAM_SURVEY
+    if (!phase || !nspire_asic_is_cx(nspire_hardware_id()) || g_sram_survey_count >= 3U)
+        return;
+    unsigned saved = sram_critical_enter();
+    SramSurveySnapshot *snapshot = &g_sram_survey[g_sram_survey_count++];
+    snapshot->phase = phase;
+    snapshot->table = sram_get_ttbr0() & 0xffffc000U;
+    __asm__ volatile("mrc p15,0,%0,c1,c0,0" : "=r"(snapshot->control));
+    __asm__ volatile("mrc p15,0,%0,c3,c0,0" : "=r"(snapshot->domain));
+    snapshot->valid = sram_survey_mapping(snapshot->table, snapshot->control, snapshot->domain);
+    if (snapshot->valid) {
+        static const unsigned modes[] = {0x1fU, 0x11U, 0x12U, 0x13U, 0x17U, 0x1bU};
+        for (unsigned n = 0; n < 6U; ++n) snapshot->stacks[n] = sram_banked_sp(modes[n]);
+        for (unsigned n = 0; n < SRAM_CX_HARDWARE_SIZE / 4U; ++n)
+            snapshot->words[n] = sram_read_word(SRAM_PHYSICAL_ADDRESS + n * 4U, NULL);
+    }
+    sram_critical_leave(saved);
+#else
+    (void)phase;
+#endif
+}
+
+void sram_debug(FILE *file)
+{
+    if (file) fprintf(file, "sram_cx_layout checks=%lu stage=%s ttbr=%08lx control=%08lx "
+        "domain=%08lx self=%08lx descriptor=%08lx address=%08lx actual=%08lx expected=%08lx\n",
+        (unsigned long)g_cx_layout.checks, g_cx_layout.stage,
+        (unsigned long)g_cx_layout.table, (unsigned long)g_cx_layout.control,
+        (unsigned long)g_cx_layout.domain, (unsigned long)g_cx_layout.self,
+        (unsigned long)g_cx_layout.descriptor, (unsigned long)g_cx_layout.address,
+        (unsigned long)g_cx_layout.actual, (unsigned long)g_cx_layout.expected);
+#if NDVIDEO_CX_SRAM_SURVEY
+    if (file) sram_survey_debug(file);
+#endif
 }
 static bool sram_init_cx(void)
 {
@@ -262,7 +400,15 @@ static bool sram_init_cx(void)
     }
     void *shadow = sram_alloc_aligned(SRAM_CX_POOL_SIZE, 32U, &g_sram_clone_allocation);
     sram_critical_enter(); /* SDK allocation can clear the FIQ mask. */
-    if (!shadow || (sram_get_ttbr0() & 0xffffc000U) != table || !sram_cx_layout(table)) {
+    uint32_t current_table = sram_get_ttbr0() & 0xffffc000U;
+    bool prepared;
+    if (!shadow)
+        prepared = sram_cx_reject("shadow_allocation", 0, 0, SRAM_CX_POOL_SIZE);
+    else if (current_table != table)
+        prepared = sram_cx_reject("ttbr_changed", 0, current_table, table);
+    else
+        prepared = sram_cx_layout(table);
+    if (!prepared) {
         sram_critical_leave(saved);
         free(g_sram_clone_allocation);
         g_sram_clone_allocation = NULL;
@@ -301,13 +447,13 @@ static bool sram_init_impl(void)
         sram_set_status_message(sram_enabled_message());
         return true;
     }
-    if (!is_cx2)
+    if (!nspire_is_cx2())
         return sram_init_cx();
 
     hardware_size = sram_hardware_size();
     pool_capacity = sram_hardware_pool_size();
     pool_offset = sram_hardware_pool_offset();
-    cx2 = is_cx2;
+    cx2 = nspire_is_cx2();
     clone_size = cx2 ? SRAM_SECTION_SIZE : pool_capacity;
     g_sram_original_ttbr0 = sram_get_ttbr0();
     old_ttbr0_flags = g_sram_original_ttbr0 & ~0xFFFFC000U;
@@ -399,6 +545,24 @@ fail:
 
 bool sram_init(void)
 {
+    sram_survey_checkpoint("before-decoder");
+#if NDVIDEO_CX_SRAM_SURVEY
+    if (nspire_asic_is_cx(nspire_hardware_id())) {
+        unsigned saved = sram_critical_enter();
+        (void)sram_cx_layout(sram_get_ttbr0() & 0xffffc000U);
+        sram_critical_leave(saved);
+        sram_set_status_message("cx read-only SRAM survey");
+        return false;
+    }
+#endif
+    /* No original-CX pool has verified OS ownership yet. Keep all decoder
+     * tables in ordinary RAM in production, even if a layout looks familiar. */
+#if !NDVIDEO_CX_SRAM_EXPERIMENTAL
+    if (nspire_asic_is_cx(nspire_hardware_id())) {
+        sram_set_status_message("disabled on CX; using RAM");
+        return false;
+    }
+#endif
     unsigned saved = sram_critical_enter();
     sram_critical_leave(saved);
     bool result = sram_init_impl();

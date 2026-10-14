@@ -82,7 +82,7 @@ struct VideoLookahead {
 
 static inline bool ahead_has_packed(const struct VideoLookahead *ahead)
 {
-    return (NDVIDEO_WITH_H264 || NDVIDEO_WITH_HEVC || NDVIDEO_WITH_AV1) && ahead->packed;
+    return (NDVIDEO_WITH_H264 || NDVIDEO_WITH_MPEG4 || NDVIDEO_WITH_HEVC || NDVIDEO_WITH_AV1) && ahead->packed;
 }
 
 static inline bool ahead_output_packed(const struct VideoLookahead *ahead)
@@ -1005,6 +1005,11 @@ static int ahead_produce(Movie *movie, uint64_t deadline, bool foreground, uint3
          * and its own guard, instead of learning that setup cost per block.
          * Chunk starts keep a separate estimate from ordinary frame starts. */
         if (!foreground && planar_start) {
+            /* Xvid's indivisible unit is a whole frame. Calibrate it through
+             * ordinary foreground preparation before spending background slack;
+             * the incremental decoders' initial block estimates do not apply. */
+            if (movie->codec == MOVIE_CODEC_MPEG4 && !ahead->have_start_sample[start_kind])
+                return 0;
             if (!ahead_time_fits(deadline, ahead->start_guard[start_kind]))
                 return 0;
             macroblock_budget = video_decoder_min_units(movie);
@@ -1036,8 +1041,9 @@ static int ahead_produce(Movie *movie, uint64_t deadline, bool foreground, uint3
         uint32_t captured_before_mbs = decoded_mbs;
         uint32_t captured_after_mbs = 0U;
         if (capture_planar_pump) {
-            submission_count = movie->codec == MOVIE_CODEC_AV1 ?
-                &movie->av1.submitted_frames : &movie->hevc.submitted_frames;
+            submission_count = movie->codec == MOVIE_CODEC_AV1 ? &movie->av1.submitted_frames :
+                movie->codec == MOVIE_CODEC_MPEG4 ? &movie->mpeg4.submitted_frames :
+                &movie->hevc.submitted_frames;
             submissions_before = *submission_count;
             /* A seek may resume an already submitted picture with consumed=0. */
             if (!ahead->stats.partial)
@@ -1048,7 +1054,7 @@ static int ahead_produce(Movie *movie, uint64_t deadline, bool foreground, uint3
         started = monotonic_clock_now_ticks();
         ahead->failure_stage = "decode";
         uint64_t pump_deadline = 0U;
-        if (!foreground && movie_uses_planar_decoder(movie)) {
+        if (!foreground && movie_uses_planar_decoder(movie) && movie->codec != MOVIE_CODEC_MPEG4) {
             /* Keep a costly CTU/SB batch from consuming the next presentation
              * slot. Deadlines are checked between whole coding units; a unit
              * already in progress and picture finalization must finish. */
@@ -1073,14 +1079,18 @@ static int ahead_produce(Movie *movie, uint64_t deadline, bool foreground, uint3
         if (elapsed > ahead->stats.max_pump_ticks)
             ahead->stats.max_pump_ticks = elapsed;
         if (!foreground) {
-            if (macroblock_budget == 32U)
-                ++ahead->stats.background_slices_32;
-            else if (macroblock_budget == 16U)
-                ++ahead->stats.background_slices_16;
-            else if (macroblock_budget == 8U)
-                ++ahead->stats.background_slices_8;
-            else
-                ++ahead->stats.background_slices_4;
+            /* Whole-frame work is counted in decode_slices, rather than
+             * being reported as a four-macroblock incremental batch. */
+            if (movie->codec != MOVIE_CODEC_MPEG4) {
+                if (macroblock_budget == 32U)
+                    ++ahead->stats.background_slices_32;
+                else if (macroblock_budget == 16U)
+                    ++ahead->stats.background_slices_16;
+                else if (macroblock_budget == 8U)
+                    ++ahead->stats.background_slices_8;
+                else
+                    ++ahead->stats.background_slices_4;
+            }
             if (elapsed > ahead->stats.max_background_pump_ticks)
                 ahead->stats.max_background_pump_ticks = elapsed;
         }

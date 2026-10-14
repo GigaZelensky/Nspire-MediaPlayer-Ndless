@@ -506,7 +506,7 @@ void playback_capture_export(FILE *file, const Movie *movie)
     fprintf(
         file,
         "device hwtype=%u cx2=%u color=1 touchpad=%u lcd=%d clock_hw=%u tick_hz=%lu timer_control_saved=%08x timer_speed_saved=%08x\n",
-        hwtype(), is_cx2 ? 1U : 0U, is_touchpad ? 1U : 0U, (int)lcd_type(),
+        hwtype(), nspire_is_cx2() ? 1U : 0U, is_touchpad ? 1U : 0U, (int)lcd_type(),
         g_clock.using_hw_timer ? 1U : 0U, (unsigned long)g_capture->tick_hz,
         g_clock.original_control, g_clock.original_speed);
     if (movie_uses_decode_ahead(movie))

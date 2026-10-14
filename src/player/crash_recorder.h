@@ -10,8 +10,8 @@
 #define CRASH_RECORDER_QUEUE_SLOTS 4U
 #define CRASH_RECORDER_RECORD_BYTES 320U
 #define CRASH_RECORDER_RECORDS_PER_FILE 256U
-#define CRASH_RECORDER_FILE_A "ndvideo-crash-a.bin"
-#define CRASH_RECORDER_FILE_B "ndvideo-crash-b.bin"
+#define CRASH_RECORDER_FILE_A "ndvideo-crash-a.bin.tns"
+#define CRASH_RECORDER_FILE_B "ndvideo-crash-b.bin.tns"
 
 /* The foreground adapter owns the meaning of these 64 words. The recorder
  * copies all values before submit returns and never retains player pointers.

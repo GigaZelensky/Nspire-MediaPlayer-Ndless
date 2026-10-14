@@ -3,5 +3,10 @@
 #include "player_internal.h"
 bool usb_browser_connect(SDL_Surface *, const Fonts *, PointerState *,
                          void (*)(SDL_Surface *, void *, uint32_t), void *);
+void usb_browser_note_disconnect(void);
+bool usb_browser_auto_pending(uint32_t now);
+void usb_browser_idle_discovery(SDL_Surface *screen, uint32_t now);
+void usb_browser_debug(FILE *file);
+void usb_browser_save_exit_audit(void);
 void usb_browser_shutdown(SDL_Surface *, const Fonts *);
 #endif

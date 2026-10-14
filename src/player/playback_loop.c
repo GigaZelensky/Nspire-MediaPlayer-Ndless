@@ -1,6 +1,12 @@
 #include "player_internal.h"
 #include "playback_render_gate.h"
 #include "playback_pacing.h"
+#include "native_writer_platform.h"
+#include "raw_player_io.h"
+#include "../storage/usb/usb_storage.h"
+#include "../storage/usb/usb_controller.h"
+#include <errno.h>
+#include "../sram.h"
 #if NDVIDEO_CODEC_MODULES
 #include "codecs/codec_module_api.h"
 #include "codecs/modules/h264_module_api.h"
@@ -13,6 +19,15 @@ static bool codec_loading_progress(void *userdata, size_t done, size_t total)
     return true;
 }
 #endif
+
+static void writer_loading_tick(void *progress)
+{
+    loading_progress_tick(progress, false);
+}
+static void prepare_recording_writer(void *progress)
+{
+    (void)native_writer_platform_prepare(writer_loading_tick, progress);
+}
 
 /* Cooperative file writes progress independently of diagnostic recording.
  * Keep native file work away from a running frame's commit deadline. */
@@ -392,6 +407,15 @@ int play_movie(
     loading_progress_tick(&loading_progress, false);
     flush_queued_theme_save("loading");
     loading_progress_tick(&loading_progress, false);
+    /* Resolve portable writer bindings while Loading is still visible, before
+     * any playback deadline. D only allocates/starts its journal afterward.
+     * Preparation itself is read-only and leaves recording disabled. */
+    static bool recording_writer_prepared;
+    if (!recording_writer_prepared) {
+        raw_player_before_native();
+        recording_writer_prepared = sram_with_native_mapping(prepare_recording_writer, &loading_progress);
+        raw_player_native_released();
+    }
 #if NDVIDEO_CODEC_MODULES
     codec_modules_set_progress(codec_loading_progress, &loading_progress);
 #endif
@@ -546,7 +570,7 @@ int play_movie(
     prev_c = isKeyPressed(KEY_NSPIRE_C);
     prev_esc = isKeyPressed(KEY_NSPIRE_ESC);
     prev_scratchpad = isKeyPressed(KEY_NSPIRE_SCRATCHPAD);
-    prev_on = on_key_pressed() ? true : false;
+    prev_on = nspire_on_key_pressed() ? true : false;
     debug_set_metrics_collection(debug_is_runtime_logging_enabled());
     if (debug_is_runtime_logging_enabled() && !playback_capture_start(&movie, path)) {
         debug_set_runtime_logging(false);
@@ -639,7 +663,7 @@ int play_movie(
         bool touchpad_click = pointer_update(&pointer);
         if (clock_menu_poll(screen, fonts, &movie, &pointer, false, path)) {
             prev_esc = isKeyPressed(KEY_NSPIRE_ESC); prev_enter = isKeyPressed(KEY_NSPIRE_ENTER);
-            prev_on = on_key_pressed();
+            prev_on = nspire_on_key_pressed();
             playback_pointer_press_active = playback_pause_key_press_active = false;
             playback_press_target = PLAYBACK_PRESS_NONE;
             render_gate.valid = false;
@@ -855,7 +879,7 @@ int play_movie(
 
         if (!g_display_power_state.off && theme_edge) {
             ui_cycle_theme();
-            ui_save_theme_for_movie(path);
+            ui_queue_theme_save();
             snprintf(status_overlay_text, sizeof(status_overlay_text), "THEME %s", ui_theme_name(g_ui_theme_id));
             status_overlay_show(now_ms, true, &status_overlay_started_ms, &status_overlay_until);
             ui_visible_until = now_ms + POINTER_UI_TIMEOUT_MS;
@@ -1002,6 +1026,7 @@ int play_movie(
         }
 
         if (on_edge && !woke_from_idle_off) {
+            debug_tracef("screen off requested input=ON asic=%08lx", (unsigned long)nspire_hardware_id());
             bool was_paused = paused;
 
             brightness_animation_cancel(&brightness_animation);
@@ -2049,8 +2074,7 @@ int play_movie(
                 seek_preview_surface_animating(&seek_preview, render_now_ms) ||
                 pending_seek_ms ||
                 (seek_badge_ms && (seek_badge_hide_elapsed_ms != 0U ||
-                    (uint32_t)(render_now_ms - seek_badge_started_ms) < SEEK_BADGE_ANIM_MS)) ||
-                seek_bar_preview_decode_active(&seek_preview);
+                    (uint32_t)(render_now_ms - seek_badge_started_ms) < SEEK_BADGE_ANIM_MS));
             bool collect_render_metrics = debug_should_collect_metrics();
             uint32_t render_night_revision = night_mode_revision();
             bool render_pointer_changed = pointer_click || pointer_release_edge ||
@@ -2066,6 +2090,7 @@ int play_movie(
                 (render_buffer_width != last_render_buffer_width ||
                  render_decoded_width != last_render_decoded_width);
             bool render_input_changed = render_pointer_changed ||
+                (seek_preview.over_bar && seek_preview.surface_render_pending) ||
                 enter_edge || enter_release_edge || space_edge || tab_edge || cat_edge || esc_edge ||
                 divide_edge || exp_edge || tenx_edge || speed_down_edge || speed_up_edge ||
                 seek_left_edge || seek_right_edge || previous_video_edge || next_video_edge ||
@@ -2252,7 +2277,11 @@ int play_movie(
                         ((uint64_t)monotonic_clock_ticks_per_second() * 16U + 999U) / 1000U;
                     wait_until_ticks_playback(&movie, until, &pointer);
                 } else {
-                    player_delay_ms((paused_input_grace || playback_input_grace) ? 2 : 16);
+                    /* Preview decoding already yields after a bounded slice.
+                     * Sleeping a whole display interval after each slice
+                     * starves it, especially with HEVC/AV1's small units. */
+                    player_delay_ms((paused_input_grace || playback_input_grace) ? 2 :
+                        seek_bar_preview_decode_active(&seek_preview) ? 1 : 16);
                 }
                 if (playback_capture_active(&movie)) playback_capture_stage(&movie, CAPTURE_WAIT, capture_wait_started, monotonic_clock_now_ticks());
             }
@@ -2298,7 +2327,10 @@ int play_movie(
         }
     }
 
+    bool usb_disconnected = result == PLAY_MOVIE_RESULT_ERROR &&
+        usb_path(path) && usb_controller_error() == ENODEV;
     playback_capture_stop(&movie);
+    sram_survey_checkpoint("playback-exit");
     movie_async_stop(&movie);
     player_crash_trace_end(&movie, result == PLAY_MOVIE_RESULT_ERROR ? PLAYER_CRASH_ERROR : PLAYER_CRASH_EXIT);
     if (result != PLAY_MOVIE_RESULT_HOME_EXIT &&
@@ -2312,7 +2344,7 @@ int play_movie(
         result == PLAY_MOVIE_RESULT_APP_EXIT ||
         result == PLAY_MOVIE_RESULT_HOME_EXIT ||
         result == PLAY_MOVIE_RESULT_SCRATCHPAD_EXIT ||
-        result == PLAY_MOVIE_RESULT_SUSPEND_EXIT) {
+        result == PLAY_MOVIE_RESULT_SUSPEND_EXIT || usb_disconnected) {
         queue_history_save_from_movie(
             &g_pending_history_save,
             &g_picker_cache,
@@ -2328,6 +2360,10 @@ int play_movie(
             video_align_x,
             video_align_y
         );
+        /* History lives on the calculator, so an absent USB drive must not
+         * discard progress. Persist before returning to the picker. */
+        if (usb_disconnected)
+            flush_queued_history_save(&g_pending_history_save, "usb-disconnected");
     }
     if (debug_is_runtime_logging_enabled() || playback_capture_available(&movie)) {
         char log_path[MAX_PATH_LEN];

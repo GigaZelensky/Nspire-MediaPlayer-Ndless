@@ -50,6 +50,7 @@ bool codec_modules_shutdown(void);
 /* Empty when no loader error is pending. Successful shutdown/configure clears
  * this error and the progress callback/userdata; install progress afterwards. */
 const char *codec_module_error(void);
+const char *codec_module_integrity_details(void);
 size_t codec_modules_loaded_bytes(void);
 unsigned codec_module_references(uint32_t codec_id);
 const CodecHostApi *codec_modules_default_host_api(void);

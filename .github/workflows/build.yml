@@ -52,6 +52,7 @@ jobs:
             build-essential \
             bison \
             flex \
+            ffmpeg \
             libboost-program-options-dev \
             libgmp-dev \
             libmpc-dev \
@@ -61,6 +62,35 @@ jobs:
             texinfo \
             xz-utils \
             zlib1g-dev
+
+      - name: Check USB transport and filesystems
+        run: python3 tools/check_usb_storage.py
+
+      - name: Check USB driver lifecycle
+        run: python3 tools/check_usb_lifecycle.py
+
+      - name: Check USB native handoff and timer recovery
+        run: |
+          python3 tools/check_usb_runtime.py
+          python3 tools/check_timer_settle.py
+
+      - name: Check quiet defaults and original-CX RAM fallback
+        run: python3 tools/check_release_defaults.py
+
+      - name: Check NAND DMA ownership and recovery
+        run: python3 tools/check_nand_dma.py
+
+      - name: Check MPEG-4 shared lookahead and output
+        run: python3 tools/check_mpeg4_lookahead.py
+
+      - name: Check CX SRAM layout guards and diagnostics
+        run: python3 tools/check_sram_layout.py
+
+      - name: Check read-only CX SRAM survey
+        run: python3 tools/check_sram_survey.py
+
+      - name: Check prefetch scheduling and overloaded USB reads
+        run: python3 tools/check_prefetch_schedule.py
 
       - name: Cache Ndless ARM toolchain
         uses: actions/cache@v5
@@ -94,7 +124,10 @@ jobs:
       - name: Install Python packaging dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyelftools
+          python -m pip install pyelftools cryptography imageio-ffmpeg
+
+      - name: Check large files and encrypted format compatibility
+        run: python tools/check_large_files.py
 
       - name: Build all codec combinations
         run: make -j2 release SDKROOT=./external/Ndless-official/ndless-sdk

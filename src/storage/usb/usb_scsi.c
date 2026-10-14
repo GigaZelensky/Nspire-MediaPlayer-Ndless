@@ -28,7 +28,7 @@ bool usb_scsi_begin(UsbScsi *s, const uint8_t *command, unsigned command_bytes, 
                     unsigned bytes, bool input)
 {
     if (!s || usb_scsi_busy(s) || !command || !command_bytes || command_bytes > 16 ||
-        bytes > 4096 || (bytes && !data) || !usb_transport_quiescent(s->transport))
+        bytes > USB_READ_BYTES || (bytes && !data) || !usb_transport_quiescent(s->transport))
         return false;
     uint8_t cbw[31] = {0};
     put32(cbw, 0x43425355U);

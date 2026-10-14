@@ -749,6 +749,7 @@ image_output(IMAGE * image,
 			width, height, (csp & XVID_CSP_VFLIP));
 		return 0;
 
+#endif
 	case XVID_CSP_INTERNAL :
 		dst[0] = image->y;
 		dst[1] = image->u;
@@ -758,7 +759,6 @@ image_output(IMAGE * image,
 		dst_stride[2] = edged_width/2;
 		return 0;
 
-#endif
 	case XVID_CSP_NULL:
 	case XVID_CSP_SLICE:
 		return 0;

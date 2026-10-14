@@ -10,6 +10,9 @@ typedef struct Mpeg4ModuleApi {
     void (*destroy)(void *);
     bool (*decode)(void *, const uint8_t *, size_t, uint16_t *, int, int, bool, bool);
     const char *(*last_error)(void);
+    bool (*decode_picture)(void *, const uint8_t *, size_t, int, int, bool, VideoFrame *);
+    bool (*planar_supported)(void *);
+    bool (*blit_picture_rows)(const VideoFrame *, uint16_t *, size_t, size_t, size_t);
 } Mpeg4ModuleApi;
 
 /* Call after all module contexts have gone, before replacing the SRAM arena. */

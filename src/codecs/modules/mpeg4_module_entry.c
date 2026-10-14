@@ -53,7 +53,8 @@ static bool module_shutdown(void)
 
 static const Mpeg4ModuleApi api = {
     module_global_init, module_create, module_destroy,
-    mpeg4_xvid_decode_frame, mpeg4_xvid_last_error
+    mpeg4_xvid_decode_frame, mpeg4_xvid_last_error, mpeg4_xvid_decode_picture,
+    mpeg4_xvid_planar_supported, mpeg4_xvid_blit_picture_rows
 };
 
 int module_entry(const CodecHostApi *host, CodecModuleApi *out)

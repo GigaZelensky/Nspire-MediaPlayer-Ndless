@@ -61,7 +61,7 @@ endif
 
 # Keep aggressive unrolling/alignment on decode, pixel, and frame-timing paths.
 # Picker, resource setup, and history code benefit from a smaller instruction footprint.
-HOT_PLAYER_SRCS = src/player/video_lookahead.c src/player/video_decoder.c src/player/codec_streaming.c src/player/render_primitives.c \
+HOT_PLAYER_SRCS = src/player/video_lookahead.c src/player/video_decoder.c src/player/codec_streaming.c src/player/render_primitives.c src/player/sha_accel.c \
 	src/player/playback_ui.c src/player/playback_loop.c src/player/subtitles.c \
 	src/player/input_timing_memory.c src/player/night_mode.c \
 	src/player/movie_open_scan.c src/player/platform_debug.c

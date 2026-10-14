@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#define USB_READ_BYTES 16384U
 
 /* The hardware queue and bounce buffer are owned until the async schedule
  * has stopped. A pending step never spins waiting for the controller. */
@@ -49,11 +50,16 @@ typedef struct {
     UsbQtd *descriptor;
     uint32_t bounce_physical, queue_physical, descriptor_physical;
     uint32_t original_command, original_interrupts, original_list, original_pending;
-    uint32_t started, phase_started, phase_polls, total_polls;
+    uint32_t started, phase_started, phase_polls, total_polls, phase_last_tick;
+    uint32_t timeout_elapsed, timeout_polls;
+    UsbTransferPhase timeout_phase;
     uint32_t last_token, transfers, timeouts, errors;
     uint32_t tick_hz;
     unsigned bytes, actual;
+    unsigned max_bytes;
     uint8_t address, endpoint_in, endpoint_out, toggle_in, toggle_out;
+    uint16_t packet_in, packet_out;
+    bool high_speed;
     bool input, owns_schedule, poisoned, cancelled;
     UsbTransferPhase phase;
     UsbTransportError error;

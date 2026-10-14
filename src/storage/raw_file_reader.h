@@ -48,7 +48,8 @@ typedef struct {
     NandAddressJob address;
     NandPageReader nand;
     uint8_t state[FFX_MAP_STATE_BYTES], cache[3][FFX_MAP_REGION_BYTES];
-    uint8_t workspace[REL_CACHE_SLOTS * 2048], io[2112];
+    uint8_t workspace[REL_CACHE_SLOTS * 2048], io_storage[2112 + 31];
+    uint8_t *io; /* Runtime-aligned: malloc/Zehn need not provide 32-byte bases. */
     const RawFileOverlay *overlay;
     uint32_t overlay_count;
     const RawFileOverlay *metadata_overlay;

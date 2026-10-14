@@ -1,3 +1,4 @@
+#include "player_data.h"
 #include "player_internal.h"
 #include "storage_descriptors.h"
 #include "storage_read_stream.h"
@@ -5,6 +6,7 @@
 #include "movie_crypto_session.h"
 #include "media_browser.h"
 #include "usb_browser.h"
+#include "native_screen_power.h"
 #include "../storage/usb/usb_storage.h"
 #if NDVIDEO_CODEC_MODULES
 #include "codecs/codec_module_api.h"
@@ -31,7 +33,13 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    nspire_hardware_init();
+    sram_survey_checkpoint("app-entry");
     enable_relative_paths(argv);
+    player_data_configure(argv[0]);
+    /* Resolve the read-only power bindings before playback/diagnostics can
+     * request a transition. The On key must not perform a firmware scan. */
+    (void)native_screen_power_supported();
 #if NDVIDEO_CODEC_MODULES
     if (!codec_modules_configure(argv[0], codec_modules_default_host_api()) ||
         !codec_modules_set_expected_hashes(CODEC_MODULE_EXPECTED_HASHES, CODEC_MODULE_EXPECTED_MASK)) {
@@ -39,6 +47,7 @@ int main(int argc, char **argv)
         return 1;
     }
 #endif
+    monotonic_clock_capture_native_timer();
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         report_app_failure(argv[0], "startup-failure", "Failed to initialize SDL.");
         return 1;
@@ -79,7 +88,7 @@ int main(int argc, char **argv)
     directory[sizeof(directory) - 1] = '\0';
     strip_filename(directory);
     media_browser_configure(directory);
-    ui_load_theme_for_directory(directory);
+    ui_load_theme();
     /* Native startup may reject an early transition or change the clock after
      * it. Reconcile once here, with genuine SRAM and before app I/O begins. */
     if (!performance_clock_startup_complete()) {
@@ -226,6 +235,7 @@ int main(int argc, char **argv)
             report_app_failure(argv[0], "settings-save-failure", "Could not save the clock preference.");
     }
     monotonic_clock_shutdown();
+    usb_browser_save_exit_audit();
     show_pending_movie_error();
     /* Explicit Home/Scratchpad/standby navigation also belongs after cleanup. */
     if (return_home_after_exit) {

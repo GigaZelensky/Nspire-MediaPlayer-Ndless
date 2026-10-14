@@ -39,6 +39,11 @@ bool movie_async_needs_request(const Movie *movie)
     const MovieAsyncIo *state = movie ? movie->async_io : NULL;
     return state && player_reader_needs_request(state->raw);
 }
+bool movie_async_full_speed_usb(const Movie *movie)
+{
+    const MovieAsyncIo *state = movie ? movie->async_io : NULL;
+    return state && player_reader_full_speed_usb(state->raw);
+}
 bool movie_async_start(Movie *movie, const char *path)
 {
     if (!movie || movie->async_io || !g_clock.using_hw_timer || !path)

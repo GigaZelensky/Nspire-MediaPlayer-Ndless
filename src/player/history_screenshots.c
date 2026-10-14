@@ -1,3 +1,4 @@
+#include "player_data.h"
 #include "player_internal.h"
 #include "performance_clock.h"
 #include "media_browser.h"
@@ -16,29 +17,17 @@ void strip_filename(char *path)
     }
 }
 
+/* All calculator folders and USB libraries share the app-local history. */
 void history_path_for_directory(const char *directory, char *history_path, size_t history_path_size)
 {
-    directory = media_local_directory(directory);
-    if (!history_path || history_path_size == 0) {
-        return;
-    }
-    snprintf(history_path, history_path_size, "%s/%s", directory && directory[0] != '\0' ? directory : ".", HISTORY_FILE_NAME);
+    (void)directory;
+    player_data_path(HISTORY_FILE_NAME, history_path, history_path_size);
 }
 
 void history_path_for_movie(const char *movie_path, char *history_path, size_t history_path_size)
 {
-    char directory[MAX_PATH_LEN];
-
-    if (!history_path || history_path_size == 0) {
-        return;
-    }
-    if (movie_path && movie_path[0] != '\0') {
-        snprintf(directory, sizeof(directory), "%s", movie_path);
-        strip_filename(directory);
-    } else {
-        snprintf(directory, sizeof(directory), ".");
-    }
-    history_path_for_directory(directory, history_path, history_path_size);
+    (void)movie_path;
+    player_data_path(HISTORY_FILE_NAME, history_path, history_path_size);
 }
 
 void history_entry_init_defaults(HistoryEntry *entry)
@@ -347,6 +336,8 @@ bool save_history_store_to_path(const char *history_path, const HistoryStore *hi
     FILE *file;
     size_t index;
 
+    if (!player_data_prepare())
+        return false;
     file = fopen(history_path, "wb");
     if (!file) {
         return false;
@@ -446,58 +437,32 @@ bool history_save_clock_preference(const char *app_path, unsigned mhz, bool keep
     return ok;
 }
 
-void ui_load_theme_for_directory(const char *directory)
+void ui_load_theme(void)
 {
-    char history_path[MAX_PATH_LEN];
+    char path[MAX_PATH_LEN];
     HistoryStore history;
-
-    history_path_for_directory(directory, history_path, sizeof(history_path));
-    if (load_history_store_from_path(history_path, &history)) {
+    if (player_data_path(HISTORY_FILE_NAME, path, sizeof(path)) &&
+        load_history_store_from_path(path, &history)) {
         ui_set_theme(history.theme_id);
         free_history_store(&history);
     }
 }
 
-void ui_write_theme_for_directory(const char *directory)
+static bool ui_write_theme(void)
 {
-    char history_path[MAX_PATH_LEN];
+    char path[MAX_PATH_LEN];
     HistoryStore history;
-
-    history_path_for_directory(directory, history_path, sizeof(history_path));
-    history_store_init_defaults(&history);
+    if (!player_data_path(HISTORY_FILE_NAME, path, sizeof(path)) ||
+        !load_history_store_from_path(path, &history)) return false;
     history.theme_id = g_ui_theme_id;
-    if (load_history_store_from_path(history_path, &history)) {
-        history.theme_id = g_ui_theme_id;
-        save_history_store_to_path(history_path, &history);
-        free_history_store(&history);
-        return;
-    }
-    history.theme_id = g_ui_theme_id;
-    save_history_store_to_path(history_path, &history);
+    bool saved = save_history_store_to_path(path, &history);
+    free_history_store(&history);
+    return saved;
 }
 
-void ui_save_theme_for_directory(const char *directory)
+void ui_queue_theme_save(void)
 {
-    snprintf(
-        g_pending_theme_directory,
-        sizeof(g_pending_theme_directory),
-        "%s",
-        directory && directory[0] != '\0' ? directory : "."
-    );
     g_pending_theme_save = true;
-}
-
-void ui_save_theme_for_movie(const char *movie_path)
-{
-    char directory[MAX_PATH_LEN];
-
-    if (movie_path && movie_path[0] != '\0') {
-        snprintf(directory, sizeof(directory), "%s", movie_path);
-        strip_filename(directory);
-    } else {
-        snprintf(directory, sizeof(directory), ".");
-    }
-    ui_save_theme_for_directory(directory);
 }
 
 void flush_queued_theme_save(const char *reason)
@@ -510,15 +475,14 @@ void flush_queued_theme_save(const char *reason)
     }
 
     start_ms = monotonic_clock_now_ms();
-    ui_write_theme_for_directory(g_pending_theme_directory);
+    bool saved = ui_write_theme();
     elapsed_ms = monotonic_clock_now_ms() - start_ms;
     debug_tracef(
         "theme queued flush reason=%s ms=%lu",
         reason ? reason : "unknown",
         (unsigned long) elapsed_ms
     );
-    g_pending_theme_directory[0] = '\0';
-    g_pending_theme_save = false;
+    if (saved) g_pending_theme_save = false;
 }
 
 int history_find_entry_index(const HistoryStore *history, const char *movie_path)
@@ -647,6 +611,7 @@ void update_movie_file_resume_from_snapshot(MovieFile *file, const DeferredHisto
     /* Length remains available after finishing a movie clears its resume badge. */
     file->duration_ms = movie_header_frame_time_ms(&request->header, request->header.frame_count);
     file->timing_checked = true;
+    file->metadata_codec = movie_codec_from_header(&request->header);
     if (file->has_resume) {
         file->resume_ms = movie_header_frame_time_ms(&request->header, frame);
         file->resume_time_known = file->duration_ms > 0;
@@ -765,17 +730,10 @@ void flush_queued_history_save(DeferredHistorySave *request, const char *reason)
         request->video_align_x,
         request->video_align_y
     );
-    save_history_store(request->movie_path, &history);
+    bool saved = save_history_store(request->movie_path, &history);
     elapsed_ms = monotonic_clock_now_ms() - start_ms;
-    if (g_pending_theme_save) {
-        char history_directory[MAX_PATH_LEN];
-
-        snprintf(history_directory, sizeof(history_directory), "%s", request->movie_path);
-        strip_filename(history_directory);
-        if (strcmp(history_directory, g_pending_theme_directory) == 0) {
-            g_pending_theme_directory[0] = '\0';
-            g_pending_theme_save = false;
-        }
+    if (saved && g_pending_theme_save) {
+        g_pending_theme_save = false;
     }
     debug_tracef(
         "history queued flush reason=%s frame=%lu ms=%lu",
@@ -925,7 +883,9 @@ bool update_seek_bar_preview(Movie *movie, SeekBarPreviewState *preview, const P
         preview->suppress_frame_index = UINT32_MAX;
     }
 
-    if (!preview->tracking || pointer->moved || preview->last_pointer_x != marker_x) {
+    /* Vertical movement/jitter at the same timeline position must not keep
+     * restarting the debounce for an unchanged preview target. */
+    if (!preview->tracking || preview->last_pointer_x != marker_x) {
         preview->tracking = true;
         preview->last_pointer_x = marker_x;
         preview->last_move_ms = now_ms;

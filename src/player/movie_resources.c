@@ -1,9 +1,18 @@
+#include "platform/hardware_acceleration.h"
+#include "sha_accel.h"
+#include "native_file_io.h"
+#include "usb_browser.h"
+#include "native_writer_platform.h"
+#include "player_data.h"
 #include "player_internal.h"
 #include "crash_recorder.h"
 #include "storage_read_stream.h"
 #include "performance_clock.h"
+#include "../storage/usb/usb_storage.h"
 #if NDVIDEO_CODEC_MODULES
 #include "codecs/codec_module_api.h"
+#endif
+#if NDVIDEO_CODEC_MODULES
 #include "codecs/modules/h264_module_api.h"
 #endif
 
@@ -404,6 +413,7 @@ static bool mpeg4_codec_open(Movie *movie)
     if (!movie) {
         return false;
     }
+    movie->mpeg4.planar_supported = true; /* Refined after the first VOL is decoded. */
     if (!mpeg4_xvid_create(
             &movie->mpeg4.decoder,
             (int) movie->header.video_width,
@@ -544,7 +554,7 @@ void destroy_movie(Movie *movie)
     video_lookahead_destroy(movie);
     movie_async_stop(movie);
     if (movie->file) {
-        fclose(movie->file);
+        movie_file_close(movie->file);
     }
     if (movie->frame_surface) {
         SDL_FreeSurface(movie->frame_surface);
@@ -593,7 +603,7 @@ void defer_playback_movie_cleanup(Movie *movie)
     video_lookahead_destroy(movie);
     movie_async_stop(movie);
     if (movie->file) {
-        fclose(movie->file);
+        movie_file_close(movie->file);
         movie->file = NULL;
     }
     release_movie_chunk_storage(movie);
@@ -862,7 +872,11 @@ static bool debug_dump_report(const char *path, const Movie *movie, const char *
     /* Error exits can export before the playback loop unwinds. Freeze and
      * finalize any unfinished sample before doing filesystem work. */
     playback_capture_stop(movie);
-    log_file = fopen(path, "wb");
+    if (!player_data_prepare())
+        return false;
+    /* Retain earlier failures even across player restarts. A new D recording
+     * still replaces its own recording file; failure reports are separate. */
+    log_file = fopen(path, failure ? "ab" : "wb");
     if (!log_file) {
         return false;
     }
@@ -879,8 +893,21 @@ static bool debug_dump_report(const char *path, const Movie *movie, const char *
         codec_module_references(CODEC_MODULE_H264), codec_module_references(CODEC_MODULE_MPEG4),
         codec_module_references(CODEC_MODULE_HEVC), codec_module_references(CODEC_MODULE_AV1));
 #endif
+#if NDVIDEO_CODEC_MODULES
+    if(codec_module_integrity_details()[0])fprintf(log_file,"%s\n",codec_module_integrity_details());
+#endif
+    fprintf(log_file, "hardware_identity asic=%08lx ndless_subtype_entry=%u ndless_subtype_now=%u source=validated_asic\n",
+        (unsigned long)nspire_hardware_id(), nspire_initial_sdk_subtype(), nl_hwsubtype());
     storage_read_stream_debug(log_file);
+    usb_storage_debug(log_file);
+    usb_browser_debug(log_file);
     performance_clock_debug(log_file);
+    fprintf(log_file,"hardware_acceleration_mask=%lu (quad=1 USB_large=2 SHA=8)\n",(unsigned long)hardware_acceleration_mask);
+    sha_accel_debug(log_file);
+    unlock_movie_debug(log_file);
+    monotonic_clock_debug(log_file);
+    native_writer_debug(log_file);
+    native_file_io_debug(log_file);
     movie_async_debug(log_file,movie);
     crash_recorder_debug(log_file);
     player_standby_debug(log_file);
@@ -908,6 +935,11 @@ static bool debug_dump_report(const char *path, const Movie *movie, const char *
 
     if (movie) {
         MemoryStats stats = query_memory_stats(movie);
+        sram_debug(log_file);
+        fprintf(log_file, "usb_prefetch_early turns=%lu services=%lu bytes=%llu\n",
+            (unsigned long)movie->diag_usb_prefetch_early_turns,
+            (unsigned long)movie->diag_usb_prefetch_early_services,
+            (unsigned long long)movie->diag_usb_prefetch_early_bytes);
         fprintf(log_file, "async_storage used=%u reads=%lu bytes=%lu foreground_waits=%lu cancels=%lu failures=%lu native_status=%ld max_read_us=%llu\n",
             movie->diag_async_used?1U:0U, (unsigned long)movie->diag_async_reads,
             (unsigned long)movie->diag_async_bytes, (unsigned long)movie->diag_async_waits,

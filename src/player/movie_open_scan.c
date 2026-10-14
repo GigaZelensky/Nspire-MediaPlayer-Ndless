@@ -1,3 +1,4 @@
+#include "player_data.h"
 #include "player_internal.h"
 #include "storage_read_stream.h"
 #include <errno.h>
@@ -10,7 +11,7 @@
 
 bool load_subtitles(
     Movie *movie,
-    FILE *file,
+    MovieReadFile *file,
     const MovieHeader *header,
     SubtitleCue **out_cues,
     SubtitleTrack **out_tracks,
@@ -28,7 +29,7 @@ bool load_subtitles(
     uint32_t cue_index;
     uint32_t track_index;
     uint32_t cue_cursor = 0;
-    long file_size;
+    uint64_t file_size;
     size_t subtitle_bytes;
     size_t cue_meta_size;
     size_t cursor;
@@ -60,20 +61,20 @@ bool load_subtitles(
     if (movie) {
         movie->current_file_pos = -1;
     }
-    if (fseek(file, 0, SEEK_END) != 0 || (file_size = ftell(file)) < 0 ||
-        (uint64_t) file_size > INT32_MAX || header->subtitle_offset > (uint32_t) file_size ||
+    if ((file_size = movie_file_size(file)) < header->subtitle_offset ||
+        file_size - header->subtitle_offset > SIZE_MAX ||
         header->subtitle_count > SIZE_MAX / sizeof(SubtitleCue)) {
         debug_failf("subtitle section bounds invalid");
         goto fail;
     }
-    subtitle_bytes = (size_t) file_size - header->subtitle_offset;
+    subtitle_bytes = (size_t)(file_size - header->subtitle_offset);
     cue_meta_size = header->version >= MOVIE_VERSION_POSITIONED_SUBS ? 22U : 10U;
     if (subtitle_bytes < 8U || header->subtitle_count > (subtitle_bytes - 8U) / cue_meta_size) {
         debug_failf("subtitle cue count exceeds section size");
         goto fail;
     }
     serialized = (uint8_t *) malloc(subtitle_bytes);
-    if (!serialized || fseek(file, (long) header->subtitle_offset, SEEK_SET) != 0) {
+    if (!serialized || movie_file_seek(file, header->subtitle_offset) != 0) {
         debug_failf("subtitle section allocation/seek failed");
         goto fail;
     }
@@ -84,7 +85,7 @@ bool load_subtitles(
         if (amount > PREFETCH_FILE_BLOCK_SIZE) {
             amount = PREFETCH_FILE_BLOCK_SIZE;
         }
-        if (fread(serialized + cursor, 1, amount, file) != amount) {
+        if (movie_file_read(serialized + cursor, 1, amount, file) != amount) {
             debug_failf("subtitle section read failed");
             goto fail;
         }
@@ -228,7 +229,7 @@ bool load_movie(const char *path, Movie *movie, LoadingProgress *loading_progres
     MovieCodec *missing_codec)
 {
     size_t framebuffer_words;
-    long file_size;
+    uint64_t file_size;
 
     if (missing_codec) *missing_codec = MOVIE_CODEC_UNKNOWN;
     if (!movie) {
@@ -248,7 +249,7 @@ bool load_movie(const char *path, Movie *movie, LoadingProgress *loading_progres
     debug_tracef("open start path=%s", path ? path : "(null)");
     loading_progress_tick(loading_progress, false);
 
-    movie->file = path ? fopen(path, "rb") : NULL;
+    movie->file = path ? movie_file_open(path) : NULL;
     movie->encrypted = movie_crypto_keys(path) != NULL;
     if (!movie->file) {
         debug_failf("open failed: %s (%d), errno=%d", storage_read_stream_open_stage(),
@@ -257,22 +258,27 @@ bool load_movie(const char *path, Movie *movie, LoadingProgress *loading_progres
     }
     movie->current_file_pos = 0;
     loading_progress_tick(loading_progress, false);
-    if (fread(&movie->header, 1, sizeof(movie->header), movie->file) != sizeof(movie->header)) {
-        debug_failf("open failed: header read");
-        goto fail;
+    uint8_t header_bytes[56];
+    if (movie_file_read(header_bytes, 1, 48, movie->file) != 48) {
+        debug_failf("open failed: header read"); goto fail;
     }
-    movie->current_file_pos = (long) sizeof(movie->header);
-    if (fseek(movie->file, 0, SEEK_END) != 0 || (file_size = ftell(movie->file)) < 0 ||
-        (uint64_t) file_size > INT32_MAX ||
-        !nvp_header_is_valid(&movie->header, (uint32_t) file_size)) {
-        debug_failf("open failed: invalid header or file bounds");
-        goto fail;
+    unsigned version = header_bytes[4] | (unsigned)header_bytes[5] << 8;
+    unsigned wire_bytes = nvp_header_wire_bytes(version);
+    if ((wire_bytes > 48 && movie_file_read(header_bytes+48,1,wire_bytes-48,movie->file)!=wire_bytes-48) ||
+        !nvp_header_parse(&movie->header,header_bytes,wire_bytes) ||
+        !nvp_header_is_valid(&movie->header,(file_size=movie_file_size(movie->file)))) {
+        debug_failf("open failed: invalid header or file bounds"); goto fail;
     }
     movie->current_file_pos = -1;
     movie->timing_fps_num = movie->header.fps_num;
     movie->timing_fps_den = movie->header.fps_den;
     player_reduce_fps(&movie->timing_fps_num, &movie->timing_fps_den);
     movie->codec = movie_codec_from_header(&movie->header);
+    const NveKeys *keys = movie_crypto_keys(path);
+    if (keys && keys->header.codec_hint && keys->header.codec_hint != (unsigned)movie->codec + 1U) {
+        debug_failf("open failed: encrypted codec hint does not match content");
+        goto fail;
+    }
     movie->codec_ops = movie_codec_ops(movie->codec);
     if (!movie->codec_ops) {
         if (movie->codec != MOVIE_CODEC_UNKNOWN) {
@@ -301,16 +307,24 @@ bool load_movie(const char *path, Movie *movie, LoadingProgress *loading_progres
         debug_failf("open failed: chunk index alloc count=%lu", (unsigned long) movie->header.chunk_count);
         goto fail;
     }
-    if (fseek(movie->file, (long) movie->header.index_offset, SEEK_SET) != 0) {
-        debug_failf("open failed: index seek offset=%lu", (unsigned long) movie->header.index_offset);
+    if (movie_file_seek(movie->file, movie->header.index_offset) != 0) {
+        debug_failf("open failed: index seek offset=%llu", (unsigned long long) movie->header.index_offset);
         goto fail;
     }
-    movie->current_file_pos = (long) movie->header.index_offset;
-    if (fread(movie->chunk_index, sizeof(ChunkIndexEntry), movie->header.chunk_count, movie->file) != movie->header.chunk_count) {
-        debug_failf("open failed: chunk index read count=%lu", (unsigned long) movie->header.chunk_count);
-        goto fail;
+    movie->current_file_pos = (int64_t)movie->header.index_offset;
+    unsigned entry_bytes=nvp_index_wire_bytes(movie->header.version);
+    for (uint32_t first=0;first<movie->header.chunk_count;) {
+        uint8_t buffer[28*64];
+        uint32_t count=movie->header.chunk_count-first;
+        if(count>64)count=64;
+        if(movie_file_read(buffer,entry_bytes,count,movie->file)!=count) {
+            debug_failf("open failed: chunk index read count=%lu",(unsigned long)count);goto fail;
+        }
+        for(uint32_t i=0;i<count;++i)nvp_index_parse(movie->chunk_index+first+i,buffer+i*entry_bytes,movie->header.version);
+        first+=count;
+        loading_progress_tick(loading_progress,false);
     }
-    movie->current_file_pos += (long) (sizeof(ChunkIndexEntry) * movie->header.chunk_count);
+    movie->current_file_pos += (int64_t)entry_bytes * movie->header.chunk_count;
     if (!nvp_index_is_valid(&movie->header, movie->chunk_index)) {
         debug_failf("open failed: invalid chunk index");
         goto fail;
@@ -375,7 +389,7 @@ bool key_pressed_edge(t_key key, bool *previous_state)
 
 bool on_key_pressed_edge(bool *previous_state)
 {
-    bool current_state = on_key_pressed() ? true : false;
+    bool current_state = nspire_on_key_pressed() ? true : false;
     bool pressed = current_state && !(*previous_state);
     *previous_state = current_state;
     return pressed;
@@ -481,6 +495,7 @@ static MovieFile *picker_timing_file;
 
 void movie_picker_timing_stop(void)
 {
+    picker_folder_counts_stop();
     PlayerReader *reader = picker_timing_reader;
     picker_timing_reader = NULL;
     picker_timing_file = NULL;
@@ -498,13 +513,18 @@ void movie_picker_timing_tick(MovieFile *files, size_t count, size_t preferred)
     if (!picker_timing_reader) {
         if (!files || !count)
             return;
-        if (preferred >= count || files[preferred].timing_checked) {
+        if (preferred >= count || !movie_picker_metadata_pending(files + preferred)) {
             for (preferred = 0; preferred < count; ++preferred)
-                if (!files[preferred].timing_checked)
+                if (movie_picker_metadata_pending(files + preferred))
                     break;
             if (preferred == count)
                 return;
         }
+        if (files[preferred].kind == PICKER_FOLDER) {
+            picker_folder_counts_step(files + preferred);
+            return;
+        }
+        picker_folder_counts_stop();
         picker_timing_file = &files[preferred];
         picker_timing_reader = player_reader_create(picker_timing_file->path);
         if (!picker_timing_reader) {
@@ -516,9 +536,9 @@ void movie_picker_timing_tick(MovieFile *files, size_t count, size_t preferred)
     }
 
     player_reader_service(8U);
-    uint32_t file_bytes = player_reader_file_bytes(picker_timing_reader);
+    uint64_t file_bytes = player_reader_file_bytes(picker_timing_reader);
     size_t prefix_bytes = file_bytes < sizeof(prefix) ? file_bytes : sizeof(prefix);
-    int result = prefix_bytes >= sizeof(header)
+    int result = prefix_bytes >= 48U
                      ? player_reader_read(picker_timing_reader, 0, prefix, prefix_bytes, false)
                      : -1;
     if (result == 0)
@@ -538,6 +558,8 @@ void movie_picker_timing_tick(MovieFile *files, size_t count, size_t preferred)
                 file->encrypted_header = malloc(sizeof(protected_header));
                 if (file->encrypted_header) *file->encrypted_header = protected_header;
                 file->duration_ms = protected_header.duration_ms;
+                if (protected_header.codec_hint)
+                    file->metadata_codec = (MovieCodec)(protected_header.codec_hint - 1U);
                 uint32_t frame = file->resume_frame < protected_header.frame_count
                     ? file->resume_frame : protected_header.frame_count - 1U;
                 file->resume_ms = (uint32_t)((uint64_t)frame * protected_header.fps_den * 1000U / protected_header.fps_num);
@@ -546,10 +568,11 @@ void movie_picker_timing_tick(MovieFile *files, size_t count, size_t preferred)
             movie_picker_timing_stop();
             return;
         }
-        memcpy(&header, prefix, sizeof(header));
+        if (!nvp_header_parse(&header, prefix, prefix_bytes)) result = -1;
     }
     if (result > 0 && memcmp(header.magic, "NVP1", 4) == 0 &&
         header.fps_num && header.fps_den && header.frame_count) {
+        file->metadata_codec = movie_codec_from_header(&header);
         uint32_t frame = file->resume_frame < header.frame_count
             ? file->resume_frame : header.frame_count - 1U;
         file->resume_ms = movie_header_frame_time_ms(&header, frame);
@@ -566,7 +589,7 @@ typedef struct {
     const HistoryStore *history;
     bool failed;
 } MovieScan;
-static bool scan_entry(void *context, const char *name, bool directory, uint32_t bytes)
+static bool scan_entry(void *context, const char *name, bool directory, uint64_t bytes)
 {
     (void)bytes;
     MovieScan *scan = context;
@@ -578,6 +601,8 @@ static bool scan_entry(void *context, const char *name, bool directory, uint32_t
     char path[MAX_PATH_LEN];
     int length = snprintf(path, sizeof(path), "%s/%s", scan->directory, name);
     if (length < 0 || (size_t)length >= sizeof(path))
+        return true;
+    if (directory && !strcmp(path, player_data_directory()))
         return true;
     if (scan->count == scan->capacity) {
         size_t capacity = scan->capacity ? scan->capacity * 2 : 16;
@@ -592,6 +617,7 @@ static bool scan_entry(void *context, const char *name, bool directory, uint32_t
     MovieFile *file = &scan->files[scan->count];
     memset(file, 0, sizeof(*file));
     file->kind = directory ? PICKER_FOLDER : PICKER_MOVIE;
+    file->metadata_codec = MOVIE_CODEC_UNKNOWN;
     file->path = dup_string(path);
     if (directory) {
         file->name = dup_string(name);

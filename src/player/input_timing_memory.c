@@ -650,7 +650,7 @@ bool playback_wait_key_pending(void)
         isKeyPressed(KEY_NSPIRE_P) ||
         isKeyPressed(KEY_NSPIRE_R) ||
         isKeyPressed(KEY_NSPIRE_N) ||
-        on_key_pressed();
+        nspire_on_key_pressed();
 }
 
 static bool key_snapshot_new_press(t_key key, bool *previous)
@@ -664,7 +664,7 @@ static bool key_snapshot_new_press(t_key key, bool *previous)
 
 static bool on_key_snapshot_new_press(bool *previous)
 {
-    bool down = on_key_pressed() ? true : false;
+    bool down = nspire_on_key_pressed() ? true : false;
     bool pressed = down && !*previous;
 
     *previous = down;
@@ -717,7 +717,7 @@ static void playback_key_snapshot_sample(PlaybackKeySnapshot *snapshot, bool ref
     snapshot->n = isKeyPressed(KEY_NSPIRE_N);
     snapshot->o = isKeyPressed(KEY_NSPIRE_O);
     snapshot->ctrl = isKeyPressed(KEY_NSPIRE_CTRL);
-    snapshot->on = on_key_pressed() ? true : false;
+    snapshot->on = nspire_on_key_pressed() ? true : false;
 }
 
 void playback_key_snapshot_init(PlaybackKeySnapshot *snapshot)

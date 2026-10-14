@@ -4,20 +4,20 @@
 
 SDL_Rect picker_row_rect_for_y(int row_y)
 {
-    const int width = SCREEN_W - 24;
-    SDL_Rect row = {chrome_centered_x_for_width(width), (Sint16) (row_y - 5), width, 20};
+    const int width = SCREEN_W - 16;
+    SDL_Rect row = {chrome_centered_x_for_width(width), (Sint16) row_y, width, 28};
     return row;
 }
 
 SDL_Rect picker_row_divider_rect(const SDL_Rect *row)
 {
-    const int width = SCREEN_W - 24;
+    const int width = SCREEN_W - 16;
     SDL_Rect divider = {chrome_centered_x_for_width(width), 0, width, 1};
 
     if (row) {
-        divider.x = (Sint16) (row->x + 1);
-        divider.y = (Sint16) (row->y + row->h - 1);
-        divider.w = (Uint16) (row->w - 2);
+        divider.x = (Sint16) (row->x + 5);
+        divider.y = (Sint16) (row->y + 29);
+        divider.w = (Uint16) (row->w - 10);
     }
     return divider;
 }
@@ -78,7 +78,13 @@ void movie_picker_cache_remember_position(
     cache->has_position = true;
 }
 
+int picker_item_step(const MovieFile *files, size_t index)
+{
+    return files && files[index].kind == PICKER_SEPARATOR ? 20 : PICKER_ROW_STEP_PX;
+}
+
 void picker_scroll_anim_view(
+    const MovieFile *files,
     PickerScrollAnim *anim,
     size_t scroll_start,
     uint32_t now_ms,
@@ -101,19 +107,21 @@ void picker_scroll_anim_view(
     }
     {
         uint8_t mix = ui_ease_out_cubic(now_ms - anim->started_ms, PICKER_SCROLL_ANIM_MS);
+        size_t leading = anim->to_start > anim->from_start ? anim->from_start : anim->to_start;
+        int distance = picker_item_step(files, leading);
         if (anim->to_start > anim->from_start) {
             if (display_start) {
                 *display_start = anim->from_start;
             }
             if (offset_y) {
-                *offset_y = -((PICKER_ROW_STEP_PX * (int) mix + 127) / 255);
+                *offset_y = -((distance * (int) mix + 127) / 255);
             }
         } else {
             if (display_start) {
                 *display_start = anim->to_start;
             }
             if (offset_y) {
-                *offset_y = -PICKER_ROW_STEP_PX + ((PICKER_ROW_STEP_PX * (int) mix + 127) / 255);
+                *offset_y = -distance + ((distance * (int) mix + 127) / 255);
             }
         }
     }
@@ -164,14 +172,14 @@ int picker_hover_scroll_direction(size_t count, size_t start_index, const Pointe
         return 0;
     }
     start_index = picker_scroll_start_clamped(count, start_index);
-    first_row = picker_row_rect_for_y(52);
-    last_row = picker_row_rect_for_y(52 + ((PICKER_VISIBLE_ROWS - 1) * 20));
+    first_row = picker_row_rect_for_y(PICKER_LIST_TOP);
+    last_row = picker_row_rect_for_y(PICKER_LIST_TOP + ((PICKER_VISIBLE_ROWS - 1) * PICKER_ROW_STEP_PX));
     region_left = first_row.x;
     region_right = SCREEN_W - 4;
     region_top = first_row.y - 10;
     region_bottom = SCREEN_H - 24;
-    top_edge = first_row.y + PICKER_HOVER_SCROLL_EDGE_PX;
-    bottom_edge = last_row.y + last_row.h - PICKER_HOVER_SCROLL_EDGE_PX;
+    top_edge = PICKER_LIST_TOP;
+    bottom_edge = last_row.y + PICKER_ROW_STEP_PX;
     if (pointer->x < region_left || pointer->x >= region_right ||
         pointer->y < region_top || pointer->y >= region_bottom) {
         return 0;
@@ -185,13 +193,13 @@ int picker_hover_scroll_direction(size_t count, size_t start_index, const Pointe
     return 0;
 }
 
-int picker_row_index_at(size_t count, size_t start_index, int row_offset_y, int x, int y)
+int picker_row_index_at(const MovieFile *files, size_t count, size_t start_index, int row_offset_y, int x, int y)
 {
     size_t end_index;
     size_t index;
-    int row_y = 52 + row_offset_y;
+    int row_y = PICKER_LIST_TOP + row_offset_y;
 
-    if (count == 0) {
+    if (count == 0 || y < PICKER_LIST_TOP || y >= PICKER_LIST_BOTTOM) {
         return -1;
     }
     start_index = picker_scroll_start_clamped(count, start_index);
@@ -205,10 +213,10 @@ int picker_row_index_at(size_t count, size_t start_index, int row_offset_y, int 
     for (index = start_index; index < end_index && row_y < SCREEN_H - 20; ++index) {
         SDL_Rect row = picker_row_rect_for_y(row_y);
 
-        if (rect_contains_point(&row, x, y)) {
+        if (files[index].kind != PICKER_SEPARATOR && rect_contains_point(&row, x, y)) {
             return (int) index;
         }
-        row_y += 20;
+        row_y += picker_item_step(files, index);
     }
     return -1;
 }
@@ -225,7 +233,7 @@ bool picker_resume_badge_rect(const Fonts *fonts, const MovieFile *file, int row
         SDL_Rect row = picker_row_rect_for_y(row_y);
         rect->x = (Sint16) (row.x + row.w - 8 - text_w - 12);
     }
-    rect->y = (Sint16) (row_y - 3);
+    rect->y = (Sint16) (row_y + 6);
     rect->w = (Uint16) (text_w + 12);
     rect->h = 16;
     return true;
@@ -243,9 +251,9 @@ int picker_resume_badge_index_at(
 {
     size_t end_index;
     size_t index;
-    int row_y = 52 + row_offset_y;
+    int row_y = PICKER_LIST_TOP + row_offset_y;
 
-    if (!fonts || !files || count == 0) {
+    if (!fonts || !files || count == 0 || y < PICKER_LIST_TOP || y >= PICKER_LIST_BOTTOM) {
         return -1;
     }
     start_index = picker_scroll_start_clamped(count, start_index);
@@ -263,7 +271,7 @@ int picker_resume_badge_index_at(
             y >= badge.y && y < badge.y + badge.h) {
             return (int) index;
         }
-        row_y += 20;
+        row_y += picker_item_step(files, index);
     }
     return -1;
 }
@@ -738,106 +746,6 @@ void copy_fitted_text(nSDL_Font *font, const char *text, char *buffer, size_t bu
     snprintf(buffer, buffer_size, "%s", ellipsis);
 }
 
-void draw_movie_hover_tooltip(
-    SDL_Surface *screen,
-    const Fonts *fonts,
-    const MovieFile *file,
-    const PointerState *pointer,
-    uint8_t tooltip_mix
-)
-{
-    enum {
-        TOOLTIP_MAX_W = 236,
-        TOOLTIP_PAD_X = 6,
-        TOOLTIP_PAD_Y = 4,
-        TOOLTIP_LINE_GAP = 10
-    };
-    char title[128];
-    char detail[128];
-    char duration_text[24] = {0};
-    int text_max_width = TOOLTIP_MAX_W - (TOOLTIP_PAD_X * 2);
-    int title_width;
-    int detail_width;
-    int duration_width;
-    int width;
-    int height = (TOOLTIP_PAD_Y * 2) + 8;
-    int x;
-    int y;
-    SDL_Rect panel;
-    SDL_Rect accent;
-    int offset_y;
-
-    if (!screen || !fonts || !file || !pointer || !pointer->visible || tooltip_mix == 0) {
-        return;
-    }
-
-    copy_fitted_text(fonts->outline, file->name, title, sizeof(title), text_max_width);
-    copy_fitted_text(fonts->outline, file->detail, detail, sizeof(detail), text_max_width);
-    if (file->duration_ms > 0) {
-        format_clock(file->duration_ms, duration_text, sizeof(duration_text));
-        height += TOOLTIP_LINE_GAP;
-    }
-    title_width = nSDL_GetStringWidth(fonts->outline, title);
-    detail_width = nSDL_GetStringWidth(fonts->outline, detail);
-    duration_width = nSDL_GetStringWidth(fonts->outline, duration_text);
-    width = title_width > detail_width ? title_width : detail_width;
-    if (duration_width > width) {
-        width = duration_width;
-    }
-    width += TOOLTIP_PAD_X * 2;
-    if (width < 72) {
-        width = 72;
-    }
-    if (detail[0] != '\0') {
-        height += TOOLTIP_LINE_GAP;
-    }
-
-    x = pointer->x + 12;
-    y = pointer->y + 10;
-    if (x + width > SCREEN_W - 4) {
-        x = pointer->x - width - 8;
-    }
-    if (y + height > SCREEN_H - 4) {
-        y = pointer->y - height - 8;
-    }
-    x = clamp_int(x, 4, SCREEN_W - width - 4);
-    y = clamp_int(y, 4, SCREEN_H - height - 4);
-    offset_y = ((255 - tooltip_mix) * 4 + 127) / 255;
-    y += offset_y;
-
-    panel.x = (Sint16) x;
-    panel.y = (Sint16) y;
-    panel.w = (Uint16) width;
-    panel.h = (Uint16) height;
-    accent.x = panel.x;
-    accent.y = panel.y;
-    accent.w = panel.w;
-    accent.h = 2;
-
-    draw_soft_glass_panel(
-        screen,
-        &panel,
-        rgb565_lerp(UI_COLOR_BLACK, ui_theme()->tooltip_base, tooltip_mix, 255),
-        false
-    );
-    draw_vertical_gradient(
-        screen,
-        &accent,
-        rgb565_lerp(ui_theme()->tooltip_base, UI_COLOR_ACCENT_HOT, tooltip_mix, 255),
-        rgb565_lerp(ui_theme()->tooltip_base, UI_COLOR_ACCENT_DEEP, tooltip_mix, 255)
-    );
-    if (tooltip_mix > 40) {
-        nSDL_DrawString(screen, fonts->white, x + TOOLTIP_PAD_X, y + TOOLTIP_PAD_Y, "%s", title);
-        if (detail[0] != '\0') {
-            nSDL_DrawString(screen, fonts->white, x + TOOLTIP_PAD_X, y + TOOLTIP_PAD_Y + TOOLTIP_LINE_GAP, "%s", detail);
-        }
-        if (duration_text[0] != '\0') {
-            nSDL_DrawString(screen, fonts->white, x + TOOLTIP_PAD_X,
-                y + TOOLTIP_PAD_Y + TOOLTIP_LINE_GAP * (detail[0] != '\0' ? 2 : 1), "%s", duration_text);
-        }
-    }
-}
-
 void draw_resume_badge(
     SDL_Surface *screen,
     const Fonts *fonts,
@@ -886,90 +794,6 @@ void draw_resume_badge(
     draw_soft_glass_panel_rim(screen, &draw_badge, base, max_u8(hover_mix, press_mix));
     if (visible_mix > 54) {
         draw_ui_label(screen, fonts, draw_badge.x + 6 + press_offset_x, draw_badge.y + 4 + press_offset_y, "RESUME");
-    }
-}
-
-void draw_resume_hover_tooltip(
-    SDL_Surface *screen,
-    const Fonts *fonts,
-    const MovieFile *file,
-    const PointerState *pointer,
-    uint8_t tooltip_mix
-)
-{
-    enum {
-        TOOLTIP_PAD_X = 6,
-        TOOLTIP_PAD_Y = 4,
-        TOOLTIP_LINE_GAP = 10
-    };
-    char title[128];
-    char detail[64];
-    char resume_text[24];
-    char duration_text[24];
-    int title_width;
-    int detail_width;
-    int width;
-    int height = (TOOLTIP_PAD_Y * 2) + TOOLTIP_LINE_GAP + 8;
-    int x;
-    int y;
-    SDL_Rect panel;
-    SDL_Rect accent;
-    int offset_y;
-
-    if (!screen || !fonts || !file || !pointer || !pointer->visible || tooltip_mix == 0) {
-        return;
-    }
-
-    copy_fitted_text(fonts->outline, file->name, title, sizeof(title), 214);
-    if (file->resume_time_known) {
-        format_clock(file->resume_ms, resume_text, sizeof(resume_text));
-        format_clock(file->duration_ms, duration_text, sizeof(duration_text));
-        snprintf(detail, sizeof(detail), "Resume %s / %s", resume_text, duration_text);
-    } else {
-        snprintf(detail, sizeof(detail), "Resume saved");
-    }
-    title_width = nSDL_GetStringWidth(fonts->outline, title);
-    detail_width = nSDL_GetStringWidth(fonts->outline, detail);
-    width = (title_width > detail_width ? title_width : detail_width) + (TOOLTIP_PAD_X * 2);
-    width = clamp_int(width, 92, 236);
-
-    x = pointer->x + 12;
-    y = pointer->y + 10;
-    if (x + width > SCREEN_W - 4) {
-        x = pointer->x - width - 8;
-    }
-    if (y + height > SCREEN_H - 4) {
-        y = pointer->y - height - 8;
-    }
-    x = clamp_int(x, 4, SCREEN_W - width - 4);
-    y = clamp_int(y, 4, SCREEN_H - height - 4);
-    offset_y = ((255 - tooltip_mix) * 4 + 127) / 255;
-    y += offset_y;
-
-    panel.x = (Sint16) x;
-    panel.y = (Sint16) y;
-    panel.w = (Uint16) width;
-    panel.h = (Uint16) height;
-    accent.x = panel.x;
-    accent.y = panel.y;
-    accent.w = panel.w;
-    accent.h = 2;
-
-    draw_soft_glass_panel(
-        screen,
-        &panel,
-        rgb565_lerp(UI_COLOR_BLACK, ui_theme()->tooltip_base, tooltip_mix, 255),
-        false
-    );
-    draw_vertical_gradient(
-        screen,
-        &accent,
-        rgb565_lerp(ui_theme()->tooltip_base, UI_COLOR_ACCENT_HOT, tooltip_mix, 255),
-        rgb565_lerp(ui_theme()->tooltip_base, UI_COLOR_ACCENT_DEEP, tooltip_mix, 255)
-    );
-    if (tooltip_mix > 40) {
-        nSDL_DrawString(screen, fonts->white, x + TOOLTIP_PAD_X, y + TOOLTIP_PAD_Y, "%s", title);
-        nSDL_DrawString(screen, fonts->white, x + TOOLTIP_PAD_X, y + TOOLTIP_PAD_Y + TOOLTIP_LINE_GAP, "%s", detail);
     }
 }
 
@@ -1159,381 +983,5 @@ size_t picker_adjacent_selection(size_t count, size_t selected, int direction)
         return selected > 0 ? selected - 1 : count - 1;
     }
     return selected + 1 < count ? selected + 1 : 0;
-}
-
-void render_picker(
-    SDL_Surface *screen,
-    const Fonts *fonts,
-    MovieFile *files,
-    size_t count,
-    size_t scroll_start,
-    int scroll_offset_y,
-    size_t selected,
-    size_t previous_selected,
-    uint32_t selection_anim_started_ms,
-    uint8_t selected_start_mix,
-    uint8_t previous_start_mix,
-    int movie_tooltip_index,
-    uint8_t movie_tooltip_mix,
-    int resume_badge_hover_index,
-    uint8_t resume_badge_hover_mix,
-    int resume_tooltip_index,
-    uint8_t resume_tooltip_mix,
-    int pressed_row_index,
-    int pressed_resume_badge_index,
-    uint8_t press_mix,
-    const PointerState *pointer,
-    const ScreenshotPreviewState *screenshot_preview,
-    uint32_t now_ms,
-    uint32_t intro_started_ms,
-    uint32_t exit_elapsed_ms,
-    uint8_t loading_mix,
-    const char *loading_label,
-    int loading_phase,
-    bool present_output
-)
-{
-    const char *credit = "Made by GigaZelensky";
-    size_t start_index;
-    size_t end_index;
-    size_t index;
-    int y = 52 + scroll_offset_y;
-    SDL_Rect background = {0, 0, SCREEN_W, SCREEN_H};
-    SDL_Rect header = {0, 0, SCREEN_W, 32};
-    SDL_Rect header_top = {0, 0, SCREEN_W, 1};
-    uint8_t background_mix = picker_intro_mix_for_transition(intro_started_ms, now_ms, 0, PICKER_INTRO_ANIM_MS, exit_elapsed_ms);
-    uint8_t header_mix = picker_intro_mix_for_transition(intro_started_ms, now_ms, 18U, 230U, exit_elapsed_ms);
-    uint8_t shortcuts_mix = picker_intro_mix_for_transition(intro_started_ms, now_ms, 90U, 230U, exit_elapsed_ms);
-    uint8_t footer_mix = picker_intro_mix_for_transition(intro_started_ms, now_ms, 200U, 250U, exit_elapsed_ms);
-    int header_offset_y = -picker_intro_offset(header_mix, 8);
-    int shortcuts_offset_y = -picker_intro_offset(shortcuts_mix, 5);
-
-    header.y = (Sint16) header_offset_y;
-    header_top.y = (Sint16) header_offset_y;
-    draw_vertical_gradient(
-        screen,
-        &background,
-        rgb565_lerp(UI_COLOR_BLACK, UI_COLOR_BG_TOP, background_mix, 255),
-        rgb565_lerp(UI_COLOR_BLACK, UI_COLOR_BG_BOTTOM, background_mix, 255)
-    );
-    screenshot_set_protected_content(false);
-    draw_glass_panel_faded(screen, &header, UI_COLOR_GUNMETAL, false, header_mix);
-    fill_rect_rgb565(
-        screen,
-        &header_top,
-        rgb565_lerp(picker_background_color_at_y_mix(header_top.y, background_mix), UI_COLOR_ACCENT_HOT, header_mix, 255)
-    );
-    if (header_mix > 48) {
-        draw_ui_label(
-            screen,
-            fonts,
-            (SCREEN_W - nSDL_GetStringWidth(fonts->white, "ND Video Player")) / 2,
-            5 + header_offset_y,
-            "ND Video Player"
-        );
-    }
-    draw_header_shortcuts(screen, fonts, 18 + shortcuts_offset_y, shortcuts_mix, !media_browser_at_root());
-    picker_navigation_draw(screen, fonts, shortcuts_mix, shortcuts_offset_y);
-    if (count == 0) {
-        uint8_t empty_mix = picker_intro_mix_for_transition(intro_started_ms, now_ms, 115U, 230U, exit_elapsed_ms);
-        int empty_offset_y = picker_intro_offset(empty_mix, 7);
-        int footer_offset_y = picker_intro_offset(footer_mix, 10);
-        SDL_Rect footer_panel = {6, (Sint16) (SCREEN_H - 22 + footer_offset_y), SCREEN_W - 12, 18};
-        SDL_Rect footer_accent = {
-            (Sint16) (footer_panel.x + 1),
-            (Sint16) (footer_panel.y + 1),
-            (Uint16) (footer_panel.w - 2),
-            1
-        };
-
-        if (empty_mix > 48) {
-            draw_ui_label(screen, fonts, 16, 64 + empty_offset_y, "No videos in this folder");
-        }
-        draw_glass_panel_faded(
-            screen,
-            &footer_panel,
-            ui_theme()->footer_panel,
-            false,
-            footer_mix
-        );
-        if (footer_mix > 0) {
-            cut_rect_corners(screen, &footer_panel, picker_background_color_at_y_mix(footer_panel.y, background_mix));
-        }
-        draw_vertical_gradient(
-            screen,
-            &footer_accent,
-            rgb565_lerp(picker_background_color_at_y_mix(footer_accent.y, background_mix), ui_theme()->footer_accent_top, footer_mix, 255),
-            rgb565_lerp(picker_background_color_at_y_mix(footer_accent.y, background_mix), UI_COLOR_ACCENT_DEEP, footer_mix, 255)
-        );
-        clock_menu_draw_footer(screen, fonts, footer_offset_y, footer_mix);
-        if (footer_mix > 54) {
-            draw_ui_label(screen, fonts, 12, SCREEN_H - 17 + footer_offset_y, credit);
-        }
-        draw_screenshot_preview_osd(screen, fonts, screenshot_preview, now_ms);
-        night_mode_draw_status(screen, fonts, NULL, now_ms);
-        if (pointer && pointer->visible) {
-            draw_cursor(screen, pointer->x, pointer->y);
-        }
-        if (present_output) present_screen(screen);
-        return;
-    }
-    start_index = picker_scroll_start_clamped(count, scroll_start);
-    end_index = start_index + PICKER_VISIBLE_ROWS;
-    if (scroll_offset_y != 0) {
-        ++end_index;
-    }
-    if (end_index > count) {
-        end_index = count;
-    }
-    {
-        SDL_Rect old_clip;
-        SDL_Rect first_row = picker_row_rect_for_y(52);
-        SDL_Rect last_row = picker_row_rect_for_y(52 + ((PICKER_VISIBLE_ROWS - 1) * PICKER_ROW_STEP_PX));
-        SDL_Rect rows_clip = {
-            0,
-            first_row.y,
-            SCREEN_W,
-            (Uint16) (last_row.y + last_row.h - first_row.y)
-        };
-
-        SDL_GetClipRect(screen, &old_clip);
-        SDL_SetClipRect(screen, &rows_clip);
-    for (index = start_index; index < end_index && y < SCREEN_H - 20; ++index) {
-        SDL_Rect row = picker_row_rect_for_y(y);
-        SDL_Rect draw_row = row;
-        SDL_Rect divider = picker_row_divider_rect(&row);
-        SDL_Rect resume_badge;
-        bool has_resume_badge = picker_resume_badge_rect(fonts, &files[index], y, &resume_badge);
-        uint8_t row_intro_mix = picker_intro_mix_for_transition(
-            intro_started_ms,
-            now_ms,
-            115U + (uint32_t) (index - start_index) * PICKER_INTRO_ROW_STAGGER_MS,
-            PICKER_INTRO_ANIM_MS - 120U,
-            exit_elapsed_ms
-        );
-        /* Reveal the complete row once its header is known; never shift an
-         * already visible title sideways to insert a late lock icon. */
-        uint8_t metadata_mix = files[index].timing_checked
-            ? ui_ease_out_cubic(now_ms - files[index].metadata_ready_ms, 120U) : 0;
-        if (row_intro_mix > metadata_mix) row_intro_mix = metadata_mix;
-        row_intro_mix =
-            (uint8_t)(((unsigned)row_intro_mix * picker_navigation_mix(now_ms) + 127U) / 255U);
-        int row_intro_offset_y = picker_intro_offset(row_intro_mix, 9);
-        uint8_t resume_mix = resume_badge_hover_index == (int) index ? resume_badge_hover_mix : 0;
-        uint8_t row_press_mix = pressed_row_index == (int) index ? press_mix : 0;
-        uint8_t resume_press_mix = pressed_resume_badge_index == (int) index ? press_mix : 0;
-        int row_press_offset_x = pressed_control_offset_x(row_press_mix);
-        int row_press_offset_y = pressed_control_offset_y(row_press_mix);
-        uint8_t selection_mix = picker_row_selection_mix(
-            index,
-            selected,
-            previous_selected,
-            selection_anim_started_ms,
-            now_ms,
-            selected_start_mix,
-            previous_start_mix
-        );
-        row.y = (Sint16) (row.y + row_intro_offset_y);
-        row.x += picker_navigation_offset(now_ms);
-        draw_row = row;
-        divider.y = (Sint16) (row.y + row.h - 1);
-        if (has_resume_badge) {
-            resume_badge.y = (Sint16) (resume_badge.y + row_intro_offset_y);
-        }
-        if (files[index].kind == PICKER_SEPARATOR) {
-            int center_y = row.y + row.h / 2;
-            Uint16 color = rgb565_lerp(picker_background_color_at_y_mix(center_y, background_mix),
-                                       UI_COLOR_WARM_WHITE, row_intro_mix / 2, 255);
-            SDL_Rect left = {row.x + 4, center_y, (Uint16)(row.w / 2 - 24), 1};
-            SDL_Rect right = {row.x + row.w / 2 + 24, center_y, (Uint16)(row.w / 2 - 28), 1};
-            fill_rect_rgb565(screen, &left, color);
-            fill_rect_rgb565(screen, &right, color);
-            if (row_intro_mix > 42)
-                draw_ui_label(screen, fonts,
-                              row.x + (row.w - nSDL_GetStringWidth(fonts->white, "USB")) / 2,
-                              center_y - NSP_FONT_HEIGHT / 2, "USB");
-            y += 20;
-            continue;
-        }
-        selection_mix = (uint8_t) (((uint16_t) selection_mix * row_intro_mix + 127U) / 255U);
-        int text_x = row.x + 4 + ((int) selection_mix * 8 + 127) / 255 + row_press_offset_x;
-        int text_y = row.y + (row.h - NSP_FONT_HEIGHT) / 2 + row_press_offset_y;
-        int text_right_limit = has_resume_badge
-            ? resume_badge.x - 8
-            : row.x + row.w - 12;
-        int text_max_width = text_right_limit - text_x;
-        char fitted_title[128];
-        if (text_max_width < 16) {
-            text_max_width = 16;
-        }
-        if (selection_mix > 0) {
-            Uint16 row_color = pressed_control_base(ui_theme()->row_selected, row_press_mix);
-
-            draw_picker_selection_panel_mix(screen, &draw_row, row_color, selection_mix);
-            draw_pressed_control_reflection(screen, &draw_row, row_press_mix);
-            cut_rect_corners(screen, &draw_row, picker_background_color_at_y_mix(draw_row.y, background_mix));
-        } else {
-            fill_rect_rgb565(
-                screen,
-                &divider,
-                rgb565_lerp(
-                    picker_background_color_at_y_mix(divider.y, background_mix),
-                    blend_rgb565(ui_theme()->row_divider, UI_COLOR_WARM_WHITE, 88),
-                    row_intro_mix,
-                    255
-                )
-            );
-        }
-        if (row_intro_mix > 42) {
-            if (files[index].kind == PICKER_FOLDER) {
-                int icon_y = row.y + (row.h - 9) / 2 + row_press_offset_y;
-                SDL_Rect tab = {text_x, icon_y, 5, 3}, body = {text_x, icon_y + 2, 10, 7};
-                Uint16 color =
-                    rgb565_lerp(UI_COLOR_ACCENT_DEEP, UI_COLOR_ACCENT_HOT, row_intro_mix, 255);
-                fill_rect_rgb565(screen, &tab, color);
-                draw_vertical_gradient(screen, &body, color, UI_COLOR_ACCENT_DEEP);
-                text_x += 15;
-                text_max_width -= 23;
-                draw_ui_label(screen, fonts, row.x + row.w - 12, text_y, ">");
-            }
-            if (files[index].encrypted) {
-                draw_lock_icon(screen, text_x, row.y + (row.h - 10) / 2 + row_press_offset_y, row_intro_mix);
-                text_x += 12;
-                text_max_width -= 12;
-            }
-            copy_fitted_text(fonts->white, files[index].name, fitted_title, sizeof(fitted_title), text_max_width);
-            draw_ui_label(screen, fonts, text_x, text_y, fitted_title);
-        }
-        if (has_resume_badge) {
-            draw_resume_badge(
-                screen,
-                fonts,
-                &resume_badge,
-                resume_mix,
-                resume_press_mix,
-                row_intro_mix,
-                picker_background_color_at_y_mix(resume_badge.y, background_mix)
-            );
-        }
-        y += 20;
-    }
-        SDL_SetClipRect(screen, &old_clip);
-    }
-    if (count > PICKER_VISIBLE_ROWS) {
-        uint8_t scroll_mix = picker_intro_mix_for_transition(intro_started_ms, now_ms, 180U, 260U, exit_elapsed_ms);
-        int scroll_offset_x = picker_intro_offset(scroll_mix, 5);
-        SDL_Rect track = {SCREEN_W - 7, 42, 3, SCREEN_H - 76};
-        size_t max_start = count - PICKER_VISIBLE_ROWS;
-        int visual_start_q8 = (int) start_index * 256;
-        int thumb_h = (int) (((uint64_t) track.h * PICKER_VISIBLE_ROWS) / count);
-        int thumb_y;
-        SDL_Rect thumb;
-        Uint16 track_top;
-        Uint16 track_bottom;
-        Uint16 track_gray_top;
-        Uint16 track_gray_bottom;
-
-        track.x = (Sint16) (track.x + scroll_offset_x);
-        thumb_h = clamp_int(thumb_h, 18, track.h);
-        thumb_y = track.y;
-        if (scroll_offset_y < 0) {
-            visual_start_q8 += ((-scroll_offset_y * 256) + (PICKER_ROW_STEP_PX / 2)) / PICKER_ROW_STEP_PX;
-        }
-        if (max_start > 0 && track.h > thumb_h) {
-            int max_start_q8 = (int) max_start * 256;
-            visual_start_q8 = clamp_int(visual_start_q8, 0, max_start_q8);
-            thumb_y += (int) (((uint64_t) (track.h - thumb_h) * (uint32_t) visual_start_q8) / (uint32_t) max_start_q8);
-        }
-        thumb.x = (Sint16) (SCREEN_W - 8 + scroll_offset_x);
-        thumb.y = (Sint16) thumb_y;
-        thumb.w = 5;
-        thumb.h = (Uint16) thumb_h;
-        track_gray_top = blend_rgb565(ui_theme()->scroll_thumb, UI_COLOR_BLACK, 164);
-        track_gray_bottom = blend_rgb565(ui_theme()->scroll_thumb, UI_COLOR_BLACK, 112);
-        track_gray_top = blend_rgb565(track_gray_top, UI_COLOR_WHITE, 8);
-        track_bottom = rgb565_lerp(
-            picker_background_color_at_y_mix(track.y + track.h - 1, background_mix),
-            track_gray_bottom,
-            scroll_mix,
-            255
-        );
-        track_top = rgb565_lerp(
-            picker_background_color_at_y_mix(track.y, background_mix),
-            track_gray_top,
-            scroll_mix,
-            255
-        );
-        draw_vertical_gradient(
-            screen,
-            &track,
-            track_top,
-            track_bottom
-        );
-        draw_glass_panel_faded(
-            screen,
-            &thumb,
-            ui_theme()->scroll_thumb,
-            false,
-            scroll_mix
-        );
-        if (scroll_mix > 0) {
-            cut_rect_corners(screen, &thumb, picker_background_color_at_y_mix(thumb.y, background_mix));
-        }
-    }
-    {
-        char footer[32];
-        int footer_offset_y = picker_intro_offset(footer_mix, 10);
-        SDL_Rect footer_panel = {6, (Sint16) (SCREEN_H - 22 + footer_offset_y), SCREEN_W - 12, 18};
-        SDL_Rect footer_accent = {
-            (Sint16) (footer_panel.x + 1),
-            (Sint16) (footer_panel.y + 1),
-            (Uint16) (footer_panel.w - 2),
-            1
-        };
-
-        draw_glass_panel_faded(
-            screen,
-            &footer_panel,
-            ui_theme()->footer_panel,
-            false,
-            footer_mix
-        );
-        if (footer_mix > 0) {
-            cut_rect_corners(screen, &footer_panel, picker_background_color_at_y_mix(footer_panel.y, background_mix));
-        }
-        draw_vertical_gradient(
-            screen,
-            &footer_accent,
-            rgb565_lerp(picker_background_color_at_y_mix(footer_accent.y, background_mix), ui_theme()->footer_accent_top, footer_mix, 255),
-            rgb565_lerp(picker_background_color_at_y_mix(footer_accent.y, background_mix), UI_COLOR_ACCENT_DEEP, footer_mix, 255)
-        );
-        size_t items = count;
-        for (size_t item = 0; item < count; ++item)
-            if (files[item].kind == PICKER_SEPARATOR)
-                --items;
-        snprintf(footer, sizeof(footer), "%lu %s", (unsigned long)items,
-                 items == 1 ? "item" : "items");
-        clock_menu_draw_footer(screen, fonts, footer_offset_y, footer_mix);
-        if (footer_mix > 54) {
-            draw_ui_label(screen, fonts, 12, SCREEN_H - 17 + footer_offset_y, credit);
-            draw_ui_label(screen, fonts, SCREEN_W - 12 - nSDL_GetStringWidth(fonts->white, footer), SCREEN_H - 17 + footer_offset_y, footer);
-        }
-    }
-    if (loading_label && loading_mix > 0) {
-        SDL_Rect full_screen = {0, 0, SCREEN_W, SCREEN_H};
-
-        dim_rect_rgb565(screen, &full_screen, (UI_LOADING_DIM_ALPHA * (int) loading_mix + 127) / 255);
-        draw_loading_overlay_mix(screen, fonts, loading_label, loading_phase, loading_mix, true);
-    } else if (resume_tooltip_index >= 0 && (size_t) resume_tooltip_index < count && resume_tooltip_mix > 0) {
-        draw_resume_hover_tooltip(screen, fonts, &files[resume_tooltip_index], pointer, resume_tooltip_mix);
-    } else if (movie_tooltip_index >= 0 && (size_t) movie_tooltip_index < count && movie_tooltip_mix > 0) {
-        draw_movie_hover_tooltip(screen, fonts, &files[movie_tooltip_index], pointer, movie_tooltip_mix);
-    }
-    draw_screenshot_preview_osd(screen, fonts, screenshot_preview, now_ms);
-    night_mode_draw_status(screen, fonts, NULL, now_ms);
-    if (pointer && pointer->visible) {
-        draw_cursor(screen, pointer->x, pointer->y);
-    }
-    if (present_output) present_screen(screen);
 }
 

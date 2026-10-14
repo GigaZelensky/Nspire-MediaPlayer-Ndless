@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include "player/movie_file.h"
 
 #include <SDL/SDL.h>
 
@@ -74,6 +75,10 @@ typedef struct {
     void *decoder;
     bool chunk_dirty;
     bool discontinuity;
+    bool decoder_failed;
+    bool planar_supported;
+    VideoFrame picture;
+    uint64_t submitted_frames;
 } Mpeg4DecoderContext;
 
 typedef struct {
@@ -95,7 +100,7 @@ typedef struct {
 } Av1DecoderContext;
 
 typedef struct Movie {
-    FILE *file;
+    MovieReadFile *file;
     struct MovieAsyncIo *async_io;
     struct VideoLookahead *video_lookahead;
     bool lookahead_enabled;
@@ -103,7 +108,7 @@ typedef struct Movie {
     uint32_t diag_async_reads, diag_async_bytes, diag_async_waits;
     uint32_t diag_async_cancels, diag_async_failures, diag_async_max_ticks;
     int32_t diag_async_native_error;
-    long current_file_pos;
+    int64_t current_file_pos;
     MovieHeader header;
     bool encrypted;
     /* Reduced once on load; keep the original serialized header for metadata. */
@@ -155,6 +160,9 @@ typedef struct Movie {
     uint32_t diag_prefetch_tick_count;
     uint32_t diag_active_prefetch_tick_count;
     uint32_t diag_io_priority_count;
+    uint32_t diag_usb_prefetch_early_turns;
+    uint32_t diag_usb_prefetch_early_services;
+    uint64_t diag_usb_prefetch_early_bytes;
     uint32_t diag_foreground_decode_count;
     uint32_t diag_foreground_direct_decode_count;
     uint32_t diag_display_fps_window_start_ms;

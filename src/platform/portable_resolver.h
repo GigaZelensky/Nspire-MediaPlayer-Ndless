@@ -11,6 +11,9 @@ typedef struct {
     bool (*allow_span)(void *, uint32_t address, uint32_t bytes, unsigned kind);
     bool (*read_word)(void *, uint32_t address, uint32_t *value);
     uint32_t code_begin, code_end, ram_begin, ram_end;
+    /* Optional mapped, validated code span. Borrow only while the caller keeps
+     * IRQ/FIQ excluded; discard before any native call or progress callback. */
+    const uint32_t *(*code_words)(void *, uint32_t address, uint32_t bytes);
 } PortableView;
 typedef struct {
     uint32_t fopen, fread, fwrite, fclose, malloc, current_task, errno_addr, read_nand;

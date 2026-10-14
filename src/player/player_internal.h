@@ -2,6 +2,7 @@
 #define NDVIDEO_PLAYER_INTERNAL_H
 
 #include <stdbool.h>
+#include "platform/nspire_hardware.h"
 #include <dirent.h>
 #include <libndls.h>
 #include <os.h>
@@ -18,6 +19,7 @@
 #include "codecs/h264bsd/h264bsd_util.h"
 #include "codecs/mpeg4_xvid.h"
 #include "movie/movie.h"
+#include "movie_file.h"
 #include "sram.h"
 #include "playback_capture_core.h"
 #include "movie_async_io.h"
@@ -56,12 +58,14 @@ static inline void player_prefetch_data(const void *ptr)
 #define TAB_HOLD_FRAME_REPEAT_DELAY_MS 250U
 #define TAB_HOLD_FRAME_REPEAT_FALLBACK_INTERVAL_MS 80U
 #define PICKER_MAX_FILES 1024
-#define PICKER_VISIBLE_ROWS 8
+#define PICKER_VISIBLE_ROWS 5
+#define PICKER_LIST_TOP 49
+#define PICKER_LIST_BOTTOM 214
 #define PICKER_TOOLTIP_DWELL_MS 450U
 #define PICKER_SELECTION_ANIM_MS 155U
 #define PICKER_DESELECTION_ANIM_MS 90U
-#define PICKER_INTRO_ANIM_MS 360U
-#define PICKER_INTRO_ROW_STAGGER_MS 28U
+#define PICKER_INTRO_ANIM_MS 260U
+#define PICKER_INTRO_ROW_STAGGER_MS 12U
 #define PICKER_INTRO_LAST_ROW_DELAY_MS (115U + ((uint32_t) (PICKER_VISIBLE_ROWS - 1U) * PICKER_INTRO_ROW_STAGGER_MS))
 #define PICKER_INTRO_TOTAL_ANIM_MS (PICKER_INTRO_LAST_ROW_DELAY_MS + (PICKER_INTRO_ANIM_MS - 120U))
 #define PICKER_EXIT_START_DELAY_DIVISOR 8U
@@ -70,10 +74,9 @@ static inline void player_prefetch_data(const void *ptr)
 #define PICKER_EXIT_LOADING_DELAY_MS PICKER_EXIT_TO_LOADING_ANIM_MS
 #define PICKER_EXIT_INACTIVE UINT32_MAX
 #define PICKER_PRESS_RELEASE_ANIM_MS 94U
-#define PICKER_HOVER_SCROLL_EDGE_PX 18
 #define PICKER_HOVER_SCROLL_REPEAT_MS 145U
 #define PICKER_SCROLL_ANIM_MS 118U
-#define PICKER_ROW_STEP_PX 20
+#define PICKER_ROW_STEP_PX 30
 #define PROMPT_BUTTON_ANIM_MS 90U
 #define UI_CHROME_ANIM_MS 115U
 #define UI_HOVER_ANIM_MS 105U
@@ -198,6 +201,9 @@ typedef struct {
     uint32_t resume_frame;
     uint32_t resume_ms;
     uint32_t duration_ms;
+    MovieCodec metadata_codec;
+    uint32_t folder_files, folder_folders, folder_count_ready_ms;
+    bool folder_count_checked, folder_count_valid;
     bool has_resume;
     bool resume_time_known;
     bool timing_checked;
@@ -728,7 +734,6 @@ extern Movie *g_deferred_playback_movie;
 extern MoviePickerCache g_picker_cache;
 extern DeferredHistorySave g_pending_history_save;
 extern DisplayPowerState g_display_power_state;
-extern char g_pending_theme_directory[MAX_PATH_LEN];
 extern bool g_pending_theme_save;
 extern const PlaybackRate g_playback_rates[PLAYBACK_RATE_COUNT];
 extern const int g_subtitle_font_choices[SUBTITLE_FONT_CHOICE_COUNT];
@@ -867,10 +872,8 @@ bool save_history_store_to_path(const char *history_path, const HistoryStore *hi
 bool save_history_store(const char *movie_path, const HistoryStore *history);
 unsigned history_load_clock_preference(const char *app_path, bool *keep_after_exit);
 bool history_save_clock_preference(const char *app_path, unsigned mhz, bool keep_after_exit);
-void ui_load_theme_for_directory(const char *directory);
-void ui_write_theme_for_directory(const char *directory);
-void ui_save_theme_for_directory(const char *directory);
-void ui_save_theme_for_movie(const char *movie_path);
+void ui_load_theme(void);
+void ui_queue_theme_save(void);
 void flush_queued_theme_save(const char *reason);
 int history_find_entry_index(const HistoryStore *history, const char *movie_path);
 void history_remove_entry(HistoryStore *history, const char *movie_path);
@@ -937,6 +940,9 @@ int reload_h264_chunk_step(Movie *movie, int chunk_index, size_t *offset, unsign
 void free_movie_files(MovieFile *files, size_t count);
 void clear_movie_picker_cache(MoviePickerCache *cache);
 void movie_picker_timing_stop(void);
+bool movie_picker_metadata_pending(const MovieFile *);
+void picker_folder_counts_step(MovieFile *);
+void picker_folder_counts_stop(void);
 void movie_picker_timing_tick(MovieFile *files, size_t count, size_t preferred);
 /* 1 authorized, 0 cancelled; explicit OS-exit results use PLAY_MOVIE_RESULT_*. */
 /* Optional backdrop redraw during closing; elapsed time starts with dismissal.
@@ -944,7 +950,9 @@ void movie_picker_timing_tick(MovieFile *files, size_t count, size_t preferred);
 typedef void (*UnlockBackdropDraw)(SDL_Surface *, void *, uint32_t closing_elapsed_ms);
 int unlock_movie_prompt(SDL_Surface *screen, const Fonts *fonts, const char *path,
                         UnlockBackdropDraw draw_backdrop, void *backdrop_context);
+void unlock_movie_debug(FILE *file);
 void draw_lock_icon(SDL_Surface *screen, int x, int y, uint8_t mix);
+void draw_lock_icon_tinted(SDL_Surface *screen, int x, int y, Uint16 color, uint8_t mix);
 void free_history_store(HistoryStore *history);
 
 /* movie_resources.c */
@@ -983,6 +991,7 @@ void debug_trace_runtime_snapshot( Movie *movie, bool paused, uint32_t spare_ms,
 bool debug_dump_session(const char *path, const Movie *movie, const char *reason);
 bool debug_dump_failure(const char *path, const Movie *movie, const char *reason);
 void report_app_failure(const char *app_path, const char *reason, const char *message);
+bool save_failure_report(const char *path, const Movie *movie, const char *reason);
 void show_pending_movie_error(void);
 void debug_log_sram_status(void);
 
@@ -1010,15 +1019,16 @@ bool playback_seek_step(Movie *movie, PlaybackSeek *seek, SeekBarPreviewState *p
 
 /* picker_ui.c */
 SDL_Rect picker_row_rect_for_y(int row_y);
+int picker_item_step(const MovieFile *files, size_t index);
 SDL_Rect picker_row_divider_rect(const SDL_Rect *row);
 size_t picker_scroll_start_centered(size_t count, size_t selected);
 size_t picker_scroll_start_clamped(size_t count, size_t start_index);
 size_t picker_scroll_start_for_selection(size_t count, size_t selected, size_t start_index);
 void movie_picker_cache_remember_position( MoviePickerCache *cache, size_t count, size_t selected, size_t scroll_start );
-void picker_scroll_anim_view( PickerScrollAnim *anim, size_t scroll_start, uint32_t now_ms, size_t *display_start, int *offset_y );
+void picker_scroll_anim_view( const MovieFile *files, PickerScrollAnim *anim, size_t scroll_start, uint32_t now_ms, size_t *display_start, int *offset_y );
 void picker_scroll_to( size_t count, size_t *scroll_start, PickerScrollAnim *anim, size_t next_start, uint32_t now_ms );
 int picker_hover_scroll_direction(size_t count, size_t start_index, const PointerState *pointer);
-int picker_row_index_at(size_t count, size_t start_index, int row_offset_y, int x, int y);
+int picker_row_index_at(const MovieFile *files, size_t count, size_t start_index, int row_offset_y, int x, int y);
 bool picker_resume_badge_rect(const Fonts *fonts, const MovieFile *file, int row_y, SDL_Rect *rect);
 int picker_resume_badge_index_at( const Fonts *fonts, MovieFile *files, size_t count, size_t start_index, int row_offset_y, int x, int y );
 void draw_loading_overlay_mix( SDL_Surface *screen, const Fonts *fonts, const char *label, int phase, uint8_t mix, bool opening );
@@ -1182,6 +1192,11 @@ void clear_seek_bar_preview(SeekBarPreviewState *preview);
 void suppress_seek_bar_preview_rebuild(SeekBarPreviewState *preview, int marker_x, uint32_t frame_index);
 bool monotonic_clock_try_init_hw_timer(void);
 void monotonic_clock_init(void);
+void monotonic_clock_debug(FILE *file);
+void monotonic_clock_capture_native_timer(void);
+bool monotonic_clock_enter_native(const volatile uint32_t *counter, uint32_t hz);
+void monotonic_clock_leave_native(void);
+bool monotonic_clock_restore_player_timer(void);
 uint32_t monotonic_clock_ticks_per_second(void);
 uint64_t monotonic_clock_now_ticks(void);
 uint32_t monotonic_clock_ticks_to_ms(uint64_t ticks);
@@ -1240,8 +1255,9 @@ void draw_status_overlay_badge( SDL_Surface *screen, const Fonts *fonts, int lef
 void draw_playback_title_strip( SDL_Surface *screen, const Fonts *fonts, const SDL_Rect *video_rect, ScaleMode scale_mode, const PlaybackRate *playback_rate, const char *title, const char *detail, bool encrypted, uint8_t mix );
 void draw_centered_text_badge(SDL_Surface *screen, const Fonts *fonts, int center_x, int y, const char *label);
 int header_shortcut_badge_width(const Fonts *fonts, const char *key, const char *action);
+void draw_header_shortcut_badge_animated(SDL_Surface *, const Fonts *, int, int,
+                                         const char *, const char *, uint8_t, uint8_t, uint8_t);
 void draw_header_shortcut_badge( SDL_Surface *screen, const Fonts *fonts, int x, int y, const char *key, const char *action, uint8_t mix );
-void draw_header_shortcuts(SDL_Surface *screen, const Fonts *fonts, int y, uint8_t mix, bool can_back);
 void draw_surface_panel(SDL_Surface *screen, SDL_Surface *surface, int x, int y);
 void draw_seek_preview_panel(SDL_Surface *screen, SDL_Surface *surface, int x, int y, int marker_x, uint8_t panel_mix);
 void draw_screenshot_preview_osd( SDL_Surface *screen, const Fonts *fonts, const ScreenshotPreviewState *preview, uint32_t now_ms );
@@ -1271,6 +1287,7 @@ uint32_t progress_bar_denominator(const SDL_Rect *bar);
 int progress_bar_marker_x_from_pointer(const SDL_Rect *bar, int pointer_x);
 uint32_t progress_bar_ms_for_marker(const Movie *movie, const SDL_Rect *bar, int marker_x);
 bool progress_bar_target_frame_for_marker(const Movie *movie, const SDL_Rect *bar, int marker_x, uint32_t *out_target_frame, uint32_t *out_target_ms);
+uint32_t progress_bar_width_for_frame(const Movie *movie, const SDL_Rect *bar, uint32_t frame);
 UiThemeId ui_theme_clamp(int theme_id);
 const UiThemePalette *ui_theme(void);
 const char *ui_theme_name(UiThemeId theme_id);
@@ -1291,6 +1308,7 @@ void draw_rect_outline_rgb565(SDL_Surface *screen, const SDL_Rect *rect, Uint16 
 void cut_rect_corners(SDL_Surface *screen, const SDL_Rect *rect, Uint16 color);
 Uint16 picker_background_color_at_y(int y);
 Uint16 picker_background_color_at_y_mix(int y, uint8_t mix);
+Uint16 picker_text_color(bool secondary);
 int ui_mix_int(int from, int to, uint8_t mix);
 Sint16 ui_mix_sint16(int from, int to, uint8_t mix);
 Uint16 ui_mix_uint16(int from, int to, uint8_t mix);
@@ -1309,6 +1327,7 @@ void draw_soft_glass_panel_body_from_y( SDL_Surface *screen, const SDL_Rect *pan
 void draw_soft_glass_panel_rim(SDL_Surface *screen, const SDL_Rect *rect, Uint16 base_color, uint8_t selected_mix);
 void draw_soft_glass_panel(SDL_Surface *screen, const SDL_Rect *rect, Uint16 base_color, bool is_selected);
 void draw_ui_label(SDL_Surface *screen, const Fonts *fonts, int x, int y, const char *label);
+void draw_ui_label_tint(SDL_Surface *screen, const Fonts *fonts, int x, int y, const char *label, Uint16 color, uint8_t mix);
 bool surface_pixel_has_ink(SDL_Surface *surface, int x, int y);
 bool font_char_ink_bounds(nSDL_Font *font, unsigned char ch, int *out_min_x, int *out_max_x);
 int font_char_advance_width(nSDL_Font *font, unsigned char ch);

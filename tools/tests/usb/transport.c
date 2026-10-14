@@ -8,10 +8,11 @@ enum { CMD = 0x10 / 4, STATUS = 0x14 / 4, IMASK = 0x18 / 4, LIST = 0x28 / 4, POR
 static struct {
     uint32_t reg[16], clock, tag, clean, invalid, barriers;
     unsigned stage, stuck_native, stuck_private, stuck_force, never_complete, bad_csw, short_data,
+        delayed_polls, tick_calls, tick_divisor, frozen_clock,
         disconnect, token_error;
     bool private_dma;
 } sim;
-static unsigned char bounce[4096];
+static unsigned char bounce[USB_READ_BYTES];
 static UsbQueueHead queue;
 static UsbQtd descriptor;
 static UsbTransport transport;
@@ -27,8 +28,12 @@ static uint32_t get(const unsigned char *p)
 static uint32_t readreg(void *unused, unsigned offset)
 {
     (void)unused;
-    if (offset == 0x14 && sim.private_dma && !sim.never_complete && (descriptor.token & 0x80)) {
+    if (offset == 0x14 && sim.private_dma && sim.delayed_polls)
+        --sim.delayed_polls;
+    else if (offset == 0x14 && sim.private_dma && !sim.never_complete && (descriptor.token & 0x80)) {
         unsigned bytes = (descriptor.token >> 16) & 0x7fff;
+        for (unsigned i = 0; i < (bytes + 4095U) / 4096U; ++i)
+            assert(descriptor.buffer[i] == transport.bounce_physical + i * 4096U);
         bool input = (descriptor.token & 0x300) == 0x100;
         if (!input && bytes == 31) {
             assert(get(bounce) == 0x43425355);
@@ -83,7 +88,11 @@ static void writereg(void *unused, unsigned offset, uint32_t value)
 static uint32_t tick(void *u)
 {
     (void)u;
-    return ++sim.clock;
+    if (!sim.frozen_clock && ++sim.tick_calls >= (sim.tick_divisor ? sim.tick_divisor : 1)) {
+        sim.tick_calls = 0;
+        ++sim.clock;
+    }
+    return sim.clock;
 }
 static void clean(void *u, void *p, size_t n)
 {
@@ -157,7 +166,7 @@ int main(void)
     restored();
     ++cases;
     init();
-    assert(!usb_transport_begin(&transport, true, NULL, 4097));
+    assert(!usb_transport_begin(&transport, true, NULL, USB_READ_BYTES + 1));
     assert(!usb_transport_begin(&transport, false, NULL, 1));
     assert(!usb_transport_begin(&transport, true, NULL, 0));
     ++cases;
@@ -175,6 +184,22 @@ int main(void)
     assert(transport.error == USB_TRANSPORT_TIMEOUT);
     restored();
     ++cases;
+    /* Many CPU polls, but less than one second of actual device latency. */
+    init();
+    sim.tick_divisor = 64;
+    sim.delayed_polls = 120000;
+    assert(usb_transport_begin(&transport, true, NULL, 512));
+    int slow_result = 0;
+    for (unsigned i = 0; i < 130000 && !slow_result; ++i)
+        slow_result = usb_transport_step(&transport);
+    assert(slow_result == 1 && transport.timeouts == 0);
+    restored(); ++cases;
+    init();
+    sim.frozen_clock = sim.never_complete = 1;
+    assert(usb_transport_begin(&transport, true, NULL, 512));
+    assert(finish() == -1 && transport.timeout_polls == 65536);
+    assert(transport.timeout_phase == USB_TRANSFER_WAIT && transport.timeout_elapsed == 0);
+    restored(); ++cases;
     for (unsigned force = 0; force < 2; ++force) {
         init();
         sim.stuck_private = 1;
@@ -224,6 +249,23 @@ int main(void)
             for (unsigned i = 0; i < sizeof(data); ++i)
                 assert(data[i] == (unsigned char)(i * 17 + 3));
         ++cases;
+    }
+    for (unsigned bytes = 4097; bytes <= USB_READ_BYTES; bytes = bytes == 4097 ? 8192 : bytes * 2) {
+        init(); UsbScsi scsi; usb_scsi_init(&scsi, &transport);
+        unsigned char large[USB_READ_BYTES], command[10] = {0x28};
+        assert(usb_scsi_begin(&scsi, command, 10, large, bytes, true));
+        int result = 0;
+        for (unsigned i = 0; i < 1000 && !result; ++i) result = usb_scsi_step(&scsi);
+        assert(result == 1);
+        for (unsigned i = 0; i < bytes; ++i) assert(large[i] == (unsigned char)(i * 17 + 3));
+        restored(); ++cases;
+    }
+    init(); assert(!usb_transport_begin(&transport, true, NULL, USB_READ_BYTES + 1)); ++cases;
+    for (unsigned packet = 8; packet <= 64; packet *= 2) {
+        init(); transport.high_speed = false; transport.packet_in = packet;
+        assert(usb_transport_begin(&transport, true, NULL, USB_READ_BYTES));
+        assert(((queue.endpoint >> 12) & 3) == 0 && ((queue.endpoint >> 16) & 0x7ff) == packet);
+        assert(finish() == 1); restored(); ++cases;
     }
     printf("PASS %u cases: DMA sequencing, cache handoff, interrupt preservation, bounded "
            "timeouts, disconnect/cancel, poisoned ownership, BOT integrity\n",

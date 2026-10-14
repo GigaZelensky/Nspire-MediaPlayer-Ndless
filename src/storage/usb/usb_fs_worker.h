@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 typedef struct {
     void (*run)(void *);
     void *argument;
@@ -17,6 +18,9 @@ void usb_fs_context_resume(UsbFsContext *);
 void usb_fs_context_yield(UsbFsContext *);
 void usb_fs_context_destroy(UsbFsContext *);
 bool usb_fs_submit(UsbFsJob *);
+/* Allocate the worker at a safe native-OS boundary, before polled I/O. */
+bool usb_fs_prepare(void);
+void usb_fs_debug(FILE *);
 void usb_fs_service(uint32_t);
 void usb_fs_cancel(UsbFsJob *);
 void usb_fs_cancel_active(void);

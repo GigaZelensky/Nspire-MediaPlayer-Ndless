@@ -1,3 +1,5 @@
+#include "player_data.h"
+#include "native_interrupts.h"
 #include "player_internal.h"
 #include "native_screen_power.h"
 #include "media_browser.h"
@@ -55,7 +57,7 @@ void patch_cx2_lcd_edge_timing(void)
     volatile uint32_t *timing_1 = (volatile uint32_t *) 0xC0000004;
     uint32_t timing;
 
-    if (!is_cx2) {
+    if (!nspire_is_cx2()) {
         return;
     }
 
@@ -297,32 +299,6 @@ bool ensure_prefetch_budget(Movie *movie, int requested_chunk, size_t required_b
     return true;
 }
 
-static void report_path_for_movie(const char *movie_path, const char *name, char *log_path, size_t log_path_size)
-{
-    char directory[MAX_PATH_LEN];
-    char *slash;
-
-    if (!log_path || log_path_size == 0) {
-        return;
-    }
-    if (!movie_path || movie_path[0] == '\0') {
-        snprintf(log_path, log_path_size, "%s", name);
-        return;
-    }
-
-    snprintf(directory, sizeof(directory), "%s", movie_path);
-    slash = strrchr(directory, '/');
-    if (!slash) {
-        slash = strrchr(directory, '\\');
-    }
-    if (slash) {
-        *slash = '\0';
-        snprintf(log_path, log_path_size, "%s/%s", media_local_directory(directory), name);
-    } else {
-        snprintf(log_path, log_path_size, "%s", name);
-    }
-}
-
 void show_pending_movie_error(void)
 {
     PlayerMessage message;
@@ -333,15 +309,17 @@ void show_pending_movie_error(void)
 
 void debug_log_path_for_movie(const char *movie_path, char *log_path, size_t log_path_size)
 {
-    report_path_for_movie(movie_path, "ndvideo-debug.log", log_path, log_path_size);
+    (void)movie_path;
+    player_data_path("ndvideo-debug.log.tns", log_path, log_path_size);
 }
 
-static bool save_failure_report(const char *path, const Movie *movie, const char *reason)
+bool save_failure_report(const char *path, const Movie *movie, const char *reason)
 {
     char log_path[MAX_PATH_LEN];
     /* Keep a fatal report separate from an earlier D recording. No recording
      * buffers or periodic writes are enabled just to report this failure. */
-    report_path_for_movie(path, "ndvideo-error.log.tns", log_path, sizeof(log_path));
+    (void)path;
+    player_data_path("ndvideo-error.log.tns", log_path, sizeof(log_path));
     return debug_dump_failure(log_path, movie, reason);
 }
 
@@ -351,12 +329,15 @@ void report_app_failure(const char *app_path, const char *reason, const char *me
     bool saved = save_failure_report(app_path, NULL, reason);
     char text[192];
     snprintf(text, sizeof(text), "%.120s\n%s", message,
-        saved ? "See ndvideo-error.log.tns." : "Error report could not be saved.");
+        saved ? "See ndvideo-data/ndvideo-error.log.tns." : "Error report could not be saved.");
     show_msgbox("ND Video Player", text);
 }
 
 void report_movie_decode_failure(Movie *movie, const char *movie_path, const char *reason)
 {
+    if (!strcmp(debug_last_error(), "unknown"))
+        debug_failf("Playback %s failed frame=%lu chunk=%d", reason ? reason : "decode",
+            (unsigned long)(movie ? movie->current_frame : 0U), movie ? movie->loaded_chunk : -1);
     player_crash_trace_end(movie, PLAYER_CRASH_ERROR);
     movie_async_stop(movie);
     screenshot_writer_shutdown();
@@ -800,7 +781,7 @@ static size_t lcd_manual_brightness_nearest_index(uint32_t raw_value)
 
 uint32_t current_lcd_brightness(void)
 {
-    if (is_cx2) {
+    if (nspire_is_cx2()) {
         return (uint32_t) clamp_int((int) *LCD_BRIGHTNESS_CX2_ADDR,
             LCD_BRIGHTNESS_MIN,
             LCD_BRIGHTNESS_MAX);
@@ -812,7 +793,7 @@ uint32_t set_lcd_brightness(int value)
 {
     uint32_t clamped = (uint32_t) clamp_int(value, LCD_BRIGHTNESS_MIN, LCD_BRIGHTNESS_MAX);
 
-    if (is_cx2) {
+    if (nspire_is_cx2()) {
         *LCD_BRIGHTNESS_CX2_ADDR = clamped;
     } else {
         *LCD_BRIGHTNESS_CX_ADDR = brightness_raw_to_cx_level(clamped);
@@ -822,7 +803,7 @@ uint32_t set_lcd_brightness(int value)
 
 void set_lcd_dark_for_power_off(void)
 {
-    if (is_cx2) {
+    if (nspire_is_cx2()) {
         set_lcd_brightness(LCD_BRIGHTNESS_MAX);
     } else {
         *LCD_BRIGHTNESS_CX_ADDR = LCD_BRIGHTNESS_CX_BACKLIGHT_OFF;
@@ -885,9 +866,13 @@ static void display_power_blank_hardware(void)
 {
     player_crash_trace_power_event(PLAYER_CRASH_OFF_BEGIN);
     set_lcd_dark_for_power_off();
-    /* Unsupported devices keep the existing fallback. Partial native changes
-     * retain restoration ownership in the screen-power module. */
-    (void)native_screen_power_off();
+    /* A failed/unsupported LED transition must still hide the content.
+     * Partial native changes retain restoration ownership for wake/cleanup. */
+    int result = native_screen_power_off();
+    if (result != NATIVE_SCREEN_POWER_OK) {
+        debug_tracef("Screen-off status=%d; showing a black frame", result);
+        present_black_screen(SDL_GetVideoSurface());
+    }
     player_crash_trace_power_event(PLAYER_CRASH_OFF_END);
 }
 
@@ -1113,6 +1098,7 @@ void display_power_off(DisplayPowerState *state, bool was_paused)
     display_power_blank_hardware();
     state->off = true;
     state->off_started_ms = monotonic_clock_now_ms();
+    if (!native_screen_power_is_off()) present_black_screen(SDL_GetVideoSurface());
 }
 
 void display_power_request_off(DisplayPowerState *state, bool was_paused, uint32_t now_ms)
@@ -1145,6 +1131,7 @@ void display_power_tick_transition(DisplayPowerState *state, uint32_t now_ms)
     display_power_blank_hardware();
     state->off = true;
     state->off_started_ms = monotonic_clock_now_ms();
+    if (!native_screen_power_is_off()) present_black_screen(SDL_GetVideoSurface());
 }
 
 void display_power_off_with_saved_brightness(DisplayPowerState *state, SDL_Surface *screen, uint32_t saved_brightness, bool was_paused)
@@ -1459,6 +1446,133 @@ void suppress_seek_bar_preview_rebuild(SeekBarPreviewState *preview, int marker_
     preview->suppress_frame_index = frame_index;
 }
 
+static struct {
+    uint32_t rebases, fallbacks, previous, current, control, source;
+} timer_discontinuity;
+
+void monotonic_clock_debug(FILE *file)
+{
+    if (file)
+        fprintf(file, "monotonic_clock hardware=%u rebases=%lu fallbacks=%lu last_previous=%08lx last_current=%08lx last_control=%08lx last_source=%08lx\n",
+            g_clock.using_hw_timer, (unsigned long)timer_discontinuity.rebases,
+            (unsigned long)timer_discontinuity.fallbacks, (unsigned long)timer_discontinuity.previous,
+            (unsigned long)timer_discontinuity.current, (unsigned long)timer_discontinuity.control,
+            (unsigned long)timer_discontinuity.source);
+}
+
+typedef struct {
+    uint32_t load, control, source;
+} TimerSnapshot;
+
+static struct {
+    TimerSnapshot entry, player;
+    const volatile uint32_t *counter;
+    uint32_t hz, last, fraction;
+    bool captured, active;
+} native_clock;
+
+static TimerSnapshot timer_snapshot(void)
+{
+    return (TimerSnapshot){*(volatile uint32_t *)0x900c0000U,
+                           *(volatile uint32_t *)MONOTONIC_TIMER_CONTROL_ADDR,
+                           *(volatile uint32_t *)MONOTONIC_TIMER_CLOCK_SOURCE_ADDR};
+}
+
+static void timer_restore(TimerSnapshot state)
+{
+    *(volatile uint32_t *)MONOTONIC_TIMER_CONTROL_ADDR &= ~0x80U;
+    *(volatile uint32_t *)MONOTONIC_TIMER_CONTROL_ADDR = state.control & ~0x80U;
+    *(volatile uint32_t *)MONOTONIC_TIMER_CLOCK_SOURCE_ADDR = state.source;
+    *(volatile uint32_t *)0x900c0000U = state.load;
+    *(volatile uint32_t *)MONOTONIC_TIMER_CONTROL_ADDR = state.control;
+}
+
+static uint32_t timer_value(void)
+{
+    return *(const volatile uint32_t *)MONOTONIC_TIMER_VALUE_ADDR;
+}
+static bool timer_start_player(TimerSnapshot state, uint32_t *baseline)
+{
+    /* TimerLoad crosses the timer clock domain. An immediate read can still
+     * precede the reload (observed FFFD0000 -> FFFFFFFF). Do not start USB/UI
+     * deltas from that transient old value. Native entry state stays separate. */
+    state.load = UINT32_MAX;
+    timer_restore(state);
+    uint32_t previous = timer_value();
+    unsigned moving = 0;
+    for (unsigned polls = 0; polls < 131072U; ++polls) {
+        uint32_t current = timer_value();
+        uint32_t delta = previous - current;
+        if (polls >= 32768U && UINT32_MAX-current <= 8192U && delta && delta < 8192U) {
+            if (++moving >= 2U) { *baseline = current; return true; }
+        }
+        previous = current;
+    }
+    return false;
+}
+
+void monotonic_clock_capture_native_timer(void)
+{
+    /* SDL also configures this timer. Capture the OS state before SDL_Init. */
+    native_clock.entry = timer_snapshot();
+    native_clock.captured = true;
+}
+
+bool monotonic_clock_enter_native(const volatile uint32_t *counter, uint32_t hz)
+{
+    if (!native_clock.captured || native_clock.active || !counter || !hz || hz > 10000U ||
+        !g_clock.initialized || !g_clock.using_hw_timer)
+        return false;
+    unsigned mask = native_critical_enter();
+    monotonic_clock_now_ticks();
+    if (!g_clock.using_hw_timer) {
+        native_critical_leave(mask);
+        return false;
+    }
+    native_clock.player = timer_snapshot();
+    native_clock.counter = counter;
+    native_clock.hz = hz;
+    native_clock.last = *counter;
+    native_clock.fraction = 0;
+    timer_restore(native_clock.entry);
+    native_clock.active = true;
+    native_critical_leave(mask);
+    return true;
+}
+
+void monotonic_clock_leave_native(void)
+{
+    if (!native_clock.active)
+        return;
+    unsigned mask = native_critical_enter();
+    monotonic_clock_now_ticks();
+    uint32_t baseline;
+    if (timer_start_player(native_clock.player, &baseline)) {
+        g_clock.last_value = baseline;
+        g_clock.using_hw_timer = true;
+    } else g_clock.using_hw_timer = false;
+    native_clock.active = false;
+    native_critical_leave(mask);
+}
+
+bool monotonic_clock_restore_player_timer(void)
+{
+    /* Only use this at an idle I/O boundary. Native helpers can touch the
+     * SDL/app timer even after we left the native-clock scope. Restore the
+     * owned snapshot without changing elapsed time or the OS entry snapshot. */
+    if (!native_clock.captured || native_clock.active || !g_clock.initialized ||
+        native_clock.player.control != MONOTONIC_TIMER_CONTROL_ENABLE_32BIT ||
+        native_clock.player.source != MONOTONIC_TIMER_CLOCK_SOURCE_32768HZ)
+        return false;
+    unsigned mask = native_critical_enter();
+    uint32_t baseline;
+    bool restored = timer_start_player(native_clock.player, &baseline);
+    if (restored) g_clock.last_value = baseline;
+    g_clock.using_hw_timer = restored;
+    native_critical_leave(mask);
+    return restored;
+}
+
 bool monotonic_clock_try_init_hw_timer(void)
 {
     g_clock.value_reg = (volatile unsigned *) MONOTONIC_TIMER_VALUE_ADDR;
@@ -1467,13 +1581,11 @@ bool monotonic_clock_try_init_hw_timer(void)
     g_clock.original_control = *g_clock.control_reg;
     g_clock.original_speed = *g_clock.speed_reg;
 
-    *g_clock.control_reg = 0;
-    *g_clock.speed_reg = MONOTONIC_TIMER_CLOCK_SOURCE_32768HZ;
-    *g_clock.control_reg = MONOTONIC_TIMER_CONTROL_ENABLE_32BIT;
-
-    g_clock.last_value = (uint32_t) *g_clock.value_reg;
-    g_clock.using_hw_timer = true;
-    return true;
+    uint32_t baseline;
+    g_clock.using_hw_timer = timer_start_player((TimerSnapshot){UINT32_MAX,
+        MONOTONIC_TIMER_CONTROL_ENABLE_32BIT, MONOTONIC_TIMER_CLOCK_SOURCE_32768HZ}, &baseline);
+    if (g_clock.using_hw_timer) g_clock.last_value = baseline;
+    return g_clock.using_hw_timer;
 }
 
 void monotonic_clock_init(void)
@@ -1499,10 +1611,35 @@ uint64_t monotonic_clock_now_ticks(void)
     if (!g_clock.initialized) {
         return 0;
     }
+    if (native_clock.active) {
+        uint32_t current = *native_clock.counter;
+        uint32_t elapsed = current - native_clock.last;
+        native_clock.last = current;
+        uint64_t scaled = (uint64_t)elapsed * ticks_per_second + native_clock.fraction;
+        g_clock.elapsed_ticks += scaled / native_clock.hz;
+        native_clock.fraction = scaled % native_clock.hz;
+        return g_clock.elapsed_ticks;
+    }
     if (g_clock.using_hw_timer) {
         uint32_t current_value = (uint32_t) *g_clock.value_reg;
         uint32_t elapsed = g_clock.last_value - current_value;
         if (elapsed > MONOTONIC_TIMER_MAX_DELTA_TICKS) {
+            uint32_t control = *g_clock.control_reg, source = *g_clock.speed_reg;
+            timer_discontinuity.previous = g_clock.last_value;
+            timer_discontinuity.current = current_value;
+            timer_discontinuity.control = control;
+            timer_discontinuity.source = source;
+            if (control == MONOTONIC_TIMER_CONTROL_ENABLE_32BIT &&
+                source == MONOTONIC_TIMER_CLOCK_SOURCE_32768HZ) {
+                /* Native setup can reload a still-valid player timer. Treat
+                 * that discontinuity as a new baseline, not a permanent loss
+                 * of hardware timing. Never feed its wrap-sized delta into UI
+                 * deadlines or switch to SDL's OS-dependent clock here. */
+                ++timer_discontinuity.rebases;
+                g_clock.last_value = current_value;
+                return g_clock.elapsed_ticks;
+            }
+            ++timer_discontinuity.fallbacks;
             g_clock.using_hw_timer = false;
             sdl_ticks = (((uint64_t) SDL_GetTicks()) * ticks_per_second) / 1000ULL;
             if (sdl_ticks > g_clock.elapsed_ticks) {
@@ -1536,7 +1673,10 @@ uint32_t monotonic_clock_now_ms(void)
 
 void monotonic_clock_shutdown(void)
 {
-    if (g_clock.control_reg) {
+    monotonic_clock_leave_native();
+    if (native_clock.captured) {
+        timer_restore(native_clock.entry);
+    } else if (g_clock.control_reg) {
         *g_clock.control_reg = 0;
         if (g_clock.speed_reg) {
             *g_clock.speed_reg = g_clock.original_speed;

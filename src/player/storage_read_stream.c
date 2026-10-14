@@ -21,7 +21,8 @@
 struct StorageReadStream {
     void *native;
     UsbFile *usb;
-    uint32_t bytes, inode;
+    uint64_t bytes;
+    uint32_t inode;
     NveReader *crypt;
 };
 typedef struct {
@@ -43,7 +44,8 @@ typedef struct {
 static StorageOpenFailure open_failure;
 static struct {
     bool valid;
-    uint32_t offset, bytes, raw_error, nand_error, cx_error;
+    uint64_t offset;
+    uint32_t bytes, raw_error, nand_error, cx_error;
     int error;
     NandPageKind kind;
     CxNandSnapshot cx;
@@ -75,8 +77,8 @@ void storage_read_stream_debug(FILE *file)
             (unsigned long)open_failure.ttbr, (unsigned long)open_failure.dacr,
             (unsigned long)open_failure.capabilities, (unsigned long)open_failure.fault);
     if (read_failure.valid) {
-        fprintf(file, "last_read_failure errno=%d offset=%lu bytes=%lu raw_error=%lu nand_error=%lu kind=%u\n",
-            read_failure.error, (unsigned long)read_failure.offset, (unsigned long)read_failure.bytes,
+        fprintf(file, "last_read_failure errno=%d offset=%llu bytes=%lu raw_error=%lu nand_error=%lu kind=%u\n",
+            read_failure.error, (unsigned long long)read_failure.offset, (unsigned long)read_failure.bytes,
             (unsigned long)read_failure.raw_error, (unsigned long)read_failure.nand_error,
             (unsigned)read_failure.kind);
         if (read_failure.kind == NAND_PAGE_CX_PL351)
@@ -193,16 +195,16 @@ StorageReadStream *storage_read_stream_open(const char *path, int *error)
         set_error(error, EINVAL);
         return NULL;
     }
-    if (!claim(true, error)) {
+    bool is_usb = usb_path(path);
+    if (!claim(!is_usb, error)) {
         record_open_failure("ownership", EBUSY, 0);
         return NULL;
     }
-    if (usb_path(path)) {
-        if (!claim(false, error))
-            return NULL;
+    if (is_usb) {
         StorageReadStream *stream = allocate(sizeof(*stream));
         if (!stream) {
             active = false;
+            native_critical_leave(entry_mask);
             set_error(error, ENOMEM);
             return NULL;
         }
@@ -212,6 +214,7 @@ StorageReadStream *storage_read_stream_open(const char *path, int *error)
             open_failure.status = error ? *error : EIO;
             dispose(stream);
             active = false;
+            native_critical_leave(entry_mask);
             return NULL;
         }
         stream->bytes = usb_file_size(stream->usb);
@@ -222,6 +225,7 @@ StorageReadStream *storage_read_stream_open(const char *path, int *error)
                 usb_file_close(stream->usb);
                 dispose(stream);
                 active = false;
+                native_critical_leave(entry_mask);
                 set_error(error, EIO);
                 return NULL;
             }
@@ -303,11 +307,11 @@ StorageReadStream *storage_read_stream_open(const char *path, int *error)
     native_critical_leave(entry_mask);
     return stream;
 }
-uint32_t storage_read_stream_size(const StorageReadStream *stream)
+uint64_t storage_read_stream_size(const StorageReadStream *stream)
 {
     return stream ? (stream->crypt ? stream->crypt->keys->header.plain_bytes : stream->bytes) : 0;
 }
-static int read_raw_at(StorageReadStream *stream, uint32_t offset, void *destination,
+static int read_raw_at(StorageReadStream *stream, uint64_t offset, void *destination,
                                 uint32_t bytes, int *error)
 {
     unsigned entry_mask = native_interrupt_mask();
@@ -424,7 +428,7 @@ finished:
     }
     return (int)copied;
 }
-int storage_read_stream_read_at(StorageReadStream *stream, uint32_t offset, void *destination,
+int storage_read_stream_read_at(StorageReadStream *stream, uint64_t offset, void *destination,
                                 uint32_t bytes, int *error)
 {
     if (!stream || !stream->crypt) return read_raw_at(stream, offset, destination, bytes, error);

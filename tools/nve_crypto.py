@@ -41,17 +41,22 @@ class EncryptedWriter:
     NVP file is created; at most two 16 KiB records are buffered here.
     """
     def __init__(self, path: Path, plain_bytes: int, duration_ms: int, password: bytearray,
-                 frame_count: int, fps_num: int, fps_den: int):
+                 frame_count: int, fps_num: int, fps_den: int, codec_hint: int = 0):
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
         self.Cipher, self.algorithms, self.modes = Cipher, algorithms, modes
+        if codec_hint not in range(5):
+            password[:] = b"\0" * len(password)
+            raise ValueError("Invalid encrypted codec hint.")
         physical = HEADER_BYTES + plain_bytes + TAG_BYTES * ((plain_bytes + RECORD_BYTES - 1) // RECORD_BYTES)
-        if plain_bytes < 48 or physical > 0x7FFFFFFF:
+        if plain_bytes < 48 or physical > 0x7FFFFFFFFFFFFFFF:
             password[:] = b"\0" * len(password)
             raise ValueError("Encrypted movie exceeds the player's file-size limit.")
         if not 1 <= frame_count <= 0xFFFFFFFF or not 1 <= fps_num <= 65535 or not 1 <= fps_den <= 65535:
             password[:] = b"\0" * len(password)
             raise ValueError("Invalid movie timing.")
-        salt, self.nonce = os.urandom(16), os.urandom(12)
+        self.version = 3 if physical > 0xFFFFFFFF else (2 if codec_hint else 1)
+        salt = os.urandom(16)
+        self.nonce = os.urandom(8) + bytes(4) if self.version == 3 else os.urandom(12)
         try:
             master = hashlib.pbkdf2_hmac("sha256", password, salt, KDF_ROUNDS, 32)
         finally:
@@ -59,9 +64,9 @@ class EncryptedWriter:
         self.enc_key = hmac.digest(master, ENC_DOMAIN, "sha256")
         self.mac_key = hmac.digest(master, MAC_DOMAIN, "sha256")
         del master
-        header = struct.pack("<4sIIIQII16s12sII28s", b"NVE1", 1, RECORD_BYTES, KDF_ROUNDS,
+        header = struct.pack("<4sIIIQII16s12sII28s", b"NVE1", self.version, RECORD_BYTES, KDF_ROUNDS,
                              plain_bytes, min(duration_ms, 0xFFFFFFFF), frame_count, salt, self.nonce,
-                             fps_num, fps_den, bytes(28))
+                             fps_num, fps_den, bytes([codec_hint]) + bytes(27))
         self.header_tag = hmac.digest(self.mac_key, HEADER_DOMAIN + header, "sha256")
         self.file = path.open("wb")
         try:
@@ -89,10 +94,11 @@ class EncryptedWriter:
     def _record(self, index: int, plaintext: bytes | bytearray) -> None:
         counter = index * (RECORD_BYTES // 16)
         cipher = self.Cipher(self.algorithms.AES(self.enc_key),
-                             self.modes.CTR(self.nonce + struct.pack(">I", counter))).encryptor()
+                             self.modes.CTR(self.nonce[:8] + struct.pack(">Q", counter) if self.version == 3
+                                            else self.nonce + struct.pack(">I", counter))).encryptor()
         ciphertext = cipher.update(plaintext) + cipher.finalize()
         tag = hmac.digest(self.mac_key, BLOCK_DOMAIN + self.header_tag +
-                          struct.pack("<II", index, len(ciphertext)) + ciphertext, "sha256")
+                          struct.pack("<QI" if self.version == 3 else "<II", index, len(ciphertext)) + ciphertext, "sha256")
         self.file.seek(HEADER_BYTES + index * (RECORD_BYTES + TAG_BYTES))
         self.file.write(ciphertext + tag)
 
@@ -100,7 +106,7 @@ class EncryptedWriter:
         view = memoryview(data)
         size = len(view)
         if self.rewriting:
-            if self.position + size > 48:
+            if self.position + size > 56:
                 raise ValueError("Only the NVP header may be rewritten.")
             self.first[self.position:self.position + size] = view
             self.position += size
@@ -154,6 +160,8 @@ def encrypt_existing(source: Path, output: Path, password: bytearray) -> None:
         if len(header) != 48 or header[:4] != b"NVP1":
             raise ValueError("Input must be an unencrypted NVP movie.")
         values = struct.unpack("<4s12H5I", header)
+        version, flags = values[1:3]
+        codec_hint = 1 if version in (9, 10) else ((flags & 15) + 1 if version in (11, 12) and (flags & 15) < 4 else 0)
         if not values[9] or not values[10]:
             raise ValueError("Invalid movie frame rate.")
         duration_ms = values[13] * values[10] * 1000 // values[9]
@@ -161,7 +169,7 @@ def encrypt_existing(source: Path, output: Path, password: bytearray) -> None:
         output_started = False
         try:
             with EncryptedWriter(output, source.stat().st_size, duration_ms, password,
-                                 values[13], values[9], values[10]) as writer:
+                                 values[13], values[9], values[10], codec_hint) as writer:
                 output_started = True
                 while data := stream.read(65536):
                     writer.write(data)

@@ -7,7 +7,8 @@ void FastMemcpyRows(void *, const void *, uint32_t, uint32_t, uint32_t);
 bool movie_uses_planar_decoder(const Movie *movie)
 {
     return movie && ((NDVIDEO_WITH_HEVC && movie->codec == MOVIE_CODEC_HEVC) ||
-        (NDVIDEO_WITH_AV1 && movie->codec == MOVIE_CODEC_AV1));
+        (NDVIDEO_WITH_AV1 && movie->codec == MOVIE_CODEC_AV1) ||
+        (NDVIDEO_WITH_MPEG4 && movie->codec == MOVIE_CODEC_MPEG4 && movie->mpeg4.planar_supported));
 }
 
 bool movie_uses_decode_ahead(const Movie *movie)
@@ -19,6 +20,8 @@ bool movie_uses_decode_ahead(const Movie *movie)
 bool video_decoder_ready(const Movie *movie)
 {
     if (!movie) return false;
+    if (NDVIDEO_WITH_MPEG4 && movie->codec == MOVIE_CODEC_MPEG4)
+        return movie->mpeg4.decoder && !movie->mpeg4.decoder_failed && movie->mpeg4.planar_supported;
     if (NDVIDEO_WITH_AV1 && movie->codec == MOVIE_CODEC_AV1)
         return movie->av1.decoder && !movie->av1.decoder_failed;
     if (NDVIDEO_WITH_HEVC && movie->codec == MOVIE_CODEC_HEVC)
@@ -52,6 +55,8 @@ bool reset_av1_decoder(Movie *movie)
 
 bool video_decoder_reset(Movie *movie)
 {
+    if (NDVIDEO_WITH_MPEG4 && movie && movie->codec == MOVIE_CODEC_MPEG4)
+        return reset_mpeg4_decoder(movie);
     if (NDVIDEO_WITH_AV1 && movie && movie->codec == MOVIE_CODEC_AV1) return reset_av1_decoder(movie);
     return NDVIDEO_WITH_HEVC && movie && movie->codec == MOVIE_CODEC_HEVC
         ? reset_hevc_decoder(movie) : NDVIDEO_WITH_H264 && reset_h264_decoder(movie);
@@ -59,7 +64,8 @@ bool video_decoder_reset(Movie *movie)
 
 void video_decoder_mark_failed(Movie *movie)
 {
-    if (NDVIDEO_WITH_AV1 && movie->codec == MOVIE_CODEC_AV1) movie->av1.decoder_failed = true;
+    if (NDVIDEO_WITH_MPEG4 && movie->codec == MOVIE_CODEC_MPEG4) movie->mpeg4.decoder_failed = true;
+    else if (NDVIDEO_WITH_AV1 && movie->codec == MOVIE_CODEC_AV1) movie->av1.decoder_failed = true;
     else if (NDVIDEO_WITH_HEVC && movie->codec == MOVIE_CODEC_HEVC) movie->hevc.decoder_failed = true;
     else movie->h264.decoder_failed = true;
 }
@@ -74,6 +80,9 @@ static unsigned hevc_units_per_ctu(const Movie *movie)
 
 unsigned video_decoder_min_units(const Movie *movie)
 {
+    if (NDVIDEO_WITH_MPEG4 && movie->codec == MOVIE_CODEC_MPEG4)
+        return ((movie->header.video_width + 15U) / 16U) *
+               ((movie->header.video_height + 15U) / 16U);
     if (NDVIDEO_WITH_AV1 && movie->codec == MOVIE_CODEC_AV1) {
         unsigned size = av1_block_size(movie->av1.decoder);
         return (size / 16U) * (size / 16U);
@@ -84,6 +93,7 @@ unsigned video_decoder_min_units(const Movie *movie)
 
 uint32_t video_decoder_total_units(const Movie *movie)
 {
+    if (NDVIDEO_WITH_MPEG4 && movie->codec == MOVIE_CODEC_MPEG4) return video_decoder_min_units(movie);
     if (NDVIDEO_WITH_AV1 && movie->codec == MOVIE_CODEC_AV1) {
         unsigned size = av1_block_size(movie->av1.decoder);
         unsigned total = av1_picture_blocks_total(movie->av1.decoder);
@@ -106,6 +116,8 @@ uint32_t video_decoder_total_units(const Movie *movie)
 
 uint32_t video_decoder_done_units(const Movie *movie)
 {
+    if (NDVIDEO_WITH_MPEG4 && movie->codec == MOVIE_CODEC_MPEG4)
+        return movie->mpeg4.picture.plane[0] ? video_decoder_min_units(movie) : 0U;
     if (NDVIDEO_WITH_AV1 && movie->codec == MOVIE_CODEC_AV1)
         return av1_picture_blocks_done(movie->av1.decoder) * video_decoder_min_units(movie);
     if (NDVIDEO_WITH_HEVC && movie->codec == MOVIE_CODEC_HEVC)
@@ -159,6 +171,26 @@ bool video_decoder_pump(Movie *movie, uint8_t *data, size_t size, size_t *consum
     unsigned *retries, unsigned units, uint64_t deadline_ticks,
     bool *ready, bool *pending, uint8_t **picture)
 {
+    if (NDVIDEO_WITH_MPEG4 && movie->codec == MOVIE_CODEC_MPEG4) {
+        *ready = *pending = false; *picture = NULL;
+        if (!video_decoder_ready(movie) || *consumed) return false;
+        movie->mpeg4.chunk_dirty = true;
+        if (!mpeg4_xvid_decode_picture(movie->mpeg4.decoder, data, size,
+                movie->header.video_width, movie->header.video_height,
+                movie->mpeg4.discontinuity, &movie->mpeg4.picture)) {
+            if (!mpeg4_xvid_planar_supported(movie->mpeg4.decoder))
+                movie->mpeg4.planar_supported = false;
+            debug_failf("mpeg4 decode: %s", mpeg4_xvid_last_error());
+            movie->mpeg4.decoder_failed = true;
+            return false;
+        }
+        movie->mpeg4.discontinuity = false;
+        ++movie->mpeg4.submitted_frames;
+        *consumed = size;
+        *picture = (uint8_t *)movie->mpeg4.picture.plane[0];
+        *ready = *picture != NULL;
+        return *ready;
+    }
     if (NDVIDEO_WITH_AV1 && movie->codec == MOVIE_CODEC_AV1)
         return pump_av1(movie, data, size, consumed, units, deadline_ticks, ready, pending, picture);
     if (movie->codec != MOVIE_CODEC_HEVC) {
@@ -213,6 +245,10 @@ fail:
 
 void video_decoder_release_picture(Movie *movie)
 {
+    if (NDVIDEO_WITH_MPEG4 && movie && movie->codec == MOVIE_CODEC_MPEG4) {
+        memset(&movie->mpeg4.picture, 0, sizeof(movie->mpeg4.picture));
+        return;
+    }
     if (NDVIDEO_WITH_AV1 && movie && movie->codec == MOVIE_CODEC_AV1 && movie->av1.decoder) {
         if (av1_get_frame(movie->av1.decoder)) {
             av1_release_frame(movie->av1.decoder);
@@ -236,6 +272,8 @@ void video_decoder_release_picture(Movie *movie)
 bool video_blit_picture_rows(Movie *movie, const uint8_t *picture, uint16_t *pixels,
     size_t pitch, size_t first, size_t rows, bool *flat)
 {
+    if (NDVIDEO_WITH_MPEG4 && movie->codec == MOVIE_CODEC_MPEG4)
+        return blit_planar_picture_rows(movie, &movie->mpeg4.picture, pixels, pitch, first, rows, flat);
     if (movie->codec == MOVIE_CODEC_AV1)
         return blit_planar_picture_rows(movie, movie->av1.picture, pixels, pitch, first, rows, flat);
     return movie->codec == MOVIE_CODEC_HEVC
@@ -399,7 +437,10 @@ bool video_decoder_get_frame_view(const Movie *movie, const uint8_t *raw_picture
 {
     VideoFrame frame = {0};
     if (!movie || !raw_picture || !out) return false;
-    if (NDVIDEO_WITH_HEVC && movie->codec == MOVIE_CODEC_HEVC) {
+    if (NDVIDEO_WITH_MPEG4 && movie->codec == MOVIE_CODEC_MPEG4) {
+        if (movie->mpeg4.decoder_failed) return false;
+        frame = movie->mpeg4.picture;
+    } else if (NDVIDEO_WITH_HEVC && movie->codec == MOVIE_CODEC_HEVC) {
         if (movie->hevc.decoder_failed || !movie->hevc.picture) return false;
         frame = *movie->hevc.picture;
     } else if (NDVIDEO_WITH_AV1 && movie->codec == MOVIE_CODEC_AV1) {

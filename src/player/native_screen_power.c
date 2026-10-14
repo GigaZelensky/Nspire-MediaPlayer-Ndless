@@ -5,15 +5,14 @@
 #include <stddef.h>
 #include <os.h>
 
-#define SCREEN_OFF_ENTRY 0x10004BE0U
-#define SCREEN_ON_ENTRY 0x10004BB8U
+static uint32_t screen_off_entry, screen_on_entry, screen_supervisor_state;
 #define SCREEN_LCD_CONTROL 0xC0000018U
 #define SCREEN_PWM_DUTY 0x90130014U
 #define SCREEN_PWM_PERIOD 0x90130018U
 #define SCREEN_PWM_CONTROL 0x90130020U
 #define SCREEN_LED_SUPPLY 0x90140800U
 #define SCREEN_LED_SUPPLY_BIT 0x10U
-#define SCREEN_SUPERVISOR_STATE 0x113C1348U
+#define SCREEN_SUPERVISOR_STATE screen_supervisor_state
 #define SCREEN_LCD_ENABLE_BITS 0x801U
 #define SCREEN_PWM_BLANK 0xFFFFFU
 
@@ -34,31 +33,96 @@ static void screen_set_duty(uint32_t value)
     __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" : : "r"(0) : "memory");
 }
 
+static uint32_t power_word(const PortableView *v, uint32_t at)
+{
+    uint32_t value = 0;
+    if (!(at & 3U) && v->allow_span(v->context, at, 4, PORTABLE_DATA))
+        v->read_word(v->context, at, &value);
+    return value;
+}
+
+static uint32_t power_branch(const PortableView *v, uint32_t at)
+{
+    uint32_t op = power_word(v, at);
+    if ((op & 0xff000000U) != 0xeb000000U) return 0;
+    uint32_t target = at + 8U + ((int32_t)(op << 8) >> 6);
+    return target >= v->code_begin && target < v->code_end &&
+        v->allow_span(v->context, target, 4, PORTABLE_CODE) ? target : 0;
+}
+
+static bool power_shape(const PortableView *v, uint32_t at, const uint32_t *words, unsigned count)
+{
+    if (!at || !v->allow_span(v->context, at, count * 4U, PORTABLE_CODE)) return false;
+    for (unsigned i = 0; i < count; ++i)
+        if (words[i] && power_word(v, at + i * 4U) != words[i]) return false;
+    return true;
+}
+
+static bool power_wrapper(const PortableView *v, uint32_t at, uint32_t *command, uint32_t *dispatch)
+{
+    const uint32_t shape[] = {0xe59f101cU,0xe52de004U,0xe24dd02cU,0xe3a03000U,
+        0xe1a0000dU,0xe88d000aU,0,0xe28dd02cU,0xe8bd8000U};
+    const uint32_t dispatcher[] = {0xe92d4010U,0xe1a04000U,0,0xe3500000U,
+        0x03e00005U,0x08bd8010U,0xe1a01004U,0,0xe5940008U,0xe8bd8010U};
+    const uint32_t getter[] = {0xe92d4010U,0xe59f401cU,0xe5940000U,0xe3500000U,
+        0x18bd8010U,0xe3e01000U,0xe3a0001bU,0,0xe5840000U,0xe8bd8010U};
+    if (!power_shape(v, at, shape, 9)) return false;
+    *command = power_word(v, at + 36U);
+    *dispatch = power_branch(v, at + 24U);
+    if ((*command != 1001U && *command != 1002U) || !power_shape(v, *dispatch, dispatcher, 10) ||
+        !power_branch(v, *dispatch + 28U)) return false;
+    uint32_t get = power_branch(v, *dispatch + 8U);
+    return power_shape(v, get, getter, 10) && power_branch(v, get + 28U) &&
+        v->allow_span(v->context, power_word(v, get + 40U), 4, PORTABLE_DATA);
+}
+
 static bool screen_validate_platform(void)
 {
-    static const struct {
-        uintptr_t address;
-        uint32_t words[4];
-    } fingerprints[] = {{SCREEN_OFF_ENTRY, {0xE59F101CU, 0xE52DE004U, 0xE24DD02CU, 0xE3A03000U}},
-                        {SCREEN_ON_ENTRY, {0xE59F101CU, 0xE52DE004U, 0xE24DD02CU, 0xE3A03000U}},
-                        {0x10004A74U, {0xE92D4010U, 0xE1A04000U, 0xEBFFFFF1U, 0xE3500000U}},
-                        {0x10006EF0U, {0xE3E0300EU, 0xE92D4070U, 0xE5813008U, 0xE590001CU}},
-                        {0x10004E48U, {0xE3E0300EU, 0xE92D41F0U, 0xE5813008U, 0xE590001CU}},
-                        {0x10004C58U, {0xE59F301CU, 0xE3520000U, 0xE3A02000U, 0xE5832020U}},
-                        {0x100012A4U, {0xE59F2028U, 0xE3833010U, 0xE5823800U, 0xE12FFF1EU}},
-                        {0x10001330U, {0xE59F2028U, 0xE3C33010U, 0xE5823800U, 0xE12FFF1EU}}};
-    unsigned i, j;
-    if (!native_firmware_memory())
-        return false;
-    for (i = 0; i < sizeof(fingerprints) / sizeof(fingerprints[0]); ++i)
-        for (j = 0; j < 4U; ++j)
-            if (screen_word(fingerprints[i].address + j * 4U) != fingerprints[i].words[j])
-                return false;
-    return screen_word(0x10004C04U) == 1001U && screen_word(0x10004BDCU) == 1002U &&
-           screen_word(0x10C4E55CU) == 0x494F4452U &&
-           screen_word(0x10C4E564U) == SCREEN_SUPERVISOR_STATE && screen_word(0x10C4E57CU) == 31U &&
-           screen_word(0x10C4E588U) == 0x10006EF0U && screen_word(0x10004C7CU) == 0x90130000U &&
-           screen_word(0x100012D4U) == 0x90140000U && screen_word(0x10001360U) == 0x90140000U;
+    PortableReaderPlatform mapping = {0};
+    unsigned saved = native_critical_enter();
+    bool valid = false;
+    uint32_t off = 0, on = 0, dispatch = 0, supervisor = 0, backlight = 0;
+    if (screen_word(0x900a0000U) != 0x202U || !portable_reader_platform_refresh(&mapping)) goto done;
+    const PortableView *v = portable_reader_platform_view(&mapping);
+    if (!v) goto done;
+    /* Small, unique no-argument wrappers issue OFF/ON to LCD device 27.
+     * Follow their branches and data literals instead of assuming OS addresses. */
+    for (uint32_t at = v->code_begin; at < v->code_begin + 0x20000U; at += 4) {
+        if (power_word(v, at) != 0xe59f101cU) continue;
+        uint32_t command, call;
+        if (!power_wrapper(v, at, &command, &call)) continue;
+        uint32_t *slot = command == 1001U ? &off : &on;
+        if (*slot || (dispatch && dispatch != call)) goto done;
+        *slot = at; dispatch = call;
+    }
+    if (!off || !on) goto done;
+    /* Bind the typed LCD/backlight descriptors. Page checks authenticate the
+     * live mapping; each hit validates its driver handler and mutable state. */
+    for (uint32_t page = v->ram_begin; page < v->ram_begin + 0x1000000U; page += 4096U) {
+        if (!v->allow_span(v->context, page, 4096, PORTABLE_DATA)) continue;
+        const uint32_t *words = v->code_words ? v->code_words(v->context, page, 4096) : NULL;
+        for (unsigned i = 0; i < 1024; ++i) {
+            uint32_t at = page + i * 4U;
+            if ((words ? words[i] : power_word(v, at)) != 0x494f4452U || at < v->ram_begin + 12U) continue;
+            uint32_t descriptor = at - 12U, id = power_word(v, descriptor + 44U);
+            if (id != 27U && id != 31U) continue;
+            const uint32_t handler[] = {0xe3e0300eU, id == 27U ? 0xe92d41f0U : 0xe92d4070U,
+                0xe5813008U,0xe590001cU};
+            if (!power_shape(v, power_word(v, descriptor + 56U), handler, 4)) continue;
+            if (id == 27U) { if (backlight) goto done; backlight = descriptor; }
+            else {
+                if (supervisor) goto done;
+                supervisor = power_word(v, descriptor + 20U);
+                if (!v->allow_span(v->context, supervisor, 0xdcU + 2048U, PORTABLE_DATA)) goto done;
+            }
+        }
+    }
+    if (!backlight || !supervisor) goto done;
+    screen_off_entry = off; screen_on_entry = on; screen_supervisor_state = supervisor;
+    valid = true;
+done:
+    native_critical_leave(saved);
+    return valid;
 }
 
 bool native_screen_power_supported(void)
@@ -107,7 +171,7 @@ static int screen_control(bool on, uint32_t raw)
     /* Native backlight commands do not reset the LCD or change its scanout,
      * copier or timing. They gate the LED supply and PWM peripheral. Replace
      * the OS-default duty immediately, preserving the caller's exact mask. */
-    result = ((int (*)(void))(uintptr_t)(on ? SCREEN_ON_ENTRY : SCREEN_OFF_ENTRY))();
+    result = ((int (*)(void))(uintptr_t)(on ? screen_on_entry : screen_off_entry))();
     native_critical_enter();
     if (on)
         screen_set_duty(raw);

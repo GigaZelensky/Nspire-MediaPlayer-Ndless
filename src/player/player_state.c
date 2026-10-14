@@ -16,7 +16,6 @@ Movie *g_deferred_playback_movie = NULL;
 MoviePickerCache g_picker_cache;
 DeferredHistorySave g_pending_history_save;
 DisplayPowerState g_display_power_state;
-char g_pending_theme_directory[MAX_PATH_LEN];
 bool g_pending_theme_save = false;
 const PlaybackRate g_playback_rates[PLAYBACK_RATE_COUNT] = {
     {1, 4, "0.25x"},

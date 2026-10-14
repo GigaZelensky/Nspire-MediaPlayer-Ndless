@@ -975,14 +975,14 @@ int header_shortcut_badge_width(const Fonts *fonts, const char *key, const char 
         nSDL_GetStringWidth(fonts->white, action) + 22;
 }
 
-void draw_header_shortcut_badge(
+void draw_header_shortcut_badge_animated(
     SDL_Surface *screen,
     const Fonts *fonts,
     int x,
     int y,
     const char *key,
     const char *action,
-    uint8_t mix
+    uint8_t mix, uint8_t hover, uint8_t press
 )
 {
     int key_w;
@@ -999,6 +999,11 @@ void draw_header_shortcut_badge(
     badge.y = (Sint16) y;
     badge.w = (Uint16) header_shortcut_badge_width(fonts, key, action);
     badge.h = 13;
+    int press_x = pressed_control_offset_x(press), press_y = pressed_control_offset_y(press);
+    badge.x += press_x;
+    badge.y += press_y;
+    badge.w -= 2 * press_x;
+    badge.h -= press_y;
     glint.x = (Sint16) (badge.x + 3);
     glint.y = (Sint16) (badge.y + 2);
     glint.w = (Uint16) (badge.w - 6);
@@ -1008,47 +1013,25 @@ void draw_header_shortcut_badge(
     dot.w = 2;
     dot.h = 2;
 
-    draw_soft_glass_panel(screen, &badge, rgb565_lerp(UI_COLOR_BLACK, ui_theme()->shortcut_base, mix, 255), false);
+    Uint16 base = animated_control_color(ui_theme()->shortcut_base, ui_theme()->resume_hover, hover);
+    base = pressed_control_base(base, press);
+    draw_soft_glass_panel_mix(screen, &badge, rgb565_lerp(UI_COLOR_BLACK, base, mix, 255), hover);
     fill_rect_rgb565(screen, &glint, rgb565_lerp(UI_COLOR_BLACK, ui_theme()->shortcut_glint, mix, 255));
     fill_rect_rgb565(screen, &dot, rgb565_lerp(UI_COLOR_BLACK, UI_COLOR_ACCENT_HOT, mix, 255));
+    if (hover || press) {
+        draw_pressed_control_reflection(screen, &badge, press);
+        draw_soft_glass_panel_rim(screen, &badge, base, max_u8(hover, press));
+    }
     if (mix > 54) {
         draw_ui_label(screen, fonts, badge.x + 6, badge.y + 3, key);
         draw_ui_label(screen, fonts, dot.x + 5, badge.y + 3, action);
     }
 }
 
-void draw_header_shortcuts(SDL_Surface *screen, const Fonts *fonts, int y, uint8_t mix, bool can_back)
+void draw_header_shortcut_badge(SDL_Surface *screen, const Fonts *fonts, int x, int y,
+                                const char *key, const char *action, uint8_t mix)
 {
-    const char *keys[] = {
-        "ENTER",
-        "UP/DOWN",
-        "ESC"
-    };
-    const char *actions[] = {
-        "OPEN",
-        "CHOOSE",
-        can_back ? "BACK" : "EXIT"
-    };
-    int widths[3];
-    int total_w = 0;
-    int x;
-    size_t index;
-    const int gap = 5;
-
-    if (!screen || !fonts) {
-        return;
-    }
-
-    for (index = 0; index < sizeof(keys) / sizeof(keys[0]); ++index) {
-        widths[index] = header_shortcut_badge_width(fonts, keys[index], actions[index]);
-        total_w += widths[index];
-    }
-    total_w += gap * ((int) (sizeof(keys) / sizeof(keys[0])) - 1);
-    x = (SCREEN_W - total_w) / 2;
-    for (index = 0; index < sizeof(keys) / sizeof(keys[0]); ++index) {
-        draw_header_shortcut_badge(screen, fonts, x, y, keys[index], actions[index], mix);
-        x += widths[index] + gap;
-    }
+    draw_header_shortcut_badge_animated(screen, fonts, x, y, key, action, mix, 0, 0);
 }
 
 void draw_surface_panel(SDL_Surface *screen, SDL_Surface *surface, int x, int y)
@@ -2403,22 +2386,7 @@ void draw_progress(
     draw_progress_buffer_range(screen, &buffered, false);
     buffered.w = (Uint16) movie_decoded_bar_width(movie, bar_back.w);
     draw_progress_buffer_range(screen, &buffered, true);
-    bar_front.w = 0;
-    if (seek_preview &&
-        seek_preview->suppress_until_pointer_moves &&
-        seek_preview->suppress_frame_index == movie->current_frame &&
-        seek_preview->suppress_marker_x >= bar_back.x &&
-        seek_preview->suppress_marker_x < bar_back.x + bar_back.w) {
-        bar_front.w = (Uint16) (seek_preview->suppress_marker_x - bar_back.x + 1);
-    } else if (duration_ms > 0) {
-        bar_front.w = (Uint16) (((uint64_t) bar_back.w * current_ms) / duration_ms);
-        if (movie->header.frame_count > 0 && bar_front.w == 0) {
-            bar_front.w = 1;
-        }
-        if (movie->header.frame_count > 0 && movie->current_frame + 1U >= movie->header.frame_count) {
-            bar_front.w = bar_back.w;
-        }
-    }
+    bar_front.w = (Uint16)progress_bar_width_for_frame(movie, &bar_back, movie->current_frame);
     if (bar_front.w > 0) {
         SDL_Rect glow = {bar_front.x, (Sint16) (bar_front.y + 1), bar_front.w, 1};
         SDL_Rect cap = {(Sint16) (bar_front.x + bar_front.w - 1), bar_front.y, 1, bar_front.h};

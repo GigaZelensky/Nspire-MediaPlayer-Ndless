@@ -1,8 +1,7 @@
 #include "native_file_io.h"
 #include "native_interrupts.h"
-#include "native_firmware.h"
+#include "native_writer_platform.h"
 #include <string.h>
-#include <os.h>
 
 typedef struct {
     void *(*file_open)(const char *, const char *);
@@ -12,48 +11,41 @@ typedef struct {
     int (*file_stat)(const char *, void *);
     int *(*errno_address)(void);
 } NativeFileApi;
-static const NativeFileApi native_api = {
-    (void *(*)(const char *, const char *))0x10423C64U,
-    (unsigned (*)(const void *, unsigned, unsigned, void *))0x1042429CU,
-    (int (*)(void *))0x104236E4U,
-    (int (*)(const char *))0x10424658U,
-    (int (*)(const char *, void *))0x10493C78U,
-    (int *(*)(void))0x1048D768U};
+static NativeFileApi native_api;
+static struct { int status; uint32_t mask, task, magic, flags, slice, policy; } init_state;
+void native_file_io_debug(FILE *file)
+{
+    if (file) fprintf(file, "native_file_writer init=%d mask=%02lx task=%08lx magic=%08lx flags=%08lx slice=%lu policy=%08lx\n",
+        init_state.status, (unsigned long)init_state.mask, (unsigned long)init_state.task,
+        (unsigned long)init_state.magic, (unsigned long)init_state.flags,
+        (unsigned long)init_state.slice, (unsigned long)init_state.policy);
+}
 static int file_platform(void)
 {
-#if defined(__arm__)
-    static const struct {
-        uintptr_t address;
-        unsigned word[4];
-    } fingerprints[] = {{0x10423C64U, {0xE92D40F0U, 0xE1A07000U, 0xE24DD044U, 0xE1A06001U}},
-                        {0x10423E08U, {0xE92D45F8U, 0xE2534000U, 0xE1A06000U, 0xE1A07001U}},
-                        {0x104236E4U, {0xE92D4038U, 0xE1A04000U, 0xEBFFFFC4U, 0xE3500000U}},
-                        {0x1042429CU, {0xE92D47F0U, 0xE2534000U, 0xE1A05000U, 0xE1A07001U}},
-                        {0x10424658U, {0xE92D4030U, 0xE24DDF41U, 0xE1A04000U, 0xEB01AE14U}},
-                        {0x10493C78U, {0xE92D4070U, 0xE24DDD09U, 0xE1A05001U, 0xE1A04000U}},
-                        {0x1048D768U, {0xE92D4008U, 0xEBFE6EA3U, 0xE3500000U, 0x059F0014U}},
-                        {0x10429200U, {0xE59F3028U, 0xE5930000U, 0xE3500000U, 0x1A000001U}}};
-    if (!native_firmware_memory())
-        return NATIVE_FILE_IO_UNSUPPORTED;
-    for (unsigned i = 0; i < sizeof(fingerprints) / sizeof(*fingerprints); ++i)
-        for (unsigned j = 0; j < 4; ++j)
-            if (((const volatile unsigned *)fingerprints[i].address)[j] != fingerprints[i].word[j])
-                return NATIVE_FILE_IO_UNSUPPORTED;
-    if (*(const volatile unsigned *)0x10429230U != 0x1148F060U)
-        return NATIVE_FILE_IO_UNSUPPORTED;
-    uintptr_t address = *(const volatile unsigned *)0x1148F060U;
-    if ((address & 3U) || address < 0x10000000U || address > 0x11FFFFB8U)
+    const NativeWriterApi *api = native_writer_platform();
+    if (!api) return NATIVE_FILE_IO_UNSUPPORTED;
+    native_api = (NativeFileApi){
+        (void *(*)(const char *, const char *))(uintptr_t)api->function[WR_OPEN],
+        (unsigned (*)(const void *, unsigned, unsigned, void *))(uintptr_t)api->function[WR_WRITE],
+        (int (*)(void *))(uintptr_t)api->function[WR_CLOSE],
+        (int (*)(const char *))(uintptr_t)api->function[WR_REMOVE],
+        (int (*)(const char *, void *))(uintptr_t)api->function[WR_STAT],
+        (int *(*)(void))(uintptr_t)api->function[WR_ERRNO]};
+    if (!native_writer_span(api->task_global, 4) || !native_writer_span(api->interrupt_policy, 4))
         return NATIVE_FILE_IO_BAD_TASK;
+    uintptr_t address = *(const volatile uint32_t *)(uintptr_t)api->task_global;
+    init_state.task = (uint32_t)address;
+    if (!native_writer_span((uint32_t)address, 0x44)) return NATIVE_FILE_IO_BAD_TASK;
     const volatile unsigned char *task = (const volatile unsigned char *)address;
-    /* Retain the verified launch-state restrictions. These are read-only;
-     * the adapter never changes a native task or scheduler configuration. */
+    init_state.magic = *(const volatile uint32_t *)(task + 0x0c);
+    init_state.flags = *(const volatile uint32_t *)(task + 0x18);
+    init_state.slice = *(const volatile uint32_t *)(task + 0x40);
+    init_state.policy = *(const volatile uint32_t *)(uintptr_t)api->interrupt_policy;
     if (*(const volatile unsigned *)(task + 0x0c) != 0x5441534BU || !task[0x1b] ||
-        !*(const volatile unsigned *)(task + 0x40) || *(const volatile unsigned *)0x1148F080U != 0U)
+        !*(const volatile unsigned *)(task + 0x40) ||
+        *(const volatile uint32_t *)(uintptr_t)api->interrupt_policy != 0U)
         return NATIVE_FILE_IO_BAD_TASK;
     return NATIVE_FILE_IO_OK;
-#else
-    return NATIVE_FILE_IO_UNSUPPORTED;
-#endif
 }
 int native_file_io_init(NativeFileIo *backend)
 {
@@ -63,12 +55,17 @@ int native_file_io_init(NativeFileIo *backend)
         return NATIVE_FILE_IO_BUSY;
     unsigned saved = native_interrupt_mask();
     memset(backend, 0, sizeof(*backend));
+    memset(&init_state, 0, sizeof(init_state));
+    init_state.mask = saved;
     int result = file_platform();
+    init_state.status = result;
     native_critical_leave(saved);
     if (result)
         return result;
-    if (!(native_interrupt_mask() & 0x80U))
+    if (!(native_interrupt_mask() & 0x80U)) {
+        init_state.status = NATIVE_FILE_IO_BAD_TASK;
         return NATIVE_FILE_IO_BAD_TASK;
+    }
     backend->supported = true;
     return NATIVE_FILE_IO_OK;
 }

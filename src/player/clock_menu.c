@@ -5,7 +5,7 @@
 
 static bool previous_o, footer_armed, footer_key_armed, footer_key_down;
 static bool footer_input_captured, footer_canceled, dialog_active, queued_shortcut;
-enum { CLOCK_FOOTER_CENTER_X = 196, CLOCK_FOOTER_Y = SCREEN_H - 19,
+enum { CLOCK_FOOTER_LEFT_X = 244, CLOCK_FOOTER_Y = SCREEN_H - 18,
        CLOCK_FOOTER_W = 64, CLOCK_FOOTER_H = 13 };
 static Uint16 footer_backdrop[CLOCK_FOOTER_W * CLOCK_FOOTER_H];
 static bool footer_backdrop_valid, footer_drawn_visible;
@@ -16,7 +16,7 @@ static SDL_Rect clock_footer_rect(const Fonts *fonts, int offset_y)
     snprintf(label, sizeof(label), "%u MHz", performance_clock_current_mhz());
     int width = nSDL_GetStringWidth(fonts->white, label) + 8;
     if (width > CLOCK_FOOTER_W) width = CLOCK_FOOTER_W;
-    return (SDL_Rect){CLOCK_FOOTER_CENTER_X - width / 2, CLOCK_FOOTER_Y + offset_y, width, CLOCK_FOOTER_H};
+    return (SDL_Rect){CLOCK_FOOTER_LEFT_X, CLOCK_FOOTER_Y + offset_y, width, CLOCK_FOOTER_H};
 }
 bool clock_menu_consumed_input(void) { return footer_input_captured; }
 void clock_menu_sync_shortcut(void) { previous_o = isKeyPressed(KEY_NSPIRE_O); }
@@ -61,10 +61,11 @@ static void clock_dialog(SDL_Surface *screen, const Fonts *fonts, Movie *movie,
         if (performance_clock_option(i) == (performance_clock_selection() ? performance_clock_selection() : performance_clock_default_mhz())) choice = i;
     bool pad_was_down = player_touchpad_button_down();
     bool prev_enter = isKeyPressed(KEY_NSPIRE_ENTER), prev_ret = isKeyPressed(KEY_NSPIRE_RET);
+    bool prev_5 = isKeyPressed(KEY_NSPIRE_5);
     bool prev_esc = isKeyPressed(KEY_NSPIRE_ESC), prev_o = isKeyPressed(KEY_NSPIRE_O);
     bool prev_4 = isKeyPressed(KEY_NSPIRE_4), prev_6 = isKeyPressed(KEY_NSPIRE_6);
     bool prev_left = isKeyPressed(KEY_NSPIRE_LEFT), prev_right = isKeyPressed(KEY_NSPIRE_RIGHT);
-    bool prev_on = on_key_pressed(), dragging = false, track_pressed = false, slider_key = false;
+    bool prev_on = nspire_on_key_pressed(), dragging = false, track_pressed = false, slider_key = false;
     bool closing = false, key_press = false, forced_apply = false;
     bool keep_after_exit = performance_clock_keep_after_exit();
     int armed = -1, pending = -1, grab_offset = 0;
@@ -86,6 +87,9 @@ static void clock_dialog(SDL_Surface *screen, const Fonts *fonts, Movie *movie,
         pad_was_down = pad_down;
         uint32_t now = monotonic_clock_now_ms();
         bool enter = key_pressed_edge(KEY_NSPIRE_ENTER, &prev_enter);
+        bool five = key_pressed_edge(KEY_NSPIRE_5, &prev_5);
+        bool select_down = prev_enter || (prev_5 && !isKeyPressed(KEY_NSPIRE_CTRL));
+        enter = enter || (five && !isKeyPressed(KEY_NSPIRE_CTRL));
         bool ret = key_pressed_edge(KEY_NSPIRE_RET, &prev_ret);
         bool esc = key_pressed_edge(KEY_NSPIRE_ESC, &prev_esc);
         bool o = key_pressed_edge(KEY_NSPIRE_O, &prev_o);
@@ -160,7 +164,7 @@ static void clock_dialog(SDL_Surface *screen, const Fonts *fonts, Movie *movie,
                 next = (unsigned)(position * (int)(count - 1) + 120) / 240;
             }
             bool track_gesture = track_pressed;
-            if (track_pressed && !(slider_key ? prev_enter : pointer->down)) {
+            if (track_pressed && !(slider_key ? select_down : pointer->down)) {
                 track_pressed = false;
                 ui_transition_begin_press_release(&slider_press, now);
             }
@@ -182,7 +186,7 @@ static void clock_dialog(SDL_Surface *screen, const Fonts *fonts, Movie *movie,
                     thumb_duration = 48U;
                     thumb_started = now - 16U; /* Show a response on this frame. */
                 }
-                if (!(slider_key ? prev_enter : pointer->down)) {
+                if (!(slider_key ? select_down : pointer->down)) {
                     dragging = false;
                     thumb_from = thumb_x;
                     thumb_target = target;
@@ -201,7 +205,7 @@ static void clock_dialog(SDL_Surface *screen, const Fonts *fonts, Movie *movie,
                 armed = ret ? 2 : hot >= 0 ? hot : 2;
                 key_press = ret || enter; forced_apply = ret || hot < 0;
             }
-            if (armed >= 0 && ((key_press && !prev_enter && !prev_ret) || (!key_press && pointer->release_edge))) {
+            if (armed >= 0 && ((key_press && !select_down && !prev_ret) || (!key_press && pointer->release_edge))) {
                 if (forced_apply || hot == armed) action = armed;
                 armed = -1;
             }
@@ -275,7 +279,7 @@ static void clock_dialog(SDL_Surface *screen, const Fonts *fonts, Movie *movie,
         uint8_t slider_mix = ui_transition_update(&slider_hover,
             !closing && pending < 0 && (hit(pointer, &visible_knob) || dragging), now, UI_HOVER_ANIM_MS);
         uint8_t slider_press_mix = ui_transition_update_press_ex(&slider_press,
-            !closing && (dragging || track_pressed) && (slider_key ? prev_enter : pointer->down),
+            !closing && (dragging || track_pressed) && (slider_key ? select_down : pointer->down),
             now, UI_PRESS_ANIM_MS, PICKER_PRESS_RELEASE_ANIM_MS);
         draw_prompt_button(target, fonts, &thumb, "", slider_mix, slider_press_mix);
         /* Keep the handle visible against the dark rail even when idle. */

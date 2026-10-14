@@ -1,5 +1,36 @@
 #include "player_internal.h"
 #include "movie_crypto_session.h"
+#include "performance_clock.h"
+
+/* Retain timings in RAM even when D is enabled only after unlocking. */
+static struct {
+    uint64_t began, elapsed, crypto, drawing;
+    uint32_t attempts, rounds, hz, begin_mhz, end_mhz, draws, cached_draws;
+    bool active, success, cancelled;
+} unlock_timing;
+static void unlock_timing_end(uint32_t rounds, bool success, bool cancelled)
+{
+    if (!unlock_timing.active) return;
+    unlock_timing.elapsed = monotonic_clock_now_ticks() - unlock_timing.began;
+    unlock_timing.rounds = rounds;
+    unlock_timing.end_mhz = performance_clock_current_mhz();
+    unlock_timing.success = success; unlock_timing.cancelled = cancelled;
+    unlock_timing.active = false;
+}
+void unlock_movie_debug(FILE *file)
+{
+    if (!file || !unlock_timing.attempts) return;
+    uint64_t elapsed = unlock_timing.active ? monotonic_clock_now_ticks() - unlock_timing.began : unlock_timing.elapsed;
+    uint64_t other = elapsed > unlock_timing.crypto + unlock_timing.drawing
+        ? elapsed - unlock_timing.crypto - unlock_timing.drawing : 0;
+    uint32_t hz = unlock_timing.hz ? unlock_timing.hz : 1;
+    fprintf(file, "unlock_timing attempts=%lu active=%u success=%u cancelled=%u rounds=%lu begin_mhz=%lu end_mhz=%lu elapsed_us=%llu crypto_us=%llu drawing_us=%llu other_us=%llu draws=%lu cached_draws=%lu tick_hz=%lu drawing_interval_ms=33\n",
+        (unsigned long)unlock_timing.attempts, unlock_timing.active, unlock_timing.success, unlock_timing.cancelled,
+        (unsigned long)unlock_timing.rounds, (unsigned long)unlock_timing.begin_mhz, (unsigned long)unlock_timing.end_mhz,
+        (unsigned long long)(elapsed * 1000000U / hz), (unsigned long long)(unlock_timing.crypto * 1000000U / hz),
+        (unsigned long long)(unlock_timing.drawing * 1000000U / hz), (unsigned long long)(other * 1000000U / hz),
+        (unsigned long)unlock_timing.draws, (unsigned long)unlock_timing.cached_draws, (unsigned long)hz);
+}
 
 /* These are text-entry keys, not playback shortcuts. In particular S, N,
  * Space and the numeric keypad must never activate player controls here. */
@@ -17,9 +48,8 @@ static const char text_plain[] = "abcdefghijklmnopqrstuvwxyz0123456789 .,-+/*()"
 static const char text_shift[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ)!@#$%^&*( ><_+?*[]";
 static const char symbols[] = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 
-void draw_lock_icon(SDL_Surface *screen, int x, int y, uint8_t mix)
+void draw_lock_icon_tinted(SDL_Surface *screen, int x, int y, Uint16 ink, uint8_t mix)
 {
-    Uint16 ink = UI_COLOR_WARM_WHITE;
     SDL_Rect body = {(Sint16)x, (Sint16)(y + 4), 8, 6};
     SDL_Rect top = {(Sint16)(x + 2), (Sint16)y, 4, 1};
     SDL_Rect left = {(Sint16)(x + 1), (Sint16)(y + 1), 1, 4};
@@ -30,6 +60,11 @@ void draw_lock_icon(SDL_Surface *screen, int x, int y, uint8_t mix)
     fill_rect_rgb565_mix(screen, &left, ink, mix);
     fill_rect_rgb565_mix(screen, &right, ink, mix);
     fill_rect_rgb565_mix(screen, &hole, UI_COLOR_GUNMETAL, mix);
+}
+
+void draw_lock_icon(SDL_Surface *screen, int x, int y, uint8_t mix)
+{
+    draw_lock_icon_tinted(screen, x, y, UI_COLOR_WARM_WHITE, mix);
 }
 
 static void draw_password_field(SDL_Surface *screen, const SDL_Rect *rect)
@@ -86,16 +121,15 @@ int unlock_movie_prompt(SDL_Surface *screen, const Fonts *fonts, const char *pat
     if (cached_header) header = *cached_header;
     else {
         uint8_t prefix[NVE_HEADER_BYTES];
-        FILE *file = fopen(path, "rb");
+        MovieReadFile *file = movie_file_open(path);
         /* Direct launches may not have visited the picker yet. */
         if (!file) return 1;
-        size_t read = fread(prefix, 1, sizeof(prefix), file);
-        long bytes = -1;
-        if (!fseek(file, 0, SEEK_END)) bytes = ftell(file);
-        fclose(file);
+        size_t read = movie_file_read(prefix, 1, sizeof(prefix), file);
+        uint64_t bytes = movie_file_size(file);
+        movie_file_close(file);
         if (read < 4 || memcmp(prefix, "NVE1", 4)) return 1;
-        if (read != sizeof(prefix) || bytes < 0 || (uint64_t)bytes > INT32_MAX ||
-            !nve_header_parse(&header, prefix, (uint32_t)bytes)) {
+        if (read != sizeof(prefix) ||
+            !nve_header_parse(&header, prefix, bytes)) {
             debug_failf("The encrypted header is damaged or unsupported.");
             report_movie_open_failure(path, MOVIE_CODEC_UNKNOWN);
             return 0;
@@ -119,12 +153,14 @@ int unlock_movie_prompt(SDL_Surface *screen, const Fonts *fonts, const char *pat
     bool prev_enter = isKeyPressed(KEY_NSPIRE_ENTER), prev_esc = isKeyPressed(KEY_NSPIRE_ESC);
     bool prev_return = isKeyPressed(KEY_NSPIRE_RET), return_armed = false;
     bool prev_del = isKeyPressed(KEY_NSPIRE_DEL), prev_tab = isKeyPressed(KEY_NSPIRE_TAB);
-    bool prev_on = on_key_pressed(), prev_scratch = isKeyPressed(KEY_NSPIRE_SCRATCHPAD);
+    bool prev_on = nspire_on_key_pressed(), prev_scratch = isKeyPressed(KEY_NSPIRE_SCRATCHPAD);
     bool prev_up = false, prev_down = false, prev_left = false, prev_right = false;
     bool symbol_page = false, working = false, closing = false;
     bool enter_hover_target = false, pointer_hover_target = false, symbol_keyboard_focus = false;
     int result = 0, armed = -1, enter_target = -1, symbol_selection = 0;
     uint32_t started = monotonic_clock_now_ms(), closed_at = 0, last_draw = 0, delete_at = 0;
+    uint32_t last_ui_activity = started;
+    SDL_Surface *working_frame = NULL;
     const char *notice = "";
     PointerState pointer;
     pointer_init(&pointer); pointer_update(&pointer);
@@ -161,6 +197,7 @@ int unlock_movie_prompt(SDL_Surface *screen, const Fonts *fonts, const char *pat
             result = scratch ? PLAY_MOVIE_RESULT_SCRATCHPAD_EXIT : 0;
             closing = true; closed_at = now;
             working = false;
+            unlock_timing_end(kdf->rounds, false, true);
             nve_wipe(password, sizeof(password)); nve_wipe(kdf, sizeof(*kdf)); length = 0;
         }
         if (g_display_power_state.off || g_display_power_state.off_fade_active) {
@@ -276,6 +313,7 @@ int unlock_movie_prompt(SDL_Surface *screen, const Fonts *fonts, const char *pat
             if (working && action != 100 && action != 101) action = -1;
             if (action == 100) {
                 closing = true; closed_at = now; working = false;
+                unlock_timing_end(kdf->rounds, false, true);
                 nve_wipe(password, sizeof(password)); length = 0;
                 nve_wipe(kdf, sizeof(*kdf));
             }
@@ -287,13 +325,29 @@ int unlock_movie_prompt(SDL_Surface *screen, const Fonts *fonts, const char *pat
             else if (action == 102) {
                 if (!length) notice = "Enter a password.";
                 else {
+                    uint32_t attempts = unlock_timing.attempts + 1U;
+                    memset(&unlock_timing, 0, sizeof(unlock_timing));
+                    unlock_timing.attempts = attempts; unlock_timing.active = true;
+                    unlock_timing.hz = monotonic_clock_ticks_per_second();
+                    unlock_timing.begin_mhz = performance_clock_current_mhz();
+                    unlock_timing.began = monotonic_clock_now_ticks();
                     working = nve_kdf_begin(kdf, &header, password, length);
+                    unlock_timing.crypto += monotonic_clock_now_ticks() - unlock_timing.began;
+                    if (!working) unlock_timing_end(kdf->rounds, false, false);
                     nve_wipe(password, sizeof(password)); length = 0;
-                    notice = "";
+                    notice = working ? "" : "Hardware SHA could not start.";
+                    if(!working&&kdf->failed){
+                        debug_failf("Hardware SHA could not start while unlocking.");
+                        save_failure_report(path,NULL,"hardware-sha");
+                    }
                 }
             }
             if (action >= 100 && action <= 102)
                 ui_transition_begin_press_release(&press[action - 100], now);
+        }
+        if (activity || action >= 0) {
+            last_ui_activity = now;
+            if (working_frame) { nve_wipe(working_frame->pixels,(size_t)working_frame->pitch*working_frame->h);SDL_FreeSurface(working_frame);working_frame=NULL; }
         }
         if (activity || working) display_power_note_activity(&g_display_power_state, now);
         if (working && !closing) {
@@ -301,20 +355,46 @@ int unlock_movie_prompt(SDL_Surface *screen, const Fonts *fonts, const char *pat
             bool done;
             do { done = nve_kdf_step(kdf, 16U); }
             while (!done && monotonic_clock_now_ticks() - begin < 262U);
+            unlock_timing.crypto += monotonic_clock_now_ticks() - begin;
+            unlock_timing.rounds = kdf->rounds;
             if (done) {
                 NveKeys keys;
+                uint64_t finish_began = monotonic_clock_now_ticks();
                 bool correct = nve_kdf_finish(kdf, &keys);
+                unlock_timing.crypto += monotonic_clock_now_ticks() - finish_began;
                 if (correct && movie_crypto_install(path, &keys)) {
                     result = 1; closing = true; closed_at = monotonic_clock_now_ms();
-                } else notice = "Wrong password or damaged file.";
+                } else notice = kdf->failed ? "Hardware SHA failed. See diagnostics." : "Wrong password or damaged file.";
+                unlock_timing_end(unlock_timing.rounds, result == 1, false);
+                if(kdf->failed){
+                    debug_failf("Hardware SHA failed while unlocking.");
+                    save_failure_report(path,NULL,"hardware-sha");
+                }
                 nve_wipe(&keys, sizeof(keys));
                 working = false;
                 for (unsigned i = 0; i < sizeof(previous) / sizeof(previous[0]); ++i)
                     previous[i] = isKeyPressed(*text_keys[i]);
             }
         }
-        if (!working || (uint32_t)(now - last_draw) >= 16U) {
+        /* Progress stays animated at 30 Hz while crypto gets more CPU time. */
+        if (!working || (uint32_t)(now - last_draw) >= 33U) {
+            uint64_t drawing_began = monotonic_clock_now_ticks();
+            bool measure_drawing = unlock_timing.active;
             last_draw = now;
+            bool cached = working && !closing && working_frame && mix == 255U &&
+                (symbol_mix == 0U || symbol_mix == 255U) && now-last_ui_activity>=250U;
+            if (cached) {
+                SDL_BlitSurface(working_frame,NULL,screen,NULL);
+                draw_password_field(screen,&field);
+                char progress[48];snprintf(progress,sizeof(progress),"Unlocking... %lu%%",
+                    (unsigned long)((uint64_t)kdf->rounds*100U/NVE_KDF_ROUNDS));
+                draw_ui_label(screen,fonts,field.x+6,field.y+5,progress);
+                SDL_Rect track={field.x+6,field.y+field.h-5,field.w-12,2};
+                fill_rect_rgb565(screen,&track,ui_theme()->modal_panel);
+                track.w=(Uint16)((uint64_t)track.w*kdf->rounds/NVE_KDF_ROUNDS);
+                if(track.w)fill_rect_rgb565(screen,&track,UI_COLOR_ACCENT);
+                ++unlock_timing.cached_draws;
+            } else {
             if (closing && draw_backdrop)
                 draw_backdrop(screen, backdrop_context, monotonic_clock_now_ms() - closed_at);
             else SDL_BlitSurface(background, NULL, screen, NULL);
@@ -391,16 +471,26 @@ int unlock_movie_prompt(SDL_Surface *screen, const Fonts *fonts, const char *pat
                 }
                 end_faded_region_draw(screen, layer, &panel, &old_clip, mix);
             }
+            if (working && !closing && mix == 255U && !working_frame &&
+                (symbol_mix == 0U || symbol_mix == 255U) && now-last_ui_activity>=250U)
+                working_frame=capture_screen_surface(screen);
+            }
             if (pointer.visible) draw_cursor(screen, pointer.x, pointer.y);
             present_screen(screen);
+            if (measure_drawing) {
+                unlock_timing.drawing += monotonic_clock_now_ticks() - drawing_began;
+                ++unlock_timing.draws;
+            }
         }
         if (closing && !mix) break;
         if (!closing) display_power_tick_idle(&g_display_power_state, screen, monotonic_clock_now_ms(), true, true);
         if (!working) player_delay_ms(16);
     }
+    unlock_timing_end(kdf->rounds, false, true);
     nve_wipe(password, sizeof(password)); nve_wipe(kdf, sizeof(*kdf)); free(kdf);
     clear_screenshot_preview(&preview);
     if (!closing || !draw_backdrop) SDL_BlitSurface(background, NULL, screen, NULL);
+    if (working_frame) { nve_wipe(working_frame->pixels,(size_t)working_frame->pitch*working_frame->h);SDL_FreeSurface(working_frame); }
     SDL_FreeSurface(background);
     if (result != 1) movie_crypto_clear();
     return result;

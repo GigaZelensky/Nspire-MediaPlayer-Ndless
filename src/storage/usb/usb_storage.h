@@ -7,7 +7,8 @@
 
 typedef struct UsbFile UsbFile;
 typedef struct UsbRead UsbRead;
-typedef bool (*UsbDirectoryEntry)(void *, const char *, bool, uint32_t);
+typedef struct UsbDirectory UsbDirectory;
+typedef bool (*UsbDirectoryEntry)(void *, const char *, bool, uint64_t);
 bool usb_path(const char *);
 bool usb_storage_connected(void);
 bool usb_storage_mounted(void);
@@ -18,6 +19,7 @@ const char *usb_storage_stage(void);
 void usb_storage_debug(FILE *);
 size_t usb_storage_memory_bytes(void);
 /* Called only at an explicit native-OS connection boundary. */
+bool usb_storage_supported(void);
 bool usb_storage_prepare_connection(void);
 bool usb_storage_attachment_ready(void);
 bool usb_storage_driver_registered(void);
@@ -31,14 +33,19 @@ void usb_storage_unpark(void);
 bool usb_storage_quiescent(void);
 
 bool usb_directory_list(const char *, UsbDirectoryEntry, void *, int *);
+/* Incremental foreground iterator: 0 pending, 1 entry, 2 end, -1 error.
+ * The name remains valid until the next step or close. */
+UsbDirectory *usb_directory_open(const char *, int *);
+int usb_directory_next(UsbDirectory *, const char **, bool *, int *);
+void usb_directory_close(UsbDirectory *);
 UsbFile *usb_file_open(const char *, int *);
-uint32_t usb_file_size(const UsbFile *);
+uint64_t usb_file_size(const UsbFile *);
 size_t usb_file_memory(const UsbFile *);
 void usb_file_close(UsbFile *);
-int usb_file_read_at(UsbFile *, uint32_t, void *, uint32_t, int *);
+int usb_file_read_at(UsbFile *, uint64_t, void *, uint32_t, int *);
 UsbRead *usb_read_create(UsbFile *);
 void usb_read_destroy(UsbRead *);
-bool usb_read_begin(UsbRead *, uint32_t, void *, uint32_t);
+bool usb_read_begin(UsbRead *, uint64_t, void *, uint32_t);
 int usb_read_step(UsbRead *);
 void usb_read_cancel(UsbRead *);
 int usb_read_error(const UsbRead *);

@@ -1,8 +1,13 @@
 #include "usb_controller.h"
+#include "usb_scsi_commands.h"
+#include "usb_registers.h"
 #include "usb_storage.h"
+#include "../../platform/hardware_acceleration.h"
 #include "usb_fs_worker.h"
 #include "../../platform/arm926_ram_span.h"
+#include "../../platform/arm926_cpu_ram_span.h"
 #include "../../player/native_interrupts.h"
+#include "../../player/native_usb_ui.h"
 #include <os.h>
 #include <usb.h>
 #include <usbdi.h>
@@ -12,7 +17,7 @@
 #include <stddef.h>
 
 #define REG(a) (*(volatile uint32_t *)(uintptr_t)(a))
-#define USB_DMA_ALLOCATION_BYTES 8320U
+#define USB_DMA_ALLOCATION_BYTES (USB_READ_BYTES + 96U + 4095U)
 typedef char QueueHeadSize[(sizeof(UsbQueueHead) == 64) ? 1 : -1];
 typedef char DescriptorSize[(sizeof(UsbQtd) == 32) ? 1 : -1];
 typedef struct UsbController UsbController;
@@ -32,6 +37,7 @@ typedef char StubActiveOffset[(offsetof(UsbCallbackStub, active_callbacks) == 28
 typedef char StubRetiredOffset[(offsetof(UsbCallbackStub, retired) == 32) ? 1 : -1];
 struct UsbController {
     UsbCallbackStub *stub;
+    UsbRegisters registers;
     UsbTransport transport;
     UsbScsi scsi;
     void *arena;
@@ -43,14 +49,23 @@ struct UsbController {
     usbd_status (*abort_pipe)(usbd_pipe_handle);
     usbd_status (*close_pipe)(usbd_pipe_handle);
     unsigned ivars_offset, descriptor_offset;
-    uint32_t sector_size, last_sector, generation;
-    uint32_t matches, attaches, detaches, cleanups, commands, read_bytes;
+    uint32_t sector_size, generation;
+    uint64_t last_sector;
+    uint32_t matches, attaches, detaches, cleanups, commands, read_bytes, argument_aliases;
     uint32_t max_step_ticks, cpu_ticks;
+    /* Last four enumeration decisions, never sampled in the playback path. */
+    uint32_t match_trace[4][6];
     uint8_t address, speed, endpoint_in, endpoint_out;
-    bool registered, accepting, attached, online, parked, init_failed;
+    bool registered, accepting, attached, online, parked, init_failed, reused_driver;
     int error;
 };
+unsigned usb_controller_max_read_bytes(void){return hardware_acceleration_enabled(HW_ACCEL_USB_LARGE)?USB_READ_BYTES:4096U;}
 static UsbController *controller;
+
+unsigned usb_controller_link_speed(void)
+{
+    return controller && controller->online ? controller->speed : 0U;
+}
 typedef char StubOwnerOffset[(offsetof(UsbController, stub) == 0) ? 1 : -1];
 static uint32_t next_generation;
 static char error_text[128];
@@ -84,6 +99,23 @@ static bool ram(const void *pointer, unsigned bytes)
     if ((self & 0x1e3U) != 2U || !(self & 0xc00U) || (self & 0xfff00000U) != (table & 0xfff00000U))
         return false;
     return arm926_ram_span(at, bytes, table, word, NULL, NULL);
+}
+static bool argument_ram(UsbController *c,const void *pointer,unsigned bytes)
+{
+    if(ram(pointer,bytes))return true;
+    uint32_t at=(uint32_t)(uintptr_t)pointer,control,table,domain;
+    if(!bytes||bytes>0x4000000U||at>UINT32_MAX-bytes-(at&3U))return false;
+    bytes+=at&3U;at&=~3U;
+    __asm__ volatile("mrc p15,0,%0,c1,c0,0":"=r"(control));
+    __asm__ volatile("mrc p15,0,%0,c2,c0,0":"=r"(table));
+    __asm__ volatile("mrc p15,0,%0,c3,c0,0":"=r"(domain));table&=0xffffc000U;
+    if(!(control&1U)||((domain&3U)!=1U&&(domain&3U)!=3U)||
+       !((table>=0x10000000U&&table<=0x13ffc000U)||(table>=0xa4000000U&&table<=0xa400c000U)))return false;
+    uint32_t self=REG(table+(table>>20)*4U);
+    if((self&0x1e3U)!=2U||!(self&0xc00U)||(self&0xfff00000U)!=(table&0xfff00000U))return false;
+    bool valid=arm926_cpu_ram_span(at,bytes,table,word,NULL);
+    if(valid)++c->argument_aliases;
+    return valid;
 }
 #define EXPORT(name, number)                                                                       \
     static uint32_t export_##name(void)                                                            \
@@ -120,7 +152,7 @@ static struct usb_attach_arg *arguments(UsbController *c, device_t d)
     if (((uintptr_t)d & 3) || !ram(d, c->ivars_offset + 4))
         return NULL;
     struct usb_attach_arg *a = *(struct usb_attach_arg **)((uint8_t *)d + c->ivars_offset);
-    return a && !((uintptr_t)a & 3) && ram(a, 32) ? a : NULL;
+    return a && !((uintptr_t)a & 3) && argument_ram(c,a,32) ? a : NULL;
 }
 static bool mass_storage(UsbController *c, struct usb_attach_arg *a)
 {
@@ -135,10 +167,35 @@ static bool mass_storage(UsbController *c, struct usb_attach_arg *a)
 static int match(device_t d, UsbController *c)
 {
     unsigned mask = native_critical_enter();
+    uint32_t *trace = c->match_trace[c->matches % 4];
+    memset(trace, 0, sizeof(c->match_trace[0]));
+    trace[0] = (uint32_t)(uintptr_t)d;
     ++c->matches;
-    int result = c->accepting && !c->attached && mass_storage(c, arguments(c, d))
-                     ? UMATCH_IFACECLASS
-                     : UMATCH_NONE;
+    unsigned reason = 1;
+    int result = UMATCH_NONE;
+    if (!c->accepting || c->attached) goto done;
+    reason = 2;
+    if (((uintptr_t)d & 3U) || !ram(d, c->ivars_offset + 4)) goto done;
+    trace[1] = *(uint32_t *)((uint8_t *)d + c->ivars_offset);
+    struct usb_attach_arg *a = arguments(c, d);
+    reason = 3;
+    if (!a) goto done;
+    trace[2] = (uint32_t)(uintptr_t)a->iface;
+    reason = 4;
+    if (!a->iface) goto done;
+    reason = 5;
+    if (((uintptr_t)a->iface & 3U) || !ram(a->iface, c->descriptor_offset + 4)) goto done;
+    const usb_interface_descriptor_t *descriptor =
+        *(const usb_interface_descriptor_t **)((uint8_t *)a->iface + c->descriptor_offset);
+    trace[3] = (uint32_t)(uintptr_t)descriptor;
+    reason = 6;
+    if (!descriptor || !ram(descriptor, sizeof(*descriptor))) goto done;
+    trace[5] = (uint32_t)descriptor->bInterfaceClass << 16 |
+               (uint32_t)descriptor->bInterfaceSubClass << 8 | descriptor->bInterfaceProtocol;
+    reason = 7;
+    if (mass_storage(c, a)) { result = UMATCH_IFACECLASS; reason = 0; }
+done:
+    trace[4] = reason;
     native_critical_leave(mask);
     return result;
 }
@@ -218,13 +275,11 @@ static int cleanup(device_t unused, UsbController *c)
 }
 static uint32_t bus_read(void *context, unsigned offset)
 {
-    (void)context;
-    return REG(0xb0000000U + offset);
+    return REG(usb_register_address(context, offset));
 }
 static void bus_write(void *context, unsigned offset, uint32_t value)
 {
-    (void)context;
-    REG(0xb0000000U + offset) = value;
+    REG(usb_register_address(context, offset)) = value;
 }
 static uint32_t ticks(void *context)
 {
@@ -296,7 +351,7 @@ uint32_t usb_controller_sector_size(void)
 {
     return controller ? controller->sector_size : 0;
 }
-uint32_t usb_controller_last_sector(void)
+uint64_t usb_controller_last_sector(void)
 {
     return controller ? controller->last_sector : 0;
 }
@@ -314,12 +369,70 @@ void usb_storage_stop_accepting(void)
         controller->accepting = false;
 }
 
+bool usb_storage_supported(void)
+{
+    UsbRegisters registers;
+    return usb_registers_current(&registers);
+}
+
+static bool reuse_storage_binding(UsbController *c, uint32_t native_free)
+{
+    uint32_t owner, device, interface;
+    if (!native_usb_ui_storage_binding(&owner, &device, &interface)) return false;
+    uint32_t driver = REG(owner);
+    if (!ram((void *)(uintptr_t)driver, 36) || REG(driver + 4) != 2U || REG(driver + 12))
+        return false;
+    uint32_t methods = REG(driver);
+    size_t code_offset = (sizeof(UsbCallbackStub) + 31U) & ~(size_t)31U;
+    size_t code_bytes = (size_t)(usb_callback_end - usb_callback_start);
+    if (methods < offsetof(UsbCallbackStub, methods)) return false;
+    UsbCallbackStub *stub = (UsbCallbackStub *)(uintptr_t)(methods - offsetof(UsbCallbackStub, methods));
+    if (!ram(stub, (unsigned)(code_offset + code_bytes)) || stub->host ||
+        stub->active_callbacks || stub->retired || stub->allocation != stub ||
+        (uint32_t)(uintptr_t)stub->native_free != native_free ||
+        memcmp(stub->name, "ndvideo-usb", sizeof("ndvideo-usb"))) return false;
+    const uint8_t *code = (const uint8_t *)stub + code_offset;
+    size_t context_offset = (size_t)(usb_callback_context - usb_callback_start);
+    if (stub->methods[0] != code + (usb_callback_match - usb_callback_start) ||
+        stub->methods[1] != code + (usb_callback_attach - usb_callback_start) ||
+        stub->methods[2] != code + (usb_callback_detach - usb_callback_start) ||
+        stub->methods[6] != code + (usb_callback_cleanup - usb_callback_start) ||
+        REG((uintptr_t)code + context_offset) != (uint32_t)(uintptr_t)stub ||
+        memcmp(code, usb_callback_start, context_offset) ||
+        memcmp(code + context_offset + 4, usb_callback_start + context_offset + 4,
+               code_bytes - context_offset - 4)) return false;
+    /* No native call or yield between authentication and publishing the new
+     * callbacks. The OS still owns the device and its resident driver; reuse
+     * that binding rather than adding another driver which cannot attach. */
+    if (!ram((void *)(uintptr_t)interface, c->descriptor_offset + 4)) return false;
+    struct usb_attach_arg args = {0};
+    args.iface = (usbd_interface_handle)(uintptr_t)interface;
+    if (!mass_storage(c, &args)) return false;
+    c->stub = stub;
+    c->device = (usbd_device_handle)(uintptr_t)device;
+    c->interface = args.iface;
+    c->native_owner = (device_t)(uintptr_t)owner;
+    c->address = ((const uint8_t *)(uintptr_t)device)[8];
+    c->speed = ((const uint8_t *)(uintptr_t)device)[11];
+    c->registered = c->attached = c->reused_driver = true;
+    c->generation = ++next_generation;
+    stub->callbacks[0] = match;
+    stub->callbacks[1] = attach;
+    stub->callbacks[2] = detach;
+    stub->callbacks[3] = cleanup;
+    drain(NULL);
+    stub->host = c;
+    operation = "reuse storage binding";
+    return true;
+}
+
 bool usb_storage_prepare_connection(void)
 {
+    UsbRegisters registers;
     operation = "register";
     error_text[0] = 0;
     last_error = 0;
-    if (!is_cx2 || !nl_hassyscall(usb_register_driver) || !nl_hassyscall(usbd_open_pipe)) {
+    if (!usb_registers_current(&registers) || !nl_hassyscall(usb_register_driver) || !nl_hassyscall(usbd_open_pipe)) {
         usb_controller_set_error("USB storage is unavailable on this hardware.", ENOSYS);
         return false;
     }
@@ -337,6 +450,7 @@ bool usb_storage_prepare_connection(void)
         return false;
     }
     controller = c;
+    c->registers = registers;
     c->generation = ++next_generation;
     uint32_t a = export_abort(), b = export_close(), f = export_free(), m = export_alloc();
     if (!getter(export_ivars(), &c->ivars_offset) ||
@@ -348,6 +462,8 @@ bool usb_storage_prepare_connection(void)
     }
     c->abort_pipe = (usbd_status (*)(usbd_pipe_handle))(uintptr_t)a;
     c->close_pipe = (usbd_status (*)(usbd_pipe_handle))(uintptr_t)b;
+    native_critical_enter();
+    if (reuse_storage_binding(c, f)) return true;
     size_t code_offset = (sizeof(UsbCallbackStub) + 31U) & ~(size_t)31U;
     size_t code_bytes = (size_t)(usb_callback_end - usb_callback_start);
     /* SDK calloc/malloc add an alignment prefix. Resident cleanup calls OS
@@ -442,10 +558,11 @@ bool usb_storage_finish_connection(void)
     free(c->arena);
     c->arena = NULL;
     c->endpoint_in = c->endpoint_out = 0;
-    if (c->speed != 3 || !c->address || c->address > 127) {
-        usb_controller_set_error("A high-speed USB storage device is required.", ENOSYS);
+    if (!usb_registers_storage_speed(&c->registers, c->speed) || !c->address || c->address > 127) {
+        usb_controller_set_error("Unsupported USB storage connection speed.", ENOSYS);
         return false;
     }
+    uint16_t packet_in = 0, packet_out = 0;
     uint8_t count = 0;
     if (usbd_endpoint_count(c->interface, &count) || count > 16)
         goto failed;
@@ -458,16 +575,19 @@ bool usb_storage_finish_connection(void)
             continue;
         if (!(ep->bEndpointAddress & 15U))
             goto failed;
-        if ((UGETW(ep->wMaxPacketSize) & 0x7ff) != 512)
+        unsigned packet = UGETW(ep->wMaxPacketSize) & 0x7ff;
+        if (c->speed == 3 ? packet != 512 : (packet != 8 && packet != 16 && packet != 32 && packet != 64))
             goto failed;
         if (UE_GET_DIR(ep->bEndpointAddress) == UE_DIR_IN) {
             if (c->endpoint_in)
                 goto failed;
             c->endpoint_in = ep->bEndpointAddress;
+            packet_in = packet;
         } else {
             if (c->endpoint_out)
                 goto failed;
             c->endpoint_out = ep->bEndpointAddress;
+            packet_out = packet;
         }
     }
     if (!c->endpoint_in || !c->endpoint_out)
@@ -481,13 +601,17 @@ bool usb_storage_finish_connection(void)
         goto failed;
     }
     uint8_t *bounce = (uint8_t *)(((uintptr_t)c->arena + 4095U) & ~(uintptr_t)4095U);
-    if (!ram(bounce, 4192))
+    if (!ram(bounce, USB_READ_BYTES + 96U))
         goto failed;
-    UsbBus bus = {NULL, bus_read, bus_write, ticks, clean, invalidate, drain};
-    usb_transport_init(&c->transport, bus, bounce, (UsbQueueHead *)(bounce + 4096),
-                       (UsbQtd *)(bounce + 4160), (uint32_t)(uintptr_t)bounce,
-                       (uint32_t)(uintptr_t)(bounce + 4096), (uint32_t)(uintptr_t)(bounce + 4160),
+    UsbBus bus = {&c->registers, bus_read, bus_write, ticks, clean, invalidate, drain};
+    usb_transport_init(&c->transport, bus, bounce, (UsbQueueHead *)(bounce + USB_READ_BYTES),
+                       (UsbQtd *)(bounce + USB_READ_BYTES + 64U), (uint32_t)(uintptr_t)bounce,
+                       (uint32_t)(uintptr_t)(bounce + USB_READ_BYTES), (uint32_t)(uintptr_t)(bounce + USB_READ_BYTES + 64U),
                        32768);
+    c->transport.max_bytes = usb_controller_max_read_bytes();
+    c->transport.high_speed = c->speed == 3;
+    c->transport.packet_in = packet_in;
+    c->transport.packet_out = packet_out;
     c->transport.address = c->address;
     c->transport.endpoint_in = c->endpoint_in;
     c->transport.endpoint_out = c->endpoint_out;
@@ -516,7 +640,13 @@ bool usb_storage_finish_connection(void)
         goto failed;
     c->last_sector = be32(data);
     c->sector_size = be32(data + 4);
-    if (c->last_sector == UINT32_MAX || c->sector_size < 512 || c->sector_size > 4096 ||
+    if (c->last_sector == UINT32_MAX) {
+        uint8_t extended[16]={0x9e,0x10};extended[13]=32;
+        if(command_sync(extended,16,data,32))goto failed;
+        c->last_sector=(uint64_t)be32(data)<<32|be32(data+4);
+        c->sector_size=be32(data+8);
+    }
+    if (c->last_sector == UINT64_MAX || c->sector_size < 512 || c->sector_size > 4096 ||
         (c->sector_size & (c->sector_size - 1)))
         goto failed;
     c->online = true;
@@ -534,8 +664,11 @@ failed:
 }
 void usb_storage_poll_connection(void)
 {
-    if (controller && controller->online && !(REG(0xb0000030U) & 1U)) {
+    if (controller && controller->online && !(REG(controller->registers.port) & 1U)) {
         controller->online = false;
+        /* Do not reuse the old attachment until the native stack reports a
+         * fresh attach after a physical disconnect. */
+        controller->init_failed = true;
         controller->error = ENODEV;
         controller->generation = ++next_generation;
         strcpy(error_text, "The USB drive was disconnected.");
@@ -545,22 +678,17 @@ bool usb_controller_parked(void)
 {
     return controller && controller->parked;
 }
-bool usb_controller_begin_read(UsbCommand *request, uint32_t sector, unsigned count, void *data)
+bool usb_controller_begin_read(UsbCommand *request, uint64_t sector, unsigned count, void *data)
 {
     UsbController *c = controller;
     usb_storage_poll_connection();
     if (!c || !request || request->pending || !c->online || c->owner || c->parked || !count ||
-        count > 4096 / c->sector_size || sector > c->last_sector ||
+        count > usb_controller_max_read_bytes() / c->sector_size || sector > c->last_sector ||
         count - 1 > c->last_sector - sector)
         return false;
-    uint8_t command[10] = {0x28};
-    command[2] = sector >> 24;
-    command[3] = sector >> 16;
-    command[4] = sector >> 8;
-    command[5] = sector;
-    command[7] = count >> 8;
-    command[8] = count;
-    bool result = usb_scsi_begin(&c->scsi, command, 10, data, count * c->sector_size, true);
+    uint8_t command[16];
+    unsigned command_bytes=usb_scsi_read_command(command,sector,count);
+    bool result = command_bytes && usb_scsi_begin(&c->scsi, command, command_bytes, data, count * c->sector_size, true);
     if (result) {
         ++c->commands;
         request->pending = true;
@@ -627,7 +755,7 @@ bool usb_storage_quiescent(void)
     return !controller ||
            (!usb_scsi_busy(&controller->scsi) && usb_transport_quiescent(&controller->transport));
 }
-int usb_controller_read_sync(uint32_t sector, unsigned count, void *data)
+int usb_controller_read_sync(uint64_t sector, unsigned count, void *data)
 {
     UsbCommand request = {0};
     UsbController *c = controller;
@@ -638,8 +766,8 @@ int usb_controller_read_sync(uint32_t sector, unsigned count, void *data)
     int result = 0;
     while (count) {
         unsigned n = count;
-        if (n > 4096 / c->sector_size)
-            n = 4096 / c->sector_size;
+        if (n > usb_controller_max_read_bytes() / c->sector_size)
+            n = usb_controller_max_read_bytes() / c->sector_size;
         if (!usb_controller_begin_read(&request, sector, n, data)) {
             result = -1;
             break;
@@ -712,28 +840,45 @@ bool usb_storage_shutdown(void)
 void usb_controller_debug(FILE *file)
 {
     UsbController *c = controller;
-    if (!file || !c)
+    if (!file)
         return;
+    if (c) fprintf(file, "usb_read_path max_command_bytes=%u link_speed=%u packet_in=%u packet_out=%u bytes=%lu argument_aliases=%lu\n", usb_controller_max_read_bytes(), c->speed, c->transport.packet_in, c->transport.packet_out, (unsigned long)c->read_bytes, (unsigned long)c->argument_aliases);
+    UsbRegisters registers;
+    if (!usb_registers_current(&registers)) return;
     fprintf(file,
             "usb_controller cap=%08lx command=%08lx status=%08lx port=%08lx otg=%08lx "
             "interrupts=%08lx otg_mask=%08lx\n",
-            (unsigned long)REG(0xb0000000U), (unsigned long)REG(0xb0000010U),
-            (unsigned long)REG(0xb0000014U), (unsigned long)REG(0xb0000030U),
-            (unsigned long)REG(0xb0000080U), (unsigned long)REG(0xb0000018U),
-            (unsigned long)REG(0xb00000c4U));
+            (unsigned long)REG(registers.capability), (unsigned long)REG(registers.command),
+            (unsigned long)REG(registers.command + 4), (unsigned long)REG(registers.port),
+            (unsigned long)REG(registers.otg), (unsigned long)REG(registers.command + 8),
+            (unsigned long)REG(registers.otg_mask));
+    if (!c) return;
     fprintf(file,
             "usb_reader online=%u generation=%lu match=%lu attach=%lu detach=%lu cleanup=%lu "
             "commands=%lu max_step_ticks=%lu cpu_ticks=%lu error=%d stage=%s token=%08lx "
-            "transport_error=%u poisoned=%u\n",
+            "transport_error=%u poisoned=%u registered=%u accepting=%u attached=%u\n",
             c->online, (unsigned long)c->generation, (unsigned long)c->matches,
             (unsigned long)c->attaches, (unsigned long)c->detaches, (unsigned long)c->cleanups,
             (unsigned long)c->commands, (unsigned long)c->max_step_ticks,
             (unsigned long)c->cpu_ticks, c->error, operation,
-            (unsigned long)c->transport.last_token, c->transport.error, c->transport.poisoned);
+            (unsigned long)c->transport.last_token, c->transport.error, c->transport.poisoned,
+            c->registered, c->accepting, c->attached);
+    fprintf(file, "usb_deadline phase=%u elapsed_ticks=%lu stalled_polls=%lu total_polls=%lu scsi_phase=%u expected=%u transferred=%u reused_driver=%u\n",
+            c->transport.timeout_phase, (unsigned long)c->transport.timeout_elapsed,
+            (unsigned long)c->transport.timeout_polls, (unsigned long)c->transport.total_polls,
+            c->scsi.phase, c->scsi.expected, c->scsi.transferred, c->reused_driver);
+    unsigned count = c->matches < 4 ? c->matches : 4;
+    for (unsigned i = c->matches - count; i < c->matches; ++i) {
+        const uint32_t *t = c->match_trace[i % 4];
+        fprintf(file, "usb_match sequence=%lu owner=%08lx args=%08lx iface=%08lx descriptor=%08lx reason=%lu class=%06lx\n",
+                (unsigned long)i + 1, (unsigned long)t[0], (unsigned long)t[1],
+                (unsigned long)t[2], (unsigned long)t[3], (unsigned long)t[4], (unsigned long)t[5]);
+    }
 }
 void usb_storage_debug(FILE *file)
 {
     usb_controller_debug(file);
+    usb_fs_debug(file);
 }
 size_t usb_storage_memory_bytes(void)
 {

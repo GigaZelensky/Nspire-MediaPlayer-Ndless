@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Exact-firmware adapter. One app-owned fiber, no OS thread, event, scheduler
+/* Validated CX II SPI-driver adapter. One app-owned fiber, no OS thread, event, scheduler
  * sleep/yield or GUI suppression. Used by the player-owned storage contexts.
  *
  * The foreground MUST NOT reenter storage while a native transaction is

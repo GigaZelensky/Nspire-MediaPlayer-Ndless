@@ -1,26 +1,30 @@
 # Nspire-VideoPlayer-Ndless
 
-Native Ndless video player and PC-side encoder for the TI-Nspire CX and CX II line.
+A native video player and PC-side encoder for the **TI-Nspire CX**, **TI-Nspire CX II**, and **TI-Nspire CX II-T**.
+Play H.264, HEVC, AV1 and MPEG-4 videos with subtitles, seeking, resume history
+and an animated interface. Browse videos in folders on calculator storage or
+play directly from a USB flash drive through a Mini-USB OTG adapter.
 
-This project targets the **TI-Nspire CX**, **TI-Nspire CX II**, and **TI-Nspire CX II-T**, and plays streamed `.nvp` movies from calculator storage. CX II models can also read movies from a USB flash drive. The player binary and the movie data stay separate:
+The player and videos are separate files:
 
-- `_ndvideo.tns`: the Ndless launcher
-- `*.nvp.tns`: movie containers produced by the encoder
+- `_ndvideo.tns`: the player, including all four codecs.
+- `*.nvp.tns`: movies produced by the encoder.
 
-`_ndvideo.tns` includes all four codecs. Smaller player builds are also
-available; their filenames list the included codecs (`hevc` means H.265).
-Each build is a single file. Multi-codec builds load only the decoder needed
-for the current video, leaving the rest of that memory available for buffering.
+Smaller player builds list their included codecs in the filename (`hevc` means
+H.265). Every build is a single file. Multi-codec builds load only the decoder
+needed for the current video, leaving more RAM available for buffering.
 
 ## Screenshots
 
-| Main menu | Continue watching | Playback controls |
+| Calculator and USB library | Folder navigation | Continue watching |
 | --- | --- | --- |
-| ![Main menu](./examples/screenshots/main-menu.png) | ![Continue watching](./examples/screenshots/continue-watching.png) | ![Playback controls](./examples/screenshots/playback-controls.png) |
+| ![Calculator and USB videos in one library](./examples/screenshots/main-menu.png) | ![Browsing a USB season folder](./examples/screenshots/folders.png) | ![Resume prompt](./examples/screenshots/continue-watching.png) |
 
-| UI overlay | Dialogue scene | Subtitle playback |
+| Playback and seek preview | Live-action | Subtitles |
 | --- | --- | --- |
-| ![Playback UI overlay](./examples/screenshots/ui-overlay.png) | ![Dialogue scene](./examples/screenshots/dialogue.png) | ![Subtitle playback](./examples/screenshots/subtitles.png) |
+| ![Playback with a seek preview](./examples/screenshots/ui-overlay.png) | ![Live-action playback](./examples/screenshots/live-action.png) | ![Selectable subtitles](./examples/screenshots/subtitles.png) |
+
+[More screenshots and capture details](./examples/README.md).
 
 ## Current Format
 
@@ -28,6 +32,7 @@ The `.nvp` format used by the current player is:
 
 - H.264 Annex B video bitstream in legacy version 9/10 containers
 - H.264, H.265 (HEVC), AV1 or MPEG-4 Part 2 video in version 11 codec-tagged containers
+- version 12 containers with 64-bit offsets for large movies, selected automatically by the encoder
 - chunked container with per-chunk frame tables
 - optional text subtitle tracks stored in the container
 - raw stored chunk payloads
@@ -36,7 +41,7 @@ The `.nvp` format used by the current player is:
 
 - native Ndless runtime
 - CX and CX II LCD paths through Ndless' native framebuffer modes
-- streamed playback from calculator storage, or a USB flash drive on CX II
+- streamed playback from calculator storage or a USB flash drive
 - folder navigation with breadcrumbs and Back on both storage sources
 - password-protected videos with authenticated AES-256 encryption
 - H.264 decode through `h264bsd`
@@ -45,7 +50,7 @@ The `.nvp` format used by the current player is:
 - MPEG-4 Part 2 decode through vendored Xvid sources
 - RGB565 output
 - direct storage reads on CX and CX II, with decoded frames prepared ahead for smoother playback
-- SRAM lookup tables on CX and CX II
+- SRAM lookup tables on CX II; original CX uses ordinary RAM
 - accurate frame pacing from a hardware-backed monotonic timer
 - subtitle support for text subtitle tracks
 - built-in subtitle font cycling
@@ -84,39 +89,25 @@ builds load their decoder with the app and remain the smallest download.
 
 - no audio playback (CX and CX II calculators have no built-in speakers)
 
-## USB Drives and Folders
-
-On CX II, place videos and folders inside `ndvideo` at the root of a USB drive:
-
-```text
-ndvideo/
-  Rick and Morty/
-    Season 1/
-      S01E01.nvp.tns
-      S01E02.nvp.tns
-```
-
-Use a Mini-USB **OTG host adapter** and a high-speed USB drive formatted as
-FAT16, FAT32 or exFAT. MBR and GPT partitions are supported. In the player,
-select **USB** above the list or press `U`, then connect the drive as shown.
-If it was already connected, reconnect only the flash drive to the adapter;
-leave the adapter plugged into the calculator.
-
-USB entries appear below the centered USB separator. Open one folder at a
-time; **Back** or `Esc` returns to its parent. Calculator folders work the
-same way. Automatic playback stays within the current folder.
-
-USB reads run cooperatively alongside decoding and use a small DMA workspace.
-There is no extra software CRC pass during playback; encrypted videos retain
-their normal authentication. The USB filesystem is read-only. Its resume
-history, screenshots and debug logs are saved beside the player on the
-calculator. Disconnecting the drive stops playback with an in-player notice.
-
 ## Battery Life
 
 Battery Life: ~9.5 hours of continuous H.264 playback at 100% brightness on a CX II-T.
 
 ## Controls
+
+Press `Catalog` during playback to open the built-in controls guide.
+
+### Shared Controls
+
+These work in the picker, playback and resume prompt. Playback shortcuts are
+inactive while entering a password.
+
+| Key | Action |
+| --- | --- |
+| `C` | Cycle theme color |
+| `S` | Save a BMP screenshot, including player error dialogs (disabled for encrypted video) |
+| `O` | Open processor speed settings; also available from the picker's MHz label |
+| `Scratchpad` | Save state and open OS Scratchpad |
 
 ### Picker
 
@@ -125,10 +116,8 @@ Battery Life: ~9.5 hours of continuous H.264 playback at 100% brightness on a CX
 - touchpad hover: show the title, filename metadata and video duration
 - touchpad click: open highlighted movie
 - `Enter` or keypad `5`: open movie or folder
-- `U` or the USB button: connect/rescan a USB drive (CX II)
-- `C`: cycle theme color
-- `S`: save a BMP screenshot
-- `Scratchpad`: save state and open OS Scratchpad
+- `Right` / keypad `6`: open selected folder; `Left` / keypad `4`: parent folder
+- `U` or the USB button: connect/rescan a USB drive
 - `Esc`: parent folder, or exit from the library
 
 ### Movie Filename Metadata
@@ -151,7 +140,6 @@ The list row shows `Rick and Morty S07E03`. Hover briefly to see the clean title
 - `Left` / `Right` or keypad `4` / `6`: seek `-5s` / `+5s`
 - keypad `7` / `9`: switch to the previous / next video in the current directory
 - `Up` / `Down` or keypad `8` / `2`: increase / decrease screen brightness
-- `O`: processor speed menu (also available from the MHz label in the picker footer)
 - `N`: toggle night mode
 - `Ctrl` + touchpad `Up` / `Down`: enable night mode, then adjust its intensity; hold to repeat. At 0%, night mode is off.
 - `Tab`: single-frame step while paused, hold to repeat
@@ -165,11 +153,8 @@ The list row shows `Rick and Morty S07E03`. Hover briefly to see the clean title
 - `F`: cycle subtitle font
 - `T`: cycle subtitle track
 - `M`: toggle memory / playback diagnostics overlay
-- `C`: cycle theme color
 - `D`: toggle performance recording and diagnostic logging (off by default)
-- `S`: save a BMP screenshot
 - `Catalog`: open / close the help overlay
-- `Scratchpad`: save state and open OS Scratchpad
 - `Esc`: close help, or leave the movie if help is not open
 - `On`: smoothly turn the screen off or back on; while off, `Esc` saves history and returns to the OS home menu
 
@@ -181,11 +166,10 @@ playback returns to the paused or playing state from before the seek.
 
 ### Processor Speed
 
-Click the MHz label or press `O` in the picker, playback or resume screen.
 Click the track, drag the knob, or use Left/Right or 4/6. The orange mark shows
 the applied speed. **Test** compares the selected speed with the default,
 then restores the previous setting. **Apply** changes this session;
-the choice is saved in `ndhistory.ts.tns` only on normal app exit. A reset or crash
+the choice is saved in `ndvideo-data/ndhistory.ts.tns` only on normal app exit. A reset or crash
 won't save a new choice. The short benchmark measures speed, not long-term stability.
 
 Default uses the normal unplugged speed even on USB: 132 MHz on CX and
@@ -198,12 +182,9 @@ Default uses the normal unplugged speed even on USB: 132 MHz on CX and
 - touchpad: move cursor
 - touchpad click: activate the highlighted button
 - `Enter` or keypad `5`: confirm the selected button
-- `C`: cycle theme color
-- `S`: save a BMP screenshot
-- `Scratchpad`: save state and open OS Scratchpad
 - `Esc`: cancel and return
 
-### Encrypted Videos
+## Encrypted Videos
 
 Locked movies ask for their password before loading. Type with the keyboard;
 hold `Shift` for uppercase and use `Tab` for symbols. `Enter` or a touchpad click presses the hovered
@@ -225,8 +206,10 @@ python tools/nve_crypto.py movie.nvp.tns locked.nvp.tns
 
 Video, subtitles and the internal index are encrypted in independently verified
 16 KiB records, so seeking still works. File size grows by about 0.2%.
-The filename and duration stay visible; original files and any requested preview
-are kept unencrypted.
+The filename, duration and codec stay visible; original files and any requested
+preview are kept unencrypted. New encrypted files include an authenticated
+codec label and require the updated player. Older encrypted files still play;
+their codec becomes visible after opening them in the current library session.
 
 ## Idle Power Management
 
@@ -238,7 +221,7 @@ The built-in subtitle font cycle currently includes:
 
 - `Tinytype`
 - `VGA`
-- `Thin`
+- `Thin` (default)
 - `Space`
 - `Fantasy`
 
@@ -246,6 +229,7 @@ The built-in subtitle font cycle currently includes:
 
 - [src/player](src/player): native player shell and playback/UI implementation
 - [src/movie](src/movie): `.nvp` container format definitions
+- [src/storage/usb](src/storage/usb): EHCI bulk transport, SCSI commands and read-only FAT/exFAT access
 - [src/codecs](src/codecs): codec adapters and vendored decoder sources
 - [src/codecs/h264bsd](src/codecs/h264bsd): H.264 decoder sources
 - [src/codecs/hevc](src/codecs/hevc): H.265 / HEVC decoder sources
@@ -501,7 +485,9 @@ Run `python tools/encode_ndless_video.py --help` for the full CLI.
 ## Diagnostics
 
 Debug logging is off by default. Press `D` during playback to start or stop a
-recording, then leave the movie normally to save `ndvideo-debug.log` beside it.
+recording, then leave the movie normally to save `ndvideo-debug.log.tns`. History,
+settings, error logs, and debug recordings live in `ndvideo-data` beside the player,
+including recordings of USB videos. This folder is hidden from the video picker.
 Recording ends with that movie; auto-next does not overwrite its files.
 Totals cover the entire run; frame details keep 128 frames before each lag
 and two seconds afterward. Overlapping windows are merged. Storage is bounded,
@@ -520,15 +506,56 @@ The `M` overlay shows:
 - ring-hit vs direct-decode counts
 - whether verbose debug logging is currently enabled
 
+Normal playback and successful USB connections do not write diagnostic logs.
+Errors save `ndvideo-error.log.tns` in `ndvideo-data`. To record a USB connection
+attempt, hold `D` while pressing `U`. This also saves `ndvideo-usb.log.tns` and
+an exit audit, including successful attempts. For a failed connection, include
+the error report and any USB diagnostic files you deliberately recorded.
+Missing-codec notices and other routine player messages do not start a recording.
+
+With `D` enabled, the player can also maintain alternating `ndvideo-crash-a.bin.tns`
+and `ndvideo-crash-b.bin.tns` journals on supported firmware. These preserve recent
+state if a freeze prevents normal log export. They are not written during
+ordinary playback with recording off.
+
 The [examples](examples) folder includes a short packaged sample movie to try on your calculator.
 
 ## Install On Calculator
 
 1. Download `_ndvideo.tns` from the latest GitHub Actions artifact, or build it locally.
 2. Encode one or more videos into `.nvp.tns`.
-3. Copy `_ndvideo.tns` and the movie files to the calculator.
+3. Copy `_ndvideo.tns` to the calculator. Put movies beside it or in its subfolders, or in `ndvideo` on a USB drive.
 4. Launch `_ndvideo.tns` through Ndless.
-5. Pick a movie and play it locally from storage.
+5. Pick a movie or open a folder. USB videos appear below the USB separator.
+
+## USB Libraries
+
+Use a Mini-USB **OTG host adapter** and a high-speed USB drive formatted as
+FAT16, FAT32 or exFAT. Create `ndvideo` at the drive's root and copy encoded
+videos into it. Folders can be nested to organize movies, series and seasons.
+
+```text
+ndvideo/
+  Rick and Morty/
+    Season 1/
+      S01E01.nvp.tns
+      S01E02.nvp.tns
+  Movies/
+    Shrek.nvp.tns
+```
+
+USB entries appear below the calculator videos in the same library. Open
+folders one at a time, with breadcrumbs and Back for navigation. The player
+attempts automatic detection; **U / USB** connects or refreshes the drive.
+Videos play directly from USB, without copying them to calculator storage.
+
+Movie sizes use 64-bit file positions. Use exFAT for individual movies larger
+than 4 GiB; FAT32's per-file limit still applies. Movies are streamed in small
+blocks, so a larger file does not need to fit in RAM.
+
+The USB filesystem is read-only. History, settings and logs are stored in
+`ndvideo-data` beside the player on the calculator. Screenshots also stay on
+the calculator.
 
 ## License
 

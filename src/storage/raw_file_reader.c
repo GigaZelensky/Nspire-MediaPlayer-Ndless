@@ -13,6 +13,7 @@ bool raw_file_init(RawFileReader *r, const uint8_t *state, size_t bytes, uint32_
     if (!r || !state || bytes != FFX_MAP_STATE_BYTES || count > 32U || (count && !overlay))
         return false;
     memset(r, 0, sizeof(*r));
+    r->io = (uint8_t *)(((uintptr_t)r->io_storage + 31U) & ~(uintptr_t)31U);
     memcpy(r->state, state, bytes);
     r->layout = layout;
     r->overlay = overlay;

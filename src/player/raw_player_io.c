@@ -8,6 +8,8 @@
 #include "storage_mutation.h"
 #include "raw_region_cache.h"
 #include "movie_crypto_session.h"
+#include "nand_dma.h"
+#include "../platform/hardware_acceleration.h"
 #include "../platform/portable_reader_platform.h"
 #include "../storage/raw_file_reader.h"
 #include "../storage/usb/usb_storage.h"
@@ -18,10 +20,16 @@ typedef struct {
     uint64_t offset;
     uint8_t cipher_hash[32], tag[32], header_tag[32];
 } RawCryptoErrors;
+typedef struct {
+    uint32_t id, single, dual, quad;
+    uint8_t ready, mode, reason, a0, b0, spi;
+} RawNandProfile;
 struct RawPlayerIo {
+    RawNandProfile nand_profile;
     PortableReaderPlatform platform;
     void *input;
     RawFileReader reader;
+    PlayerNandDma dma;
     PortableStorageSnapshot snapshot;
     RawFileOverlay overlays[32];
     uint8_t buffer[32768];
@@ -64,11 +72,24 @@ typedef struct {
     RawRegionCacheStats region_cache;
     StorageMutationStats mutations;
     uint32_t mutation_epoch;
+    PlayerNandDmaStats dma;
+    RawNandProfile nand_profile;
     uint32_t native_seed[RAW_FILE_REGION_HISTOGRAM_SLOTS], native_seed_other, native_seed_last[3];
 } RawPlayerReport;
 static RawPlayerReport last_report;
+static void collect_nand_profile(const RawPlayerIo *ctx, RawNandProfile *p)
+{
+    if(!ctx->reader.initialized || ctx->reader.nand.config.kind!=NAND_PAGE_CX2_SPI)return;
+    const SpiNandReader *spi=&ctx->reader.nand.engine.spi;p->spi=1;
+    p->single+=spi->single_commands;p->dual+=spi->dual_commands;p->quad+=spi->quad_commands;
+    if(spi->profile_ready){p->id=spi->chip_id;p->ready=1;p->mode=spi->wide_mode;p->reason=spi->profile_reason;p->a0=spi->feature_a0;p->b0=spi->feature_b0;}
+}
 static void accumulate_reader_costs(RawPlayerIo *ctx)
 {
+    collect_nand_profile(ctx,&ctx->nand_profile);
+    if(ctx->reader.initialized && ctx->reader.nand.config.kind==NAND_PAGE_CX2_SPI){
+        SpiNandReader *spi=&ctx->reader.nand.engine.spi;spi->single_commands=spi->dual_commands=spi->quad_commands=0;
+    }
     ctx->physical_total += ctx->reader.page_reads;
     ctx->reader.page_reads = 0;
     ctx->regions_total += ctx->reader.regions_loaded;
@@ -81,6 +102,8 @@ static void accumulate_reader_costs(RawPlayerIo *ctx)
 static RawPlayerReport report(const RawPlayerIo *ctx)
 {
     RawPlayerReport r = {0};
+    r.dma = ctx->dma.stats;
+    r.nand_profile=ctx->nand_profile;collect_nand_profile(ctx,&r.nand_profile);
     r.read_slack_steps = ctx->read_slack_steps;
     r.read_slack_ticks = ctx->read_slack_ticks;
     r.read_slack_max_ticks = ctx->read_slack_max_ticks;
@@ -151,6 +174,7 @@ static void observe_native_dispatches(RawPlayerIo *ctx)
 }
 static bool initialize_reader(RawPlayerIo *ctx)
 {
+    if (ctx->dma.active) return false;
     const PortableStorageSnapshot *s = &ctx->snapshot;
     ctx->overlay_count = s->dirty_count;
     for (unsigned i = 0; i < s->dirty_count; ++i)
@@ -161,6 +185,11 @@ static bool initialize_reader(RawPlayerIo *ctx)
                        s->index_block, s->inode, config, s->layout, ctx->overlays,
                        ctx->overlay_count))
         return false;
+    if (s->kind == NAND_PAGE_CX2_SPI &&
+        !spi_nand_set_dma(&ctx->reader.nand.engine.spi,
+            player_nand_dma_bind(&ctx->dma, &ctx->platform, ctx->reader.io, 2112U)))
+        return false;
+    if (s->kind == NAND_PAGE_CX2_SPI && hardware_acceleration_enabled(HW_ACCEL_QUAD) && !spi_nand_enable_wide(&ctx->reader.nand.engine.spi)) return false;
     for (unsigned i = 0; i < s->clean_count; ++i)
         ctx->metadata_overlays[i] =
             (RawFileOverlay){s->clean[i].number, (const uint8_t *)(uintptr_t)s->clean[i].address};
@@ -177,7 +206,7 @@ static bool initialize_reader(RawPlayerIo *ctx)
 }
 static bool provider_quiescent(const RawPlayerIo *ctx)
 {
-    return !ctx->reader.initialized || ctx->reader.nand.quiescent;
+    return !ctx->dma.active && (!ctx->reader.initialized || ctx->reader.nand.quiescent);
 }
 static bool release_view(RawPlayerIo *ctx)
 {
@@ -396,8 +425,7 @@ static void service_once(RawPlayerIo *ctx)
         return;
     if (ctx->crypt) {
         if (ctx->crypt_restart) {
-            if (ctx->offset > UINT32_MAX ||
-                !nve_reader_begin(ctx->crypt, (uint32_t)ctx->offset, ctx->buffer, (uint32_t)ctx->bytes)) {
+            if (!nve_reader_begin(ctx->crypt, ctx->offset, ctx->buffer, (uint32_t)ctx->bytes)) {
                 ctx->failed = true; ctx->error = -320; return;
             }
             ctx->crypt_restart = false;
@@ -458,6 +486,10 @@ static void service(RawPlayerIo *ctx, uint32_t budget)
         return;
     uint32_t start = counter();
     unsigned mask = native_critical_enter();
+    /* The normal player owns NAND across cooperative steps with OS IRQs off.
+     * Do not start an asynchronous bus-master lease in a caller that is about
+     * to return to the native IRQ scheduler. */
+    ctx->dma.allow_start = (mask & 0x80U) != 0U;
     observe_native_dispatches(ctx);
     do {
         uint32_t before = counter();
@@ -470,7 +502,7 @@ static void service(RawPlayerIo *ctx, uint32_t budget)
             service_once(ctx);
             ++ctx->steps;
             if (ctx->failed || ctx->ready || (!ctx->requested && !ctx->park) ||
-                native_blocks_reader(ctx))
+                native_blocks_reader(ctx) || ctx->dma.active)
                 break;
         }
         uint32_t ticks = before - counter();
@@ -483,7 +515,7 @@ static void service(RawPlayerIo *ctx, uint32_t budget)
         if (ticks > ctx->max_step_ticks)
             ctx->max_step_ticks = ticks;
         if (ctx->failed || ctx->ready || (!ctx->requested && !ctx->park) ||
-            native_blocks_reader(ctx))
+            native_blocks_reader(ctx) || ctx->dma.active)
             break;
     } while ((uint32_t)(start - counter()) < budget);
     native_critical_leave(mask);
@@ -513,6 +545,7 @@ bool raw_player_read_step(uint32_t spare_ticks)
         native_critical_leave(mask);
         return false;
     }
+    ctx->dma.allow_start = (mask & 0x80U) != 0U;
     service_once(ctx);
     uint32_t elapsed = started - counter();
     ++ctx->steps;
@@ -676,6 +709,7 @@ void raw_player_destroy(RawPlayerIo *ctx)
     last_report = report(ctx);
     ctx->stopping = true;
     raw_player_before_native();
+    last_report.dma = ctx->dma.stats;
     native_critical_leave(entry_mask);
     if (live == ctx)
         live = NULL;
@@ -820,6 +854,16 @@ void raw_player_debug(FILE *file, const RawPlayerIo *ctx)
     if (!file)
         return;
     RawPlayerReport r = ctx ? report(ctx) : last_report;
+    const RawNandProfile *p=&r.nand_profile;
+    fprintf(file,"nand_read_path spi=%u id=%08lx ready=%u lanes=%u profile_reason=%u A0=%02x B0=%02x single=%lu dual=%lu quad=%lu\n",
+        p->spi,(unsigned long)p->id,p->ready,p->mode==2?4:p->mode==1?2:1,p->reason,p->a0,p->b0,
+        (unsigned long)p->single,(unsigned long)p->dual,(unsigned long)p->quad);
+    fprintf(file,"nand_dma_pio_reasons native_context=%lu busy_or_disabled_controller=%lu\n",(unsigned long)r.dma.native_context,(unsigned long)r.dma.busy);
+    fprintf(file,"nand_dma started=%lu completed=%lu bytes=%lu polls=%lu fallbacks=%lu small_reads=%lu mapping_rejected=%lu failures=%lu cancellations=%lu disabled=%u channel=%lu last_error=%08lx remaining_words=%lu\n",
+        (unsigned long)r.dma.started,(unsigned long)r.dma.completed,(unsigned long)r.dma.bytes,
+        (unsigned long)r.dma.polls,(unsigned long)r.dma.fallbacks,(unsigned long)r.dma.small_reads,
+        (unsigned long)r.dma.mapping_rejected,(unsigned long)r.dma.failures,(unsigned long)r.dma.cancellations,
+        r.dma.disabled,(unsigned long)r.dma.channel,(unsigned long)r.dma.last_error,(unsigned long)r.dma.last_remaining);
     fprintf(
         file,
         "raw_reader error=%d refreshes=%lu handoffs=%lu steps=%lu foreground_ticks=%lu max_batch_ticks=%lu physical_reads=%lu regions=%lu cache_status=%d cache_nodes=%lu dirty_blocks=%lu metadata_hits=%lu\n",
@@ -836,7 +880,7 @@ void raw_player_debug(FILE *file, const RawPlayerIo *ctx)
         (unsigned long)r.read_slack_steps, (unsigned long)r.read_slack_ticks,
         (unsigned long)r.read_slack_max_ticks);
     const RawCryptoErrors *e = &r.crypto_errors;
-    static const char *reasons[] = {"none", "keys", "io", "authentication", "state"};
+    static const char *reasons[] = {"none", "keys", "io", "authentication", "state", "hardware-sha"};
     static const char *phases[] = {"idle", "fetch", "verify", "decrypt", "copy", "done", "error"};
     fprintf(file, "raw_reader_crypto_errors failures=%lu retries=%lu recovered=%lu reason=%s phase=%s record=%lu progress=%lu copied=%lu offset=%llu bytes=%lu\n",
         (unsigned long)e->failures, (unsigned long)e->retries, (unsigned long)e->recovered,

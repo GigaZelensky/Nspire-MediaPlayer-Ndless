@@ -337,11 +337,14 @@ bool reset_mpeg4_decoder(Movie *movie)
         playback_capture_io(movie, 4, movie->loaded_chunk, 0, reset_started_ticks, monotonic_clock_now_ticks());
     }
     if (!reset_ok) {
+        movie->mpeg4.decoder_failed = true;
         debug_failf("mpeg4 decoder reset failed: %s", mpeg4_xvid_last_error());
         return false;
     }
     movie->mpeg4.chunk_dirty = false;
     movie->mpeg4.discontinuity = false;
+    movie->mpeg4.decoder_failed = false;
+    memset(&movie->mpeg4.picture, 0, sizeof(movie->mpeg4.picture));
     return true;
 }
 
@@ -766,6 +769,11 @@ bool blit_h264_picture_rows_to_target(
 bool blit_planar_picture_rows(Movie *movie, const VideoFrame *picture,
     uint16_t *pixels, size_t pitch, size_t first, size_t rows, bool *flat)
 {
+    if (NDVIDEO_WITH_MPEG4 && movie && movie->codec == MOVIE_CODEC_MPEG4) {
+        if (!flat) return false;
+        *flat = false;
+        return mpeg4_xvid_blit_picture_rows(picture, pixels, pitch, first, rows);
+    }
     if (!movie || !picture || !pixels || !flat || !rows || ((first | rows) & 1U) ||
         picture->width != movie->header.video_width || picture->height != movie->header.video_height ||
         first > picture->height || rows > picture->height - first || pitch < picture->width ||
@@ -1068,6 +1076,9 @@ bool configure_chunk_view(Movie *movie, int chunk_index)
     entry = movie->chunk_index + chunk_index;
     if (!chunk_storage_layout(entry, movie->chunk_storage, movie->chunk_storage_size,
                               &header_size, &payload_size)) {
+        debug_failf("chunk view invalid layout chunk=%d stored=%lu table=%lu frames=%u",
+            chunk_index, (unsigned long)movie->chunk_storage_size,
+            (unsigned long)entry->frame_table_offset, (unsigned)entry->frame_count);
         return false;
     }
     table = movie->chunk_storage + entry->frame_table_offset + 4U;
@@ -1190,7 +1201,7 @@ static bool prefetch_read_step_impl(Movie *movie, PrefetchedChunk *chunk, bool r
     size_t read_size;
     size_t block_size;
     size_t bytes_read;
-    long target_pos;
+    int64_t target_pos;
     uint32_t read_start_ms;
     uint32_t read_elapsed_ms;
     bool capture_read;
@@ -1247,9 +1258,9 @@ static bool prefetch_read_step_impl(Movie *movie, PrefetchedChunk *chunk, bool r
         block_size = PREFETCH_FILE_BLOCK_SIZE;
     }
     read_size = remaining > block_size ? block_size : remaining;
-    target_pos = (long) (entry->offset + chunk->read_offset);
+    target_pos = (int64_t) (entry->offset + chunk->read_offset);
     if (movie->current_file_pos != target_pos) {
-        if (fseek(movie->file, target_pos, SEEK_SET) != 0) {
+        if (movie_file_seek(movie->file, (uint64_t)target_pos) != 0) {
             movie->current_file_pos = -1;
             return false;
         }
@@ -1268,7 +1279,7 @@ static bool prefetch_read_step_impl(Movie *movie, PrefetchedChunk *chunk, bool r
     read_start_ms = monotonic_clock_now_ms();
     capture_read = debug_is_runtime_logging_enabled();
     read_started_ticks = capture_read ? monotonic_clock_now_ticks() : 0;
-    bytes_read = fread(chunk->chunk_storage + chunk->read_offset, 1, read_size, movie->file);
+    bytes_read = movie_file_read(chunk->chunk_storage + chunk->read_offset, 1, read_size, movie->file);
     read_finished_ticks = capture_read ? monotonic_clock_now_ticks() : 0;
     read_elapsed_ms = monotonic_clock_now_ms() - read_start_ms;
     if (capture_read) {
@@ -1282,7 +1293,7 @@ static bool prefetch_read_step_impl(Movie *movie, PrefetchedChunk *chunk, bool r
         movie->current_file_pos = -1;
         return false;
     }
-    movie->current_file_pos += (long) read_size;
+    movie->current_file_pos += (int64_t) read_size;
     if (debug_should_collect_metrics()) {
         movie->diag_prefetch_read_ops++;
         movie->diag_prefetch_read_bytes += (uint32_t) read_size;
@@ -1389,16 +1400,16 @@ retry:
         }
         async_loaded = offset == entry->packed_size;
     }
-    if (!async_loaded && movie->current_file_pos != (long) entry->offset &&
-        fseek(movie->file, (long) entry->offset, SEEK_SET) != 0) {
-        debug_failf("load chunk=%d fseek fail offset=%lu", chunk_index, (unsigned long) entry->offset);
+    if (!async_loaded && movie->current_file_pos != (int64_t) entry->offset &&
+        movie_file_seek(movie->file, entry->offset) != 0) {
+        debug_failf("load chunk=%d seek fail offset=%llu", chunk_index, (unsigned long long) entry->offset);
         movie->current_file_pos = -1;
         release_movie_chunk_storage(movie);
         return false;
     }
     capture_read = !async_loaded && debug_is_runtime_logging_enabled();
     read_started_ticks = capture_read ? monotonic_clock_now_ticks() : 0;
-    bytes_read = async_loaded ? entry->packed_size : fread(movie->chunk_storage, 1, entry->packed_size, movie->file);
+    bytes_read = async_loaded ? entry->packed_size : movie_file_read(movie->chunk_storage, 1, entry->packed_size, movie->file);
     if (capture_read) {
         playback_capture_io(movie, 1, chunk_index, (uint32_t) bytes_read, read_started_ticks, monotonic_clock_now_ticks());
     }
@@ -1408,7 +1419,7 @@ retry:
         release_movie_chunk_storage(movie);
         return false;
     }
-    if (!async_loaded) movie->current_file_pos = (long) entry->offset + (long) entry->packed_size;
+    if (!async_loaded) movie->current_file_pos = (int64_t) entry->offset + (int64_t) entry->packed_size;
     movie->chunk_storage_size = entry->packed_size;
     if (!configure_chunk_view(movie, chunk_index)) {
         debug_tracef(
@@ -1648,7 +1659,7 @@ bool read_seek_bar_preview_chunk_step(Movie *movie, SeekPreviewDecodeJob *job, u
     while (job->read_offset < job->chunk_storage_size) {
         size_t remaining;
         size_t read_size;
-        long target_pos;
+        int64_t target_pos;
         size_t bytes_read;
         bool capture_read;
         uint64_t read_started_ticks;
@@ -1661,7 +1672,7 @@ bool read_seek_bar_preview_chunk_step(Movie *movie, SeekPreviewDecodeJob *job, u
         read_size = remaining > SEEK_BAR_PREVIEW_IO_BLOCK_SIZE
             ? SEEK_BAR_PREVIEW_IO_BLOCK_SIZE
             : remaining;
-        target_pos = (long) (entry->offset + job->read_offset);
+        target_pos = (int64_t) (entry->offset + job->read_offset);
         if (movie_async_enabled(movie)) {
             if (read_size > MOVIE_ASYNC_BLOCK_BYTES) read_size = MOVIE_ASYNC_BLOCK_BYTES;
             int result = movie_async_read(movie, (uint64_t)entry->offset + job->read_offset,
@@ -1673,7 +1684,7 @@ bool read_seek_bar_preview_chunk_step(Movie *movie, SeekPreviewDecodeJob *job, u
             }
         }
         if (movie->current_file_pos != target_pos) {
-            if (fseek(movie->file, target_pos, SEEK_SET) != 0) {
+            if (movie_file_seek(movie->file, (uint64_t)target_pos) != 0) {
                 movie->current_file_pos = -1;
                 return false;
             }
@@ -1681,7 +1692,7 @@ bool read_seek_bar_preview_chunk_step(Movie *movie, SeekPreviewDecodeJob *job, u
         }
         capture_read = debug_is_runtime_logging_enabled();
         read_started_ticks = capture_read ? monotonic_clock_now_ticks() : 0;
-        bytes_read = fread(job->chunk_storage + job->read_offset, 1, read_size, movie->file);
+        bytes_read = movie_file_read(job->chunk_storage + job->read_offset, 1, read_size, movie->file);
         if (capture_read) {
             playback_capture_io(movie, 3, job->chunk_index, (uint32_t) bytes_read, read_started_ticks, monotonic_clock_now_ticks());
         }
@@ -1689,7 +1700,7 @@ bool read_seek_bar_preview_chunk_step(Movie *movie, SeekPreviewDecodeJob *job, u
             movie->current_file_pos = -1;
             return false;
         }
-        movie->current_file_pos += (long) read_size;
+        movie->current_file_pos += (int64_t) read_size;
         job->read_offset += read_size;
     }
 
@@ -1862,7 +1873,7 @@ static void step_mpeg4_seek_bar_preview_decode(Movie *movie, SeekBarPreviewState
     clear_seek_bar_preview_decode_job(preview);
 }
 
-static void step_planar_seek_bar_preview_decode(Movie *movie, SeekBarPreviewState *preview,
+static void step_planar_seek_bar_preview_decode_once(Movie *movie, SeekBarPreviewState *preview,
     uint32_t deadline_ms)
 {
     if (!NDVIDEO_WITH_HEVC && !NDVIDEO_WITH_AV1) return;
@@ -1918,6 +1929,21 @@ fail:
         NDVIDEO_WITH_AV1 && job->codec == MOVIE_CODEC_AV1 ? av1_error_string(job->av1_decoder) :
         NDVIDEO_WITH_HEVC ? hevc_error_string(job->hevc_decoder) : "codec unavailable");
     clear_seek_bar_preview_decode_job(preview);
+}
+
+static void step_planar_seek_bar_preview_decode(Movie *movie, SeekBarPreviewState *preview,
+    uint32_t deadline_ms)
+{
+    do {
+        step_planar_seek_bar_preview_decode_once(movie, preview, deadline_ms);
+        /* A codec step is a small unit, not a complete preview time slice.
+         * Use the remaining budget for this frame instead of waiting for
+         * another UI turn after every unit or sixteen converted rows.
+         * Never overwrite an unpresented frame. Deadline zero is the seek
+         * handoff path: its caller polls input between individual steps. */
+        if (!deadline_ms || !preview->decode_job.active ||
+            !preview->decode_job.frame_offsets || preview->surface_render_pending) return;
+    } while (!prefetch_deadline_reached(deadline_ms));
 }
 
 void step_seek_bar_preview_decode(Movie *movie, SeekBarPreviewState *preview, uint32_t deadline_ms)
@@ -2599,36 +2625,54 @@ void prefetch_tick(Movie *movie, bool paused, uint32_t spare_ms, const PointerSt
         }
         uint32_t needed=video_lookahead_active(movie)?video_lookahead_next_frame(movie):movie->current_frame;
         uint32_t runway=buffered_end>needed?buffered_end-needed:0;
-        if(!prefetch_async_should_work(paused,runway,spare_ms))return;
+        /* Full-speed USB needs several cooperative turns to complete each
+         * block. Under sustained decode overload, waiting until the last 16
+         * frames can push most of a chunk into its foreground join. Start
+         * only the immediate successor earlier, retaining the urgent 64-tick
+         * service bound. NAND/high-speed USB and distant speculation keep
+         * their existing policy. */
+        bool usb_early = !paused && spare_ms == 0U &&
+            runway > PREFETCH_ASYNC_URGENT_FRAMES &&
+            movie_async_full_speed_usb(movie) &&
+            !next_chunk_prefetched_ready(movie, current_chunk);
+        if (!prefetch_async_should_work(paused, runway, spare_ms) && !usb_early) return;
+        int work_distance = usb_early ? 1 : slot_count;
         /* Idle/READY can wait; an active NAND request or parked handoff must
          * retain its existing service path. Paused filling is unrestricted. */
         if (!paused && movie_async_needs_request(movie) &&
             prefetch_defer_speculative_request(movie, current_chunk))
             return;
-        PrefetchedChunk *work = find_prefetch_work_chunk(movie, current_chunk, slot_count);
+        PrefetchedChunk *work = find_prefetch_work_chunk(movie, current_chunk, work_distance);
         bool missing = false;
-        for (int distance = 1; !work && distance <= slot_count; ++distance) {
+        for (int distance = 1; !work && distance <= work_distance; ++distance) {
             int wanted = current_chunk + distance;
             if ((uint32_t)wanted >= movie->header.chunk_count) break;
             if (!find_prefetched_chunk(movie, wanted)) { missing = true; break; }
         }
         if ((!work && !missing) || prefetch_abort_requested(abort_pointer)) return;
-        prefetch_ahead(movie, current_chunk, 1, slot_count);
-        work = find_prefetch_work_chunk(movie, current_chunk, slot_count);
+        prefetch_ahead(movie, current_chunk, 1, work_distance);
+        work = find_prefetch_work_chunk(movie, current_chunk, work_distance);
+        if (usb_early && work && debug_should_collect_metrics())
+            ++movie->diag_usb_prefetch_early_turns;
         size_t before_read=work?work->read_offset:0;
         if (work && !prefetch_read_step(movie, work, true, 0)) work->state = PREFETCH_FAILED;
         if(movie_async_enabled(movie) && work && work->state==PREFETCH_READING && work->read_offset==before_read){
             /* A pending-read poll only checks completion. Preserve the real
              * remaining slack here: shrinking it to the 1 ms guard can starve
              * the reader even while repeated polls appear to be working. */
-            unsigned service_ticks=prefetch_async_remaining_ticks(runway,spare_ms,
+            unsigned service_ticks=prefetch_async_remaining_ticks(
+                usb_early ? PREFETCH_ASYNC_URGENT_FRAMES : runway,spare_ms,
                 spare_ms?monotonic_clock_now_ms()-service_started_ms:0U);
             if(!service_ticks)return;
+            if (usb_early && debug_should_collect_metrics())
+                ++movie->diag_usb_prefetch_early_services;
             movie_async_service(movie,service_ticks);
             /* Publish a block completed in that slice instead of leaving its
              * READY bytes parked until the next video frame. */
             if(!prefetch_read_step(movie,work,true,0))work->state=PREFETCH_FAILED;
         }
+        if (usb_early && work && work->read_offset > before_read && debug_should_collect_metrics())
+            movie->diag_usb_prefetch_early_bytes += work->read_offset - before_read;
         return;
     }
     if (spare_ms <= PREFETCH_IO_GUARD_MS) {
@@ -2997,6 +3041,7 @@ bool decode_mpeg4_frame_with_progress(
             return false;
         }
         movie->mpeg4.discontinuity = false;
+        movie->mpeg4.planar_supported = mpeg4_xvid_planar_supported(movie->mpeg4.decoder);
         movie->decoded_local_frame = (int) replay_index;
         if (hook && should_blit && should_publish) {
             movie->current_frame = decoded_frame_index;

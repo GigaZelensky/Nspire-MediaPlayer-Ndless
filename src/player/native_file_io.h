@@ -3,8 +3,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-/* Direct stdio for the fingerprinted CX II driver layout. Compatibility is
- * checked against code and task state, independently of the OS version label.
+#include <stdio.h>
+/* Direct stdio through validated Ndless exports and the CX II driver layout.
+ * Code, kernel and driver bindings are resolved independently of their addresses.
  * Handles are opaque; no native task/event is created. */
 enum {
     NATIVE_FILE_IO_OK = 0,
@@ -18,6 +19,7 @@ typedef struct {
     volatile unsigned io_phase;
 } NativeFileIo;
 int native_file_io_init(NativeFileIo *);
+void native_file_io_debug(FILE *);
 void *native_file_io_open(NativeFileIo *, const char *);
 void *native_file_io_open_write(NativeFileIo *, const char *);
 void *native_file_io_open_append(NativeFileIo *, const char *);

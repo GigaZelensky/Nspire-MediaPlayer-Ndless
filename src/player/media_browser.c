@@ -79,7 +79,7 @@ const char *media_local_directory(const char *path)
 void media_browser_breadcrumb(char *text, size_t bytes)
 {
     if (media_browser_at_root()) {
-        snprintf(text, bytes, "Library");
+        snprintf(text, bytes, "Videos");
         return;
     }
     const char *relative = directory;

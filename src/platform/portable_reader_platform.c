@@ -46,6 +46,15 @@ static bool read_word(void *context, uint32_t address, uint32_t *value)
     *value = word(address, NULL);
     return true;
 }
+static const uint32_t *code_words(void *context, uint32_t address, uint32_t bytes)
+{
+    PortableReaderPlatform *p = context;
+    if ((address & 3U) || !bytes || (bytes & 3U) || native_interrupt_mask() != 0xc0U ||
+        p->view.code_end <= p->view.code_begin || bytes > p->view.code_end - p->view.code_begin ||
+        address < p->view.code_begin || address > p->view.code_end - bytes ||
+        !allow(context, address, bytes, PORTABLE_CODE)) return NULL;
+    return (const uint32_t *)(uintptr_t)address;
+}
 static bool callable(PortableReaderPlatform *p, uint32_t address)
 {
     return !(address & 3U) && address >= p->view.code_begin && address <= p->view.code_end - 4U &&
@@ -91,7 +100,7 @@ bool portable_reader_platform_refresh(PortableReaderPlatform *p)
         return false;
     p->table_valid = true;
     p->view =
-        (PortableView){p, allow, read_word, 0x10000000U, 0x12000000U, 0x10000000U, 0x14000000U};
+        (PortableView){p, allow, read_word, 0x10000000U, 0x12000000U, 0x10000000U, 0x14000000U, code_words};
     p->status = PORTABLE_READER_PLATFORM_OK;
     return true;
 }
