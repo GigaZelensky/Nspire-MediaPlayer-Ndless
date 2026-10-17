@@ -155,6 +155,11 @@ bool usb_browser_device_present(void)
     unsigned presence=connection_presence();
     return presence!=USB_AUTO_UNKNOWN && (presence&USB_AUTO_DEVICE);
 }
+bool usb_browser_adapter_present(void)
+{
+    unsigned presence=connection_presence();
+    return presence!=USB_AUTO_UNKNOWN && (presence&USB_AUTO_ADAPTER);
+}
 static uint32_t host_connection_state(void)
 {
     UsbRegisters r;

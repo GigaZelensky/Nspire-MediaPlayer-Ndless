@@ -45,6 +45,22 @@
 #  define BYTE_ORDER LITTLE_ENDIAN
 #endif
 
+/* Strict C99 can hide the libc BYTE_ORDER names on Linux. Use the compiler's
+ * constants for the generic host math path, without changing ARM assembly. */
+#ifndef BYTE_ORDER
+# if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && defined(__ORDER_BIG_ENDIAN__)
+#  ifndef LITTLE_ENDIAN
+#   define LITTLE_ENDIAN __ORDER_LITTLE_ENDIAN__
+#  endif
+#  ifndef BIG_ENDIAN
+#   define BIG_ENDIAN __ORDER_BIG_ENDIAN__
+#  endif
+#  define BYTE_ORDER __BYTE_ORDER__
+# else
+#  error Cannot determine byte order for Tremor math
+# endif
+#endif
+
 #ifdef HAVE_ALLOCA_H
 #  include <alloca.h>
 #endif

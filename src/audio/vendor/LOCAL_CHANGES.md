@@ -12,6 +12,10 @@ this avoids the Ndless SDK's distinct 32-bit long typedef conflicting with
 Tremor exponent pointers. The headers/source list and upstream hashes are
 recorded in `sources.json`. Decoder math/tables are otherwise unchanged.
 
+Tremor's `os.h` falls back to compiler byte-order constants when strict C99
+hides libc's `BYTE_ORDER` names. This fixes generic host compilation on Linux;
+the ARM assembly math path and decoder algorithms are unchanged.
+
 `opusfile/src/opusfile.c` fixes a short forward seek while decoded PCM is still
 buffered: the buffered portion of the discard is applied to `od_buffer_pos`
 immediately, and only the remainder is left in `cur_discard_count`. Upstream

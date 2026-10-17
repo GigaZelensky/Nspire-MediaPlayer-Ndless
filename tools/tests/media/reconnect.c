@@ -81,7 +81,13 @@ void audio_playback_suspend(AudioPlayback *a){if(a)a->running=false;}
 void audio_playback_diagnostics(AudioPlayback *a,void (*fn)(FILE *,const void *),const void *context,bool error)
 {(void)a;(void)fn;(void)context;(void)error;}
 static void music_ui_debug(FILE *file,const void *context){(void)file;(void)context;}
-static bool usb_browser_device_present(void){return scenario!=2 || clock_ms>=700;}
+static bool usb_browser_device_present(void){
+ if(scenario==10)return opens!=0;
+ if(scenario==11)return source_retries>=2;
+ if(scenario==12)return false;
+ return scenario!=2 || clock_ms>=700;
+}
+static bool usb_browser_adapter_present(void){return scenario!=12;}
 static void usb_browser_idle_discovery(SDL_Surface *s,uint32_t now){(void)s;(void)now;++discovery;}
 static bool usb_browser_connect(SDL_Surface *s,const Fonts *f,PointerState *p,
     void (*backdrop)(SDL_Surface *,void *,uint32_t),void *context)
@@ -111,27 +117,30 @@ static void save_recovery(const MusicUi *ui,int result){assert(ui->reconnect_max
 int main(void)
 {
     SDL_Surface screen={0};Fonts fonts={0};PointerState pointer={0};
-    for(scenario=0;scenario<10;++scenario){
+    for(scenario=0;scenario<13;++scenario){
         clock_ms=closes=quiet_closes=opens=source_retries=frames=discovery=0;
-        cancel_at=scenario==1?200:scenario==4?1000:0;
+        cancel_at=scenario==1?200:scenario==4 || scenario==12?1000:0;
         recovery_saves=0;pointer=(PointerState){0};retry_progress=NULL;
-        mounted=scenario!=2 && scenario!=6;quiet_reconnect=last_connection_cancelled=false;attempt_failures=scenario==0?2:0;
+        mounted=scenario!=2 && scenario!=6 && scenario!=11;quiet_reconnect=last_connection_cancelled=false;attempt_failures=scenario==0?2:0;
         original=(AudioPlayback){.live=true,.failed=true,.retry=true,.rate=44100,.position=44100};
         current=&original;AudioPlayback *audio=&original;
         AudioPlaybackInfo info={44100,1000000,44100,2,3,true,false,true,false};
         MusicControls controls={.capture=7,.scrubbing=true,.pending_seek=true,.paused=scenario==5};
         MusicUi ui={0};
-        int result=music_wait_for_audio(&screen,&fonts,scenario==2 || scenario==6?"usb:/disk/song.flac":"song.flac",
+        int result=music_wait_for_audio(&screen,&fonts,scenario==2 || scenario==6 || scenario==11?"usb:/disk/song.flac":"song.flac",
                                       &audio,&info,&controls,&pointer,&ui);
         assert(closes==1 && !controls.capture && !controls.scrubbing && !controls.pending_seek);
-        assert(ui.reconnects==1 && ui.reconnect_attempts==opens+source_retries-(scenario==2?1:0));
-        if(scenario==1 || scenario==4 || scenario==6 || scenario==7 || scenario==8 || scenario==9)assert(!result);
+        assert(ui.reconnects==1 && ui.reconnect_attempts==opens+source_retries-(scenario==2 || scenario==11?1:0));
+        if(scenario==1 || scenario==4 || scenario==6 || scenario==7 || scenario==8 || scenario==9 || scenario==12)assert(!result);
         else if(scenario==3)assert(result==-1 && audio && audio->failed);
         else {
             assert(result==1 && info.position==48000 && !info.failed && audio->running==!controls.paused);
             if(scenario==0)assert(opens==3 && quiet_closes==2);
             if(scenario==2)assert(source_retries==2 && discovery);
+            if(scenario==10)assert(opens==1 && discovery && !source_retries);
+            if(scenario==11)assert(source_retries==2 && discovery);
         }
+        if(scenario==12)assert(!opens && !source_retries && discovery);
         if(audio)audio_playback_close(audio);
         assert(!current && frames && ui.reconnect_max_ms==clock_ms && !quiet_reconnect && !retry_progress);
         assert(recovery_saves==(result<=0));

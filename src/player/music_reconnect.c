@@ -119,8 +119,14 @@ int music_wait_for_audio(SDL_Surface *screen,const Fonts *fonts,const char *path
         if((int32_t)(now-retry_at)<0) {player_delay_ms(16);continue;}
         if(!usb_browser_device_present()) {
             (void)usb_storage_mounted(); /* Poll and invalidate the old volume. */
-            present_since=0;
             usb_browser_idle_discovery(screen,now);
+        }
+        /* A stopped/suspended native host can report no root-port device
+         * until its guarded start/resume runs. Waiting for PORT_CONNECT
+         * before attempting that wake strands a reinserted hub. The OTG ID
+         * signal is independent of that controller/port state. */
+        if(!usb_browser_adapter_present()) {
+            present_since=0;
             retry_at=monotonic_clock_now_ms()+250;
             continue;
         }
