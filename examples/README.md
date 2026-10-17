@@ -16,9 +16,9 @@ Licensing note:
 
 ## Screenshots
 
-| Music and album cover | Vortex | Prism |
+| Music and album cover | It's Been So Long | Vortex |
 | --- | --- | --- |
-| ![Music player](screenshots/music-player.png) | ![Vortex visualization](screenshots/music-vortex.png) | ![Prism visualization](screenshots/music-prism.png) |
+| ![Music player](screenshots/music-player.png) | ![It's Been So Long](screenshots/music-its-been-so-long.png) | ![Vortex visualization](screenshots/music-vortex.png) |
 
 The music images use the current music UI with representative tags/artwork.
 Visualizations are rendered by the production visualization code from decoded
