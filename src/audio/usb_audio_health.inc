@@ -51,6 +51,7 @@ bool usb_audio_check_health(UsbAudio *u)
      * an address now belonging to another device must stop immediately. */
     if (u->health_failures >= 2 || replied || u->unsafe_dma || !(CMD & RUN) ||
         !(CMD & PSE) || !connected()) {
+        u->link_lost = true;
         u->error = "USB audio device stopped responding";
         return false;
     }

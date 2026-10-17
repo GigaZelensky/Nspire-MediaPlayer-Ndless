@@ -19,6 +19,8 @@ static unsigned topology_root_speed;
 static bool topology_probe;
 static char topology_summary[128];
 static unsigned topology_restore_errors;
+static unsigned topology_restore_skipped;
+static const char *topology_handoff_reason = "none";
 typedef struct {
     const char *stage;
     uint32_t before, first, after, elapsed_ms;
@@ -131,6 +133,13 @@ static void restore_hub_ports(UsbAudio *u)
     uint8_t tt_hub = u->tt_hub, tt_port = u->tt_port;
     while (u->hub_undo_count && connected() && !u->unsafe_dma) {
         HubPortUndo v = u->hub_undo[--u->hub_undo_count];
+        /* A journal describes the old attachment. Keep its path awake after
+         * loss/change so native hub workers can detach and enumerate children;
+         * suspending ancestors here can hide the changed subtree from them. */
+        if (u->link_lost) {
+            ++topology_restore_skipped;
+            continue;
+        }
         u->address = v.address;
         u->max_control = v.max_control;
         u->high_speed = v.high_speed;
@@ -140,6 +149,23 @@ static void restore_hub_ports(UsbAudio *u)
         u->tt_multi = v.tt_multi;
         uint8_t status[4];
         bool restored = control(u, 0xa3, 0, 0, v.port, status, 4, 100);
+        if (!restored) {
+            ++topology_restore_errors;
+            ++topology_restore_skipped;
+            u->link_lost = true;
+            topology_handoff_reason = "hub port unreadable";
+            continue;
+        }
+        /* Ignore C_SUSPEND, which our own resume generated. Connection,
+         * enable, overcurrent and reset changes belong to the native owner.
+         * Never acknowledge/clear those events or re-suspend their path. */
+        if ((get16(status) & 3U) != 3U || (get16(status) & 0x18U) ||
+            (get16(status + 2) & 0x1bU)) {
+            ++topology_restore_skipped;
+            u->link_lost = true;
+            topology_handoff_reason = "hub connection changed";
+            continue;
+        }
         if (restored && (get16(status) & 3U) == 3U && !(get16(status) & 4U)) {
             restored = control(u, 0x23, 3, 2, v.port, NULL, 0, 100) && hub_delay(u, 10) &&
                        control(u, 0xa3, 0, 0, v.port, status, 4, 100) && (get16(status) & 4U);
@@ -219,6 +245,9 @@ void usb_audio_hub_debug(FILE *file)
     }
     fprintf(file, "usb_audio_hubs resumed_ports=%u failed_ports=%u restore_errors=%u\n",
             resumed, failed, topology_restore_errors);
+    if (topology_restore_skipped)
+        fprintf(file, "usb_audio_hub_handoff skipped_ports=%u reason=%s\n",
+                topology_restore_skipped, topology_handoff_reason);
     for (unsigned i = 0; i < hub_wake_count; ++i) {
         const HubWakeTrace *w = hub_wakes + i;
         fprintf(file, "usb_audio_hub_wake hub=%u port=%u stage=%s command_ok=%u "

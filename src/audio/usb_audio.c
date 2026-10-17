@@ -159,7 +159,7 @@ struct UsbAudio {
     unsigned volume,gain_q15;
     bool owned, running, configured, alternate_set, unsafe_dma, high_speed;
     bool closing;
-    bool last_control_stalled, clearing_tt, health_check;
+    bool last_control_stalled, clearing_tt, health_check, link_lost;
     uint32_t health_at, health_checks, health_errors, health_max_ms;
     unsigned health_failures;
     bool root_high_speed, low_speed, tt_multi;
@@ -489,6 +489,8 @@ static UsbAudio *usb_session_open(uint32_t (*now_ms)(void), const char **status)
     strcpy(last_stream_state,"not captured");
     topology_count = 0;
     topology_restore_errors = 0;
+    topology_restore_skipped = 0;
+    topology_handoff_reason = "none";
     hub_wake_count = hub_wake_dropped = 0;
     tt_clears = tt_clear_errors = 0;
     memset(audio_probes, 0, sizeof(audio_probes));
@@ -712,7 +714,13 @@ bool usb_audio_close(UsbAudio *u)
             return false;
         if (safe && connected()) {
             stage_event("USB restore audio controls");
-            rollback_format(u);
+            /* Endpoint journals belong to the device we configured. Once it
+             * stops responding, leave replacement enumeration to the native
+             * owner instead of replaying writes through the stale route. */
+            if (!u->link_lost && !rollback_format(u))
+                u->link_lost = true;
+            if (u->link_lost)
+                topology_handoff_reason = "audio link lost";
             stage_event("USB restore hub ports");
             restore_hub_ports(u);
             safe = stop_schedules(u);

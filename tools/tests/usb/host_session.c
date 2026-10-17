@@ -7,8 +7,9 @@
 #include "usb_autoconnect.h"
 #include "usb_host_session.h"
 static uint32_t regs[64],gate,clock_gate,irq,clock_ms;
-static unsigned waits,claims,releases,ready_after,mask;
-static bool native_lease,cancelled,stuck;
+static unsigned waits,claims,releases,ready_after,mask,native_ready_after;
+static bool native_lease,cancelled,stuck,repair_native,drop_native_on_claim;
+static uint32_t native_state[8];
 static uint32_t *test_register(uint32_t address)
 {
     if(address>=0xb0000000 && address<0xb0000100 && !(address&3))return regs+(address-0xb0000000)/4;
@@ -21,12 +22,15 @@ uint32_t nspire_hardware_id(void){return 0x202;}
 bool nspire_is_cx2(void){return true;}
 static unsigned native_critical_enter(void){unsigned old=mask;mask=0xc0;return old;}
 static void native_critical_leave(unsigned value){mask=value;}
-static void native_usb_ui_bus_snapshot(uint32_t out[8]){memset(out,0,32);out[0]=1;out[7]=5;}
+static void native_usb_ui_bus_snapshot(uint32_t out[8]){memcpy(out,native_state,sizeof(native_state));}
 static unsigned native_usb_ui_bus_lock_stage(void){return native_lease?3:0;}
 static bool native_usb_ui_bus_is_leased(void){return native_lease;}
 static int native_usb_ui_bus_acquire(void)
 {
     assert(!native_lease && !(regs[4]&(2U|64U)));
+    assert(native_state[0]==1 && !native_state[2] && !native_state[3] &&
+           native_state[4] && native_state[5]==1);
+    if(drop_native_on_claim)native_state[5]=0;
     native_lease=true;++claims;return 0;
 }
 static void native_usb_ui_bus_release(void){if(native_lease){native_lease=false;++releases;}}
@@ -34,6 +38,10 @@ static int native_usb_ui_wait(void)
 {
     assert(!native_lease);++waits;clock_ms+=10;
     if(!stuck && waits>=ready_after)regs[4]&=~(2U|64U);
+    if(repair_native && waits>=native_ready_after) {
+        native_state[0]=1;native_state[2]=native_state[3]=0;
+        native_state[4]=0x11000000;native_state[5]=1;
+    }
     return 0;
 }
 static int native_usb_ui_reassert(void){return 0;}
@@ -50,7 +58,10 @@ static void reset(uint32_t command,unsigned turns)
     regs[5]=0xc000;regs[12]=5;regs[32]=2U<<22;
     gate=0xffffffff;clock_gate=0xffebffff;irq=256;mask=0;
     clock_ms=waits=claims=releases=0;ready_after=turns;
-    native_lease=leased=cancelled=stuck=false;
+    native_lease=leased=cancelled=stuck=repair_native=drop_native_on_claim=false;
+    native_ready_after=0;
+    memset(native_state,0,sizeof(native_state));
+    native_state[0]=1;native_state[4]=0x11000000;native_state[5]=1;native_state[7]=5;
 }
 int main(void)
 {
@@ -73,6 +84,31 @@ int main(void)
     reset(0x80071,1);cancelled=true;message[0]=0;
     assert(!usb_host_session_prepare(now,progress,NULL,message,sizeof(message)));
     assert(!claims && !leased && !native_lease && gate==0xffffffff && !strcmp(message,"Cancelled"));
+    for(unsigned mode=0;mode<6;++mode) {
+        reset(0x80031,1);repair_native=true;native_ready_after=3;
+        switch(mode) {
+        case 0:native_state[0]=0;break;
+        case 1:native_state[4]=0;break;
+        case 2:native_state[5]=0;break;
+        case 3:native_state[2]=1;break;
+        case 4:native_state[3]=1;break;
+        case 5:native_state[2]=native_state[3]=1;break;
+        }
+        assert(usb_host_session_prepare(now,progress,NULL,message,sizeof(message)));
+        assert(waits==3 && claims==1 && native_lease);
+        usb_host_session_release();
+    }
+    reset(0x80031,1);native_state[4]=0;message[0]=0;
+    assert(!usb_host_session_prepare(now,progress,NULL,message,sizeof(message)));
+    assert(!claims && !native_lease && !leased && waits<1000 && gate==0xffffffff);
+    reset(0x80031,1);drop_native_on_claim=true;message[0]=0;
+    assert(!usb_host_session_prepare(now,progress,NULL,message,sizeof(message)));
+    assert(claims==1 && releases==1 && !native_lease && !leased && gate==0xffffffff);
+    reset(0x80031,1);native_state[7]=0;
+    assert(usb_host_session_prepare(now,progress,NULL,message,sizeof(message)));
+    assert(waits==1 && claims==1 && native_lease);
+    usb_host_session_release();
+    puts("PASS MMIO-ready host waits for authenticated native active/IRQ and consistent resumed state, rechecks after claim, and accepts a coherent empty bus");
     puts("PASS shared host session waits for native doorbell/reset completion, releases an old lease, and bounds cancellation/stuck hardware");
     return 0;
 }

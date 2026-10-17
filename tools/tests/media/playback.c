@@ -23,7 +23,7 @@ struct AudioPlayback {
     uint32_t pause_max_ms, seek_max_ms, prefill_max_ms, start_max_ms;
     uint32_t last_seek_ms, last_prefill_ms, last_start_ms;
     unsigned restart_count, seek_count;
-    bool running, failed, need_seek, mute, usb_failed;
+    bool running, failed, need_seek, mute, usb_failed, primary_saved;
     int source_error;
     char transfer_fault[384];
     char source_path[256];

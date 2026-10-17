@@ -31,7 +31,7 @@ struct AudioPlayback {
     uint32_t pause_max_ms, seek_max_ms, prefill_max_ms, start_max_ms;
     uint32_t last_seek_ms, last_prefill_ms, last_start_ms;
     unsigned restart_count, seek_count;
-    bool mute, running, failed, need_seek, native_operation, notice, usb_failed;
+    bool mute, running, failed, need_seek, native_operation, notice, usb_failed, primary_saved;
     const char *hardware_stage;
     int hardware_result;
     int source_error;
@@ -342,6 +342,26 @@ static void report_clock_sample(FILE *file, const char *name, const PerformanceC
             (unsigned long)s->timing1c, (unsigned long)s->emi_control);
 }
 
+static void save_primary_fault(AudioPlayback *a)
+{
+    /* Keep the latest real streaming failure independently of retry records.
+     * Setup failures/cancellation cannot replace it. One bounded file, replaced
+     * only by a later streaming failure; successful playback stays quiet. */
+    if (a->primary_saved || !a->restart_count || !*a->transfer_fault)
+        return;
+    char path[MAX_PATH_LEN];
+    if (!player_data_prepare() || !player_data_path("ndmedia-audio-fault.log.tns",path,sizeof(path)))
+        return;
+    FILE *file = fopen(path,"wb");
+    if (!file)
+        return;
+    fprintf(file,"nMedia primary USB audio failure | %s %s\npath=%s\nprimary=%s\n"
+                 "usb_stream_before_close=%s\nusb_control_before_stop=%s\n",
+            __DATE__,__TIME__,a->source_path,a->transfer_fault,
+            usb_audio_last_stream(),usb_audio_last_control());
+    fclose(file);
+    a->primary_saved = true;
+}
 static void save_report(AudioPlayback *a, const char *event)
 {
     bool wanted = (a->failed && a->source_error!=ECANCELED) || a->diagnostics_error;
@@ -353,6 +373,7 @@ static void save_report(AudioPlayback *a, const char *event)
     if (!wanted)
         return;
     raw_player_before_native();
+    save_primary_fault(a);
     char timing_path[MAX_PATH_LEN];
     if (player_data_prepare() && player_data_path("ndmedia-timing.log.tns", timing_path, sizeof(timing_path))) {
         FILE *file = player_error_log_open(timing_path,true);
@@ -477,6 +498,7 @@ bool audio_playback_retry(AudioPlayback *a, uint32_t frame)
     audio_playback_suspend(a);
     a->failed=false; a->source_error=0; a->mute=false;remembered_mute=false;
     a->transfer_fault[0]=0;
+    a->primary_saved=false;
     a->usb_failed=false;
     bool ok=audio_playback_seek(a,frame);
     if (ok) notice(a,"Retrying USB audio");

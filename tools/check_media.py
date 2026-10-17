@@ -45,7 +45,7 @@ def check(work):
     report = work / "report.c"
     report.write_text((tests / "report.c").read_text().replace(
         "/* PRODUCTION_REPORT */", "\n".join(function(source, name) for name in (
-            "report_clock_sample", "save_report", "audio_playback_context", "audio_playback_checkpoint"))+
+            "report_clock_sample", "save_primary_fault", "save_report", "audio_playback_context", "audio_playback_checkpoint"))+
             "\n"+"\n".join(function(adapter,name) for name in ("context","movie_audio_checkpoint"))))
     for timing in (0, 1):
         report_exe = work / ("report" + str(timing) + ".exe")

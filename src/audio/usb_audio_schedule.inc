@@ -186,6 +186,7 @@ bool usb_audio_service(UsbAudio *u)
     if (!u || !u->running)
         return false;
     if (!connected() || (STS & (1U << 4))) {
+        u->link_lost = true;
         u->error = "USB audio disconnected or controller error";
         return false;
     }

@@ -51,7 +51,11 @@ static void sample(const char *stage)
 static bool ready(void)
 {
     HostSample *s = samples + sample_count - 1;
-    return (s->cap & 0xffff00ffU) == 0x01000010U && !(s->otg & registers.role_mask) &&
+    /* Electrical readiness alone can precede native start/resume completion.
+     * The authenticated tree must also publish a running, registered host. */
+    return s->native[0] == 1 && !s->native[2] && !s->native[3] &&
+           s->native[4] && s->native[5] == 1 &&
+           (s->cap & 0xffff00ffU) == 0x01000010U && !(s->otg & registers.role_mask) &&
            (s->port & 0x85U) == 5U && (s->command & 1U) &&
            !(s->command & (2U | 64U)) && !(s->status & (0x1000U | 16U));
 }

@@ -287,10 +287,20 @@ done:
     return result;
 }
 
+static bool running_native_bus(void)
+{
+    UsbHostTree tree;
+    uint32_t resume = 0;
+    return portable_reader_platform_refresh(&mapping) && resume_tree(&tree, &resume) &&
+           WORD(tree.bus + 604) && WORD(tree.bus + 1772) == 1 &&
+           !WORD(tree.bus + 1760) && !WORD(tree.handle + 32);
+}
+
 static bool retain_bus_lease(uint32_t lock, uint32_t tree_lock)
 {
     UsbRegisters r;
-    if (bus_borrowed || !usb_registers_for_asic(api.classic_cx ? 0x101U : 0x202U, &r) ||
+    if (bus_borrowed || !running_native_bus() ||
+        !usb_registers_for_asic(api.classic_cx ? 0x101U : 0x202U, &r) ||
         !usb_registers_valid(&r) || (WORD(r.otg) & r.role_mask) || (WORD(r.port) & 0x85U) != 5U ||
         !(WORD(r.command) & 1U) || (WORD(r.command) & (2U | 64U)) ||
         (WORD(r.command + 4) & (0x1000U | 16U)))

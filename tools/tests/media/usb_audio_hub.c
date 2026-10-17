@@ -30,6 +30,7 @@ static unsigned start_polls,illegal_async_disables;
 static uint32_t previous_command,previous_status;
 static bool leaf_present=true;
 static unsigned live_queries,periodic_drops;
+static uint32_t port_changes[2];
 static unsigned hub_address[2], link_port[2], leaf_address, hubs;
 static bool suspended[2], originally_suspended[2], fail_resume, cancel_after_resume;
 static bool resume_pending[2], status_failed_once;
@@ -145,7 +146,7 @@ void usb_test_poll(void)
     } else if(setup[0]==0xa3 && request==0 && value==0) {
         check(!leaf && length==4 && index>=1 && index<=7,"bad hub status request");
         put32(payload,index==link_port[hub]?
-              ((hub==(int)hubs-1?0x103U:0x503U)|(suspended[hub]?4U:0U)):0x100U);
+              ((hub==(int)hubs-1?0x103U:0x503U)|(suspended[hub]?4U:0U)|port_changes[hub]):0x100U);
         if(scenario==9 && hub==0 && index==link_port[hub] && resumes && !status_failed_once) {
             status_failed_once=true;ok=false;
         }
@@ -239,6 +240,7 @@ static void reset(unsigned mode)
     start_polls=illegal_async_disables=0;previous_command=previous_status=0;
     configuration=mode==17 || mode==24?0:1;
     leaf_present=true;live_queries=periodic_drops=0;
+    memset(port_changes,0,sizeof(port_changes));
     memset(resume_pending,0,sizeof(resume_pending));status_failed_once=false;
     hubs=mode==0?1:2;
     hub_address[0]=mode%2?73:2;hub_address[1]=mode%2?7:100;
@@ -259,6 +261,27 @@ static void reset(unsigned mode)
 }
 int main(void)
 {
+    for(unsigned event=0;event<5;++event) {
+        reset(2);
+        const char *message=NULL;UsbAudio *u=usb_audio_open(now,&message);
+        check(u && resumes==2 && !suspended[0] && !suspended[1],"journal fixture did not wake both hubs");
+        if(event<3)port_changes[1]=1U<<(16+(event==0?0:event==1?1:4));
+        else if(event==3)u->link_lost=true;
+        else port_changes[1]=1U<<18; /* Our own C_SUSPEND is safe to restore. */
+        unsigned selected_alternate=alternate,selected_rate=rate;
+        check(usb_audio_close(u) && !allocation,"changed-port cleanup leaked DMA");
+        if(event<4) {
+            check(!suspends && !suspended[0] && !suspended[1] && topology_restore_skipped==2,
+                  "stale suspend journal hid a changed/replaced child or its ancestor");
+            if(event==3)check(alternate==selected_alternate && rate==selected_rate,
+                             "endpoint controls replayed after confirmed link loss");
+            if(event<3)check(port_changes[1],"native connection/reset event was acknowledged");
+        } else check(suspends==2 && suspended[0] && suspended[1] && !topology_restore_skipped,
+                     "normal resume-generated suspend change broke journal restoration");
+        check(usb_test_registers[4]==(RUN|ASE|PSE) && usb_test_registers[10]==0x12001000,
+              "changed-port handoff did not restore native schedules");
+    }
+    puts("PASS teardown keeps changed/replaced hub paths awake, preserves native events, skips stale endpoint writes and restores unchanged ports");
     for(unsigned mode=0;mode<4;++mode) {
         reset(3);
         const char *message=NULL;UsbAudio *u=usb_audio_open(now,&message);
