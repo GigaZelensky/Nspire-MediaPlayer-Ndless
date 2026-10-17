@@ -199,10 +199,14 @@ void usb_test_poll(void)
         if(request==0x81) {payload[0]=(uint8_t)rate;payload[1]=(uint8_t)(rate>>8);payload[2]=(uint8_t)(rate>>16);}
         else {check(request==1,"unknown audio request");rate=payload[0]|payload[1]<<8|payload[2]<<16;}
     } else check(false,"unexpected device reset/address/power/control write");
-    q->token&=~0x80U;
+    q->token&=~(0x80U|0x7fff0000U); /* Setup packet consumed successfully. */
     if(!ok){data->token=(data->token&~0x80U)|0x40U;return;}
     if(length)data->token&=~(0x80U|0x7fff0000U);
     if(length && scenario==34)data->token|=1U<<16;
+    /* Captured failure: GET_CONFIGURATION completed with zero bytes:
+     * setup=80000e00 data=00010d00 status=00000c00. */
+    if(length && request==8 && setup[0]==0x80 && scenario>=35 && scenario<=38)
+        data->token|=1U<<16;
     status->token&=~0x80U;
 }
 static uint32_t now(void)
@@ -229,8 +233,8 @@ static bool lookup(void *unused,uint8_t address,UsbAudioRoute *out)
 static bool device_state(void *unused,uint8_t address,int iface,UsbDeviceState *out)
 {
     (void)unused;check(address==leaf_address,"native state addressed wrong device");++state_reads;
-    if(scenario==15 || scenario==20)return false;
-    *out=(UsbDeviceState){.configuration=(uint8_t)(scenario==22 || scenario==25?2:scenario==17 || scenario==24?0:1),
+    if(scenario==15 || scenario==20 || scenario==37)return false;
+    *out=(UsbDeviceState){.configuration=(uint8_t)(scenario==22 || scenario==25 || scenario==38?2:scenario==17 || scenario==24 || scenario==36?0:1),
                          .alternate=(uint8_t)(scenario==19?1:0),.alternate_known=iface==1 && scenario!=26};
     return true;
 }
@@ -238,7 +242,7 @@ static void reset(unsigned mode)
 {
     scenario=mode;clock_ms=resumes=suspends=alternate=state_reads=alternate_queries=0;rate=44100;
     start_polls=illegal_async_disables=0;previous_command=previous_status=0;
-    configuration=mode==17 || mode==24?0:1;
+    configuration=mode==17 || mode==24 || mode==36?0:1;
     leaf_present=true;live_queries=periodic_drops=0;
     memset(port_changes,0,sizeof(port_changes));
     memset(resume_pending,0,sizeof(resume_pending));status_failed_once=false;
@@ -355,6 +359,7 @@ int main(void)
       usb_audio_capture_stream(u);
       check(strstr(usb_audio_last_stream(),"scheduled=0") && strstr(usb_audio_last_stream(),"token=00000000"),"read uninitialized stream descriptors");
       uint8_t descriptor[8];check(!control(u,0x80,6,0x100,0,descriptor,8,20),"short IN accepted");
+      check(u->last_control_short && !u->last_control_stalled,"completed short IN misclassified");
       check(strstr(usb_audio_last_control(),"phase=transfer"),"short-IN pre-stop state missing");
       check(usb_audio_close(u),"short-IN cleanup"); }
     puts("PASS asynchronous start acknowledgement, delayed start, halt/quarantine, and original fault preservation");
@@ -378,7 +383,8 @@ int main(void)
             "refused takeover changed native command");
     }
     puts("PASS native reset/advance/disconnect after allocation refuses takeover without touching native registers");
-    for(unsigned mode=0;mode<27;++mode) {
+    for(unsigned mode=0;mode<39;++mode) {
+      if(mode>=27 && mode<35)continue; /* Separate schedule/short-read cases above. */
       reset(mode);
       for(unsigned repeat=0;repeat<2;++repeat) {
         /* Reopen against the controller/device state left by cleanup. */
@@ -387,7 +393,7 @@ int main(void)
         const char *message=NULL;
         UsbAudio *u=usb_audio_open(now,&message);
         bool expected=mode!=4 && mode!=5 && mode!=8 &&
-            (mode<11 || mode==14 || mode==17 || mode==18 || mode==21 || mode==23 || mode==24);
+            (mode<11 || mode==14 || mode==17 || mode==18 || mode==21 || mode==23 || mode==24 || mode==35 || mode==36);
         if(!expected)check(!u,"failed/cancelled discovery started playback");
         else {
             check(u && !u->unsafe_dma,message?message:"audio open failed");
@@ -408,7 +414,7 @@ int main(void)
         check(!allocation && !topology_restore_errors,"DMA or port restoration failure");
         for(unsigned i=0;i<hubs;++i)check(suspended[i]==originally_suspended[i],"port state changed on exit");
         check(!alternate && rate==44100,"audio controls not restored");
-        check(configuration==(mode==17 || mode==24?0U:1U),"native configuration changed on close");
+        check(configuration==(mode==17 || mode==24 || mode==36?0U:1U),"native configuration changed on close");
         if(mode==16)check(!state_reads,"configuration timeout treated as STALL and used native state");
         if(mode==23)check(state_reads && !alternate_queries,"redundant hanging GET_INTERFACE was sent despite known idle state");
         if(mode==26)check(state_reads && alternate_queries,"unknown native alternate did not use the wire query");
@@ -427,7 +433,7 @@ int main(void)
         if(mode==11)check(strstr(details,"stage=device header") && strstr(details,"req=06 value=0100"),"descriptor transfer fault lost");
         if(mode==12)check(strstr(details,"stage=parse playback formats") && strstr(details,"formats=0"),"format rejection stage lost");
         if(mode==13)check(strstr(details,"stage=get alternate") && strstr(details,"req=0a"),"alternate request failure lost");
-        if(mode==14 || mode==17 || mode==21 || mode==24)check(strstr(details,"config_cached=1"),"configuration fallback missing");
+        if(mode==14 || mode==17 || mode==21 || mode==24 || mode==35 || mode==36)check(strstr(details,"config_cached=1"),"configuration fallback missing");
         if(mode==18 || mode==21 || mode==24)check(strstr(details,"alternate_cached=1"),"alternate fallback missing");
         check(clock_ms<5000,"resume wait was unbounded");
         check(usb_test_registers[4]==(RUN|ASE|PSE) && usb_test_registers[6]==0x27 &&

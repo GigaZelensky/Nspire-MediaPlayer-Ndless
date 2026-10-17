@@ -341,7 +341,7 @@ probe_pass:
         if (active_probe) active_probe->stage = "get configuration";
         if (!control(u, 0x80, 8, 0, 0, &config_value, 1, 100)) {
             UsbDeviceState native;
-            if (!u->last_control_stalled || !state_lookup) continue;
+            if ((!u->last_control_stalled && !u->last_control_short) || !state_lookup) continue;
             if (active_probe) active_probe->stage = "native selected configuration lookup";
             if (!state_lookup(state_context, u->address, -1, &native)) continue;
             config_value = native.configuration;

@@ -159,7 +159,7 @@ struct UsbAudio {
     unsigned volume,gain_q15;
     bool owned, running, configured, alternate_set, unsafe_dma, high_speed;
     bool closing;
-    bool last_control_stalled, clearing_tt, health_check, link_lost;
+    bool last_control_stalled, last_control_short, clearing_tt, health_check, link_lost;
     uint32_t health_at, health_checks, health_errors, health_max_ms;
     unsigned health_failures;
     bool root_high_speed, low_speed, tt_multi;
@@ -323,6 +323,7 @@ static bool control(UsbAudio *u, unsigned type, unsigned request, unsigned value
                     void *data, unsigned length, unsigned timeout)
 {
     u->last_control_stalled = false;
+    u->last_control_short = false;
     bool live = u->running;
     bool health = u->health_check && type == 0x80 && request == 6 &&
                   value == 0x100 && index == 0 && length == 18;
@@ -385,8 +386,17 @@ static bool control(UsbAudio *u, unsigned type, unsigned request, unsigned value
         if ((uint32_t)(u->now_ms() - start) >= timeout || !connected() || (STS & (1U << 4)))
             break;
     }
+    bool short_read = false;
     if(ok && length) {
         dma_invalidate(u->qtd,3*sizeof(Qtd));
+        unsigned remaining = (u->qtd[1].token >> 16) & 0x7fffU;
+        /* Keep short reads rejected by this exact-length API. Separately
+         * identify a clean, completed IN/status exchange so discovery can
+         * use authenticated native state for GET_CONFIGURATION, just as it
+         * already does for a STALL. Never confuse a timeout/error with this. */
+        short_read = input && remaining && remaining <= length &&
+            !((u->qtd[0].token | u->qtd[1].token | u->qtd[2].token) & 0xfcU) &&
+            !(u->qtd[0].token & 0x7fff0000U) && !(u->qtd[2].token & 0x7fff0000U);
         ok=!(u->qtd[1].token&(0xfcU|0x7fff0000U));
     }
     if(!ok && !u->clearing_tt) {
@@ -475,6 +485,7 @@ static bool control(UsbAudio *u, unsigned type, unsigned request, unsigned value
         u->clearing_tt = false;
     }
     u->last_control_stalled = stalled;
+    u->last_control_short = short_read;
     return ok;
 }
 
