@@ -323,6 +323,7 @@ typedef struct {
     uint32_t opened, closed, last_draw;
     bool closing, cancelled, connected, previous_enter, previous_escape, armed, armed_pointer;
     bool timed_out, preconnected, checkpoint_enabled, checkpoint_started, audio_only;
+    bool automatic, had_storage;
     uint8_t last_mix,closing_mix;
     const char *line1, *line2, *status;
     int guard_error;
@@ -562,6 +563,7 @@ static void connect_native(void *context)
             break;
         }
         if (usb_storage_attachment_ready() && present) {
+            window->had_storage = true;
             window->status = "Opening the USB drive...";
             { /* The completed native attachment callback is the readiness boundary. */
                 render_window(window, true);
@@ -689,8 +691,16 @@ done:
     monotonic_clock_restore_player_timer();
     native_critical_leave(saved);
 }
-bool usb_browser_connect(SDL_Surface *screen, const Fonts *fonts, PointerState *pointer,
-                         MessageBackdropDraw backdrop, void *context)
+static bool storage_connection_failed(const UsbConnectWindow *window)
+{
+    /* An unsolicited scan may see a headset or another non-storage device.
+     * Absence of a storage candidate is ordinary in that case. Manual scans,
+     * controller failures and failures opening a witnessed drive still report. */
+    return !window->cancelled && !window->connected && !window->audio_only &&
+           !(window->automatic && window->timed_out && !window->had_storage && !window->guard_error);
+}
+static bool connect_storage(SDL_Surface *screen, const Fonts *fonts, PointerState *pointer,
+                            MessageBackdropDraw backdrop, void *context, bool automatic)
 {
     if(!NDMEDIA_USB_STORAGE)return false;
     io_screen=screen;
@@ -706,6 +716,7 @@ bool usb_browser_connect(SDL_Surface *screen, const Fonts *fonts, PointerState *
     raw_player_before_native();
     last_preconnected = host_device_present();
     UsbConnectWindow window = {.screen = screen,
+                               .automatic = automatic,
                                .preconnected = last_preconnected,
                                .checkpoint_enabled = !quiet_reconnect &&
                                    (debug_is_runtime_logging_enabled() || isKeyPressed(KEY_NSPIRE_D)),
@@ -723,7 +734,7 @@ bool usb_browser_connect(SDL_Surface *screen, const Fonts *fonts, PointerState *
     exit_audit_enabled = exit_audit_enabled || window.checkpoint_enabled;
     if (!sram_with_native_mapping(connect_native, &window))
         window.guard_error = -20;
-    if (!quiet_reconnect && !window.cancelled && !window.connected && !window.audio_only) {
+    if (!quiet_reconnect && storage_connection_failed(&window)) {
         int error = usb_controller_error();
         /* This is a completed, non-cancelled connection failure, including
          * missing folders/unsupported filesystems. Preserve its evidence once
@@ -788,6 +799,12 @@ bool usb_browser_connect(SDL_Surface *screen, const Fonts *fonts, PointerState *
     last_connection_cancelled=window.cancelled;
     return window.connected && !window.cancelled;
 }
+bool usb_browser_connect(SDL_Surface *screen, const Fonts *fonts, PointerState *pointer,
+                         MessageBackdropDraw backdrop, void *context)
+{ return connect_storage(screen,fonts,pointer,backdrop,context,false); }
+bool usb_browser_connect_automatic(SDL_Surface *screen, const Fonts *fonts, PointerState *pointer,
+                                   MessageBackdropDraw backdrop, void *context)
+{ return connect_storage(screen,fonts,pointer,backdrop,context,true); }
 int usb_browser_retry(SDL_Surface *screen,const Fonts *fonts,PointerState *pointer,
                        LoadingProgress *loading)
 {

@@ -402,11 +402,14 @@ reload_directory:
         bool navigation_input = false;
         int navigation_action = picker_navigation_poll(fonts, &pointer, enter_edge, enter_down, esc_edge,
                                                        now_ms, &navigation_input);
+        bool automatic_usb = false;
         if (key_pressed_edge(KEY_NSPIRE_U, &prev_u) && usb_storage_supported() && !ctrl_down)
             navigation_action = PICKER_NAV_USB;
         if (!navigation_action && !pointer.down && !enter_press_stage &&
-            !g_display_power_state.off && usb_browser_auto_pending(now_ms))
+            !g_display_power_state.off && usb_browser_auto_pending(now_ms)) {
+            automatic_usb = true;
             navigation_action = PICKER_NAV_USB;
+        }
         footer_input = footer_input || navigation_input;
         if (navigation_input) {
             pointer_click = false;
@@ -744,7 +747,9 @@ reload_directory:
                 bool was_mounted = usb_storage_mounted();
                 movie_picker_cache_remember_position(&g_picker_cache,count,selected,scroll_start);
                 bool connected =
-                    usb_browser_connect(screen, fonts, &pointer, draw_message_backdrop, &view);
+                    automatic_usb
+                        ? usb_browser_connect_automatic(screen, fonts, &pointer, draw_message_backdrop, &view)
+                        : usb_browser_connect(screen, fonts, &pointer, draw_message_backdrop, &view);
                 usb_generation = usb_storage_generation();
                 if(connected){
                     if(usb_path(media_browser_directory()) &&
