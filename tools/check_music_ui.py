@@ -29,6 +29,25 @@ def check(out):
                     str(ROOT / "src/player/music_effects.c"), "-lm", "-o", str(effects)], check=True)
     subprocess.run([str(effects)], check=True)
     from check_audio_controls import function
+    ui = (ROOT / "src/player/playback_ui.c").read_text()
+    music = (ROOT / "src/player/music_ui.c").read_text()
+    header = (ROOT / "src/player/music_ui.h").read_text()
+    hover_source = (tests / "music_hover.c").read_text().replace(
+        "/* PRODUCTION_MUSIC_STATE */", header[header.index("enum"):header.index("void music_ui_open")])
+    hover_source = hover_source.replace("/* PRODUCTION_TRANSITIONS */", "\n".join(
+        function(ui, name) for name in (
+            "ui_ease_out_cubic", "ui_ease_smoothstep", "ui_transition_init",
+            "ui_transition_value_with_ease", "ui_transition_value", "ui_transition_update_ex",
+            "ui_transition_update", "ui_transition_update_press_ex", "ui_transition_update_press")))
+    hover_source = hover_source.replace("/* PRODUCTION_MUSIC_UPDATE */", function(music, "music_ui_update"))
+    hover_source = hover_source.replace("/* PRODUCTION_MUSIC_BUTTON */", "\n".join(
+        function(music, name) for name in ("music_corner_pixel", "music_button")))
+    hover = out / "music-hover.c"
+    hover.write_text(hover_source)
+    hover_exe = out / "music-hover.exe"
+    subprocess.run([*flags, str(hover), str(ROOT / "src/player/music_controls.c"),
+                    "-o", str(hover_exe)], check=True)
+    subprocess.run([str(hover_exe)], check=True, timeout=10)
     platform = r"""
 #include <stdbool.h>
 #include <stdint.h>

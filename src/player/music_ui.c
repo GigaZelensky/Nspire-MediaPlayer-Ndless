@@ -265,12 +265,12 @@ void music_ui_update(MusicUi *ui, AudioPlayback *audio, const AudioPlaybackInfo 
         ui->hovered = hot;
         ui->hover_at = now;
     }
-    if(hot==MUSIC_MODE || hot==MUSIC_VISUAL)ui->tooltip_target=hot;
+    if (c->capture)
+        ui->hover_at = now;
     ui->animating = ui->brightness_active || ui->chrome.current_mix != (show ? 255 : 0);
     for (unsigned i = 1; i < MUSIC_CONTROL_COUNT; ++i)
     {
-        ui_transition_update(&ui->hover[i], hot == (int)i, now,
-            i==MUSIC_MODE || i==MUSIC_VISUAL?200U:UI_HOVER_ANIM_MS);
+        ui_transition_update(&ui->hover[i], hot == (int)i, now, UI_HOVER_ANIM_MS);
         ui_transition_update_press(&ui->press[i], c->capture == (int)i, now);
         if (ui->hover[i].current_mix != (ui->hover[i].target_active ? 255 : 0) ||
             ui->press[i].current_mix != (ui->press[i].target_active ? 255 : 0))
@@ -288,6 +288,16 @@ void music_ui_update(MusicUi *ui, AudioPlayback *audio, const AudioPlaybackInfo 
         ui->queue_target = hot;
     ui_transition_update(&ui->queue, queue, now, UI_HOVER_ANIM_MS);
     if (ui->queue.current_mix != (queue ? 255 : 0))
+        ui->animating = true;
+    bool tooltip = (hot == MUSIC_MODE || hot == MUSIC_VISUAL) && !c->capture &&
+                   now - ui->hover_at >= 400;
+    if (tooltip && ui->tooltip_target != hot)
+    {
+        ui_transition_init(&ui->tooltip, false);
+        ui->tooltip_target = hot;
+    }
+    ui_transition_update(&ui->tooltip, tooltip, now, UI_HOVER_ANIM_MS);
+    if (ui->tooltip.current_mix != (tooltip ? 255 : 0))
         ui->animating = true;
     if (c->badge_delta_ms && (int32_t)(now - c->badge_hide_at) < (int)SEEK_BADGE_EXIT_ANIM_MS)
         ui->animating = true;
@@ -356,13 +366,12 @@ static void music_corner_pixel(SDL_Surface *s,int x,int y,Uint16 body,Uint16 edg
 static void music_button(SDL_Surface *s,const Fonts *f,const SDL_Rect *r,const char *text,
                          uint8_t hover,uint8_t press)
 {
-    /* A circular 5 px radius, sampled on a 4x4 subpixel grid. The transposed
-     * symmetry is intentional: horizontal and vertical curves are identical.
-     * The inner 4 px arc makes a consistent one-pixel border. */
+    /* A circular 5 px radius, sampled on a 4x4 subpixel grid. Inset its
+     * coverage by one pixel in each axis for the inner edge: this keeps the
+     * diagonal stroke connected and bright on the low-resolution display.
+     * Horizontal and vertical curves share exactly the same coverage. */
     static const uint8_t outer[5][5]={{0,0,79,191,255},{0,159,255,255,255},
         {79,255,255,255,255},{191,255,255,255,255},{255,255,255,255,255}};
-    static const uint8_t inner[4][4]={{0,47,175,255},{47,239,255,255},
-        {175,255,255,255},{255,255,255,255}};
     Uint16 base=pressed_control_base(rgb565_lerp(UI_COLOR_GUNMETAL,ui_theme()->row_selected,hover,255),press);
     Uint16 top=blend_rgb565(base,UI_COLOR_WHITE,38),bottom=blend_rgb565(base,UI_COLOR_BLACK,92);
     Uint16 edge=control_outline_color(base,max_u8(hover,press));
@@ -378,7 +387,7 @@ static void music_button(SDL_Surface *s,const Fonts *f,const SDL_Rect *r,const c
         fill_rect_rgb565(s,&span,distance?c:edge);
         if(distance<5) {
             for(int x=0;x<5;++x) {
-                unsigned inside=x && distance?inner[distance-1][x-1]:0;
+                unsigned inside=x && distance?outer[distance-1][x-1]:0;
                 music_corner_pixel(s,r->x+x,r->y+row,c,edge,outer[distance][x],inside);
                 music_corner_pixel(s,r->x+r->w-1-x,r->y+row,c,edge,outer[distance][x],inside);
             }
@@ -746,7 +755,7 @@ void music_ui_render(SDL_Surface *s, const Fonts *f, const char *path, AudioPlay
         }
         int tooltip=ui->tooltip_target;
         if (!c->info_open && !status_live && !night_mode_status_visible(now) &&
-            (tooltip == MUSIC_MODE || tooltip == MUSIC_VISUAL) && ui->hover[tooltip].current_mix)
+            (tooltip == MUSIC_MODE || tooltip == MUSIC_VISUAL) && ui->tooltip.current_mix)
         {
             if (tooltip == MUSIC_VISUAL)
                 snprintf(text, sizeof(text), "View: %s (V)", views[ui->view]);
@@ -758,7 +767,7 @@ void music_ui_render(SDL_Surface *s, const Fonts *f, const char *path, AudioPlay
             int w = nSDL_GetStringWidth(f->white, text) + 14;
             SDL_Rect tip = {clamp_int(tooltip == MUSIC_MODE ? 16 : 304 - w, 8, 312 - w), 128, w,
                             18};
-            uint8_t mix=ui->hover[tooltip].current_mix;
+            uint8_t mix=ui->tooltip.current_mix;
             SDL_Surface *target;SDL_Rect old_clip;int tx,ty;
             SDL_Surface *tooltip=begin_faded_region_draw(s,&tip,mix,&target,&old_clip,&tx,&ty);
             SDL_Rect local=offset_sdl_rect(&tip,tx,ty);

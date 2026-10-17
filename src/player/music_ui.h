@@ -20,7 +20,7 @@ typedef struct
     AudioMetadata tags;
     uint16_t *cover;
     MusicVisual *visual;
-    UiTransition hover[MUSIC_CONTROL_COUNT], press[MUSIC_CONTROL_COUNT], info, queue, art, chrome;
+    UiTransition hover[MUSIC_CONTROL_COUNT], press[MUSIC_CONTROL_COUNT], info, queue, tooltip, art, chrome;
     char title[AUDIO_TAG_TEXT], artist[AUDIO_TAG_TEXT], album[AUDIO_TAG_TEXT];
     char previous[MAX_PATH_LEN], next[MAX_PATH_LEN];
     uint32_t chrome_until;
