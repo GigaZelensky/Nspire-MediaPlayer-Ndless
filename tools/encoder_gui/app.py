@@ -54,10 +54,11 @@ class EncoderWindow(QMainWindow):
         self.external_subtitles=[];self.loading_tracks=False;self.selected_path='';self.audio_requested=self.settings.value('include_audio',True,type=bool)
         self.root=QWidget();self.setCentralWidget(self.root)
         main=QVBoxLayout(self.root);main.setContentsMargins(24,18,24,16);main.setSpacing(14)
-        header=QHBoxLayout();title=QLabel('nMedia Encoder');title.setObjectName('appTitle');header.addWidget(title)
+        header_frame=QFrame();header_frame.setObjectName('appHeader');header=QHBoxLayout(header_frame);header.setContentsMargins(12,8,12,8);header.setSpacing(12)
+        title=QLabel('nMedia Encoder');title.setObjectName('appTitle');header.addWidget(title)
         header.addStretch();privacy=muted('Files stay on your computer');privacy.setWordWrap(False);header.addWidget(privacy)
         self.copy=QPushButton('Copy command');self.copy.setIcon(icon('copy'));self.copy.setToolTip('Copy the equivalent Python CLI command. Run it from the source repository.');header.addWidget(self.copy)
-        main.addLayout(header)
+        main.addWidget(header_frame)
         self.source=SourceCard();main.addWidget(self.source)
         mode_row=QHBoxLayout();mode_row.addWidget(QLabel('Create'))
         self.operation=combo([('Video for nMedia','video'),('Audio file','audio')]);self.operation.setMinimumWidth(220)
@@ -94,7 +95,7 @@ class EncoderWindow(QMainWindow):
         self.status_detail=muted('The command-line encoder is still available.');status_box.addWidget(self.status);status_box.addWidget(self.status_detail);status_row.addLayout(status_box,1)
         self.open_folder=QPushButton('Open folder');self.open_folder.hide();status_row.addWidget(self.open_folder)
         self.cancel=QPushButton('Cancel');self.cancel.hide();status_row.addWidget(self.cancel)
-        self.encode=QPushButton('Encode video');self.encode.setObjectName('primary');self.encode.setIcon(icon('play','#25180e'));self.encode.setMinimumWidth(160);status_row.addWidget(self.encode);main.addLayout(status_row)
+        self.encode=QPushButton('Encode video');self.encode.setObjectName('primary');self.encode.setIcon(icon('play','#fff4e6'));self.encode.setMinimumWidth(160);status_row.addWidget(self.encode);main.addLayout(status_row)
         log_row=QHBoxLayout();self.details=QToolButton();self.details.setText('Show details');self.details.setCheckable(True)
         self.save_log=QPushButton('Save log…');self.save_log.hide();log_row.addWidget(self.details);log_row.addStretch();log_row.addWidget(self.save_log);main.addLayout(log_row)
         self.log=QPlainTextEdit();self.log.setReadOnly(True);self.log.setMaximumBlockCount(2000);self.log.setMaximumHeight(150);self.log.hide();main.addWidget(self.log)
@@ -542,7 +543,7 @@ def apply_style(app):
         app.setProperty('nmedia-font-loaded',True)
     app.setApplicationName('nMedia Encoder');app.setApplicationVersion(VERSION);app.setOrganizationName('nMedia');app.setStyle('Fusion');app.setStyleSheet(STYLES)
     palette=app.palette()
-    for role,color in ((QPalette.ColorRole.Window,'#202020'),(QPalette.ColorRole.Base,'#181818'),(QPalette.ColorRole.Button,'#343332'),
+    for role,color in ((QPalette.ColorRole.Window,'#171513'),(QPalette.ColorRole.Base,'#121110'),(QPalette.ColorRole.Button,'#39332e'),
         (QPalette.ColorRole.Text,'#eae7e3'),(QPalette.ColorRole.WindowText,'#eae7e3'),(QPalette.ColorRole.ButtonText,'#eae7e3'),
         (QPalette.ColorRole.Highlight,'#9a6743'),(QPalette.ColorRole.HighlightedText,'#ffffff')):palette.setColor(role,QColor(color))
     app.setPalette(palette)
