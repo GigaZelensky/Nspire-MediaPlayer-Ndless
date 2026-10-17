@@ -3,8 +3,6 @@
 #include "player_internal.h"
 bool usb_browser_connect(SDL_Surface *, const Fonts *, PointerState *,
                          void (*)(SDL_Surface *, void *, uint32_t), void *);
-bool usb_browser_connect_automatic(SDL_Surface *, const Fonts *, PointerState *,
-                                   void (*)(SDL_Surface *, void *, uint32_t), void *);
 int usb_browser_retry(SDL_Surface *, const Fonts *, PointerState *, LoadingProgress *);
 bool usb_browser_device_present(void);
 bool usb_browser_adapter_present(void);

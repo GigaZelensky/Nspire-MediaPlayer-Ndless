@@ -43,14 +43,14 @@ with tempfile.TemporaryDirectory(prefix='ndvideo-usb-worker-') as temporary:
     executable=Path(temporary)/'worker.exe'
     subprocess.run([gcc,'-std=c99','-O2','-Wall','-Wextra','-Werror','-I'+str(src),str(root/'tools/tests/usb/worker_clock.c'),str(root/'tools/tests/usb/fibers.c'),str(src/'usb_fs_worker.c'),'-o',str(executable)],check=True)
     subprocess.run([str(executable)],check=True,timeout=10)
-browser=(root/'src/player/usb_browser.c').read_text()
-body=function(browser,'storage_connection_failed')+'\n'+function(browser,'connect_native')
+body=(root/'src/player/usb_browser.c').read_text().split('static void connect_native(void *context)',1)[1].split('bool usb_browser_connect(',1)[0]
+body='static void connect_native(void *context)'+body
 fixture='''#include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <errno.h>
 #include <stddef.h>
-typedef struct { bool cancelled,preconnected,timed_out,connected,audio_only,automatic,had_storage; int guard_error;const char *status,*line1,*line2;} UsbConnectWindow;
+typedef struct { bool cancelled,preconnected,timed_out,connected,audio_only; int guard_error;const char *status,*line1,*line2;} UsbConnectWindow;
 static unsigned kernel_policy=7,now_ms,resume_attempts;static int resume_result;
 static bool standby_was_outer,native_clock,player_timer=true,audio_mode,tree_busy,lease,host_running=true;
 static unsigned native_waits;
@@ -112,12 +112,6 @@ static int performance_clock_status(void) {return 0;}
 static void usb_storage_unpark(void) {}
 '''+body+'''
 int main(void) {
- UsbConnectWindow absent={.automatic=true,.timed_out=true};
- assert(!storage_connection_failed(&absent));
- absent.automatic=false;assert(storage_connection_failed(&absent));
- absent.automatic=true;absent.had_storage=true;assert(storage_connection_failed(&absent));
- absent.had_storage=false;absent.guard_error=-1;assert(storage_connection_failed(&absent));
- absent.guard_error=0;absent.cancelled=true;assert(!storage_connection_failed(&absent));
  UsbConnectWindow w={.preconnected=true};connect_native(&w);assert(w.connected && !w.guard_error && kernel_policy==7 && !native_clock && player_timer);
  candidate=0;audio_mode=true;w=(UsbConnectWindow){.preconnected=true};connect_native(&w);
  assert(w.audio_only && !w.connected && !w.timed_out && !w.guard_error && kernel_policy==7 && !native_clock && player_timer);
@@ -131,10 +125,6 @@ int main(void) {
  candidate=0;candidate_available=1;late_child=false;
  w=(UsbConnectWindow){.preconnected=true};connect_native(&w);
  assert(!w.connected && w.timed_out && candidate==1 && !accepting && !w.guard_error);
- assert(w.had_storage && storage_connection_failed(&w));
- candidate=0;candidate_available=0;w=(UsbConnectWindow){.preconnected=true,.automatic=true};connect_native(&w);
- assert(w.timed_out && !w.had_storage && !storage_connection_failed(&w));
- w.automatic=false;assert(storage_connection_failed(&w));
  return 0;}
 '''
 with tempfile.TemporaryDirectory() as tmp:
