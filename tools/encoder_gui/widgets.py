@@ -34,11 +34,11 @@ class SourceCard(QFrame):
         super().__init__();self.setObjectName('sourceCard');self.setAcceptDrops(True)
         self.preview=QLabel();self.preview.setFixedSize(84,52);self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setPixmap(icon('video','#8c8985',32).pixmap(32,32))
-        self.title=ElidedLabel('Drop a video here');self.title.setObjectName('sourceTitle');self.title.setTextFormat(Qt.TextFormat.PlainText)
+        self.title=ElidedLabel('Drop a video or music file here');self.title.setObjectName('sourceTitle');self.title.setTextFormat(Qt.TextFormat.PlainText)
         self.detail=QLabel('Or choose a file from your computer.');self.detail.setObjectName('muted');self.detail.setTextFormat(Qt.TextFormat.PlainText)
         self.detail.setWordWrap(True)
         text=QVBoxLayout();text.setSpacing(6);text.addWidget(self.title);text.addWidget(self.detail)
-        self.browse=QPushButton('Choose video…');self.browse.setIcon(icon('folder'));self.browse.setMinimumWidth(136)
+        self.browse=QPushButton('Choose file…');self.browse.setIcon(icon('folder'));self.browse.setMinimumWidth(136)
         row=QHBoxLayout(self);row.setContentsMargins(16,12,16,12);row.setSpacing(18);row.addWidget(self.preview);row.addLayout(text,1);row.addWidget(self.browse)
     def dragEnterEvent(self,event):
         if event.mimeData().hasUrls() and len(event.mimeData().urls())==1 and event.mimeData().urls()[0].isLocalFile():
@@ -51,31 +51,32 @@ class SourceCard(QFrame):
 
 class Preview(QWidget):
     def __init__(self):
-        super().__init__();self.image=QPixmap();self.fit=(320,240);self.source_size=(0,0);self.crop='';self.aspect='';self.setMinimumHeight(160)
+        super().__init__();self.image=QPixmap();self.fit=(320,240);self.source_size=(0,0);self.crop='';self.aspect='';self.audio=False;self.setMinimumHeight(160)
         self.setAccessibleName('Calculator framing preview')
     def set_image(self,image):self.image=image;self.update()
     def paintEvent(self,event):
         painter=QPainter(self);painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         frame=QRectF(self.rect()).adjusted(1,1,-1,-1)
-        width=min(frame.width()-22,(frame.height()-22)*4/3);height=width*3/4
+        ratio=1 if self.audio else 4/3
+        width=min(frame.width()-22,(frame.height()-22)*ratio);height=width/ratio
         screen=QRectF((frame.width()-width)/2,(frame.height()-height)/2,width,height)
         painter.setPen(QPen(QColor('#45423f'),1));painter.setBrush(QColor('#0b0b0b'));painter.drawRoundedRect(screen.adjusted(-5,-5,5,5),5,5)
         if not self.image.isNull():
             image=self.image
-            if self.crop and self.source_size[0] and self.source_size[1]:
+            if not self.audio and self.crop and self.source_size[0] and self.source_size[1]:
                 try:
                     w,h,x,y=map(int,self.crop.split(':'));sx=image.width()/self.source_size[0];sy=image.height()/self.source_size[1]
                     if w>0 and h>0 and x+w<=self.source_size[0] and y+h<=self.source_size[1]:image=image.copy(int(x*sx),int(y*sy),max(1,int(w*sx)),max(1,int(h*sy)))
                 except ValueError:pass
-            elif self.aspect:
+            elif not self.audio and self.aspect:
                 parts=self.aspect.split(':');ratio=float(parts[0])/(float(parts[1]) if len(parts)>1 else 1)
                 w=min(image.width(),int(image.height()*ratio));h=min(image.height(),int(image.width()/ratio))
                 image=image.copy((image.width()-w)//2,(image.height()-h)//2,w,h)
-            target=image.size().scaled(int(screen.width()*self.fit[0]/320),int(screen.height()*self.fit[1]/240),Qt.AspectRatioMode.KeepAspectRatio)
+            target=image.size().scaled(int(screen.width()*(1 if self.audio else self.fit[0]/320)),int(screen.height()*(1 if self.audio else self.fit[1]/240)),Qt.AspectRatioMode.KeepAspectRatio)
             box=QRectF(screen.center().x()-target.width()/2,screen.center().y()-target.height()/2,target.width(),target.height())
             painter.drawPixmap(box.toRect(),image)
         else:
-            painter.setPen(QColor('#77736e'));painter.drawText(screen,Qt.AlignmentFlag.AlignCenter,'Your video, on a 320 × 240 screen')
+            painter.setPen(QColor('#77736e'));painter.drawText(screen,Qt.AlignmentFlag.AlignCenter,'No embedded album art' if self.audio else 'Your video, on a 320 × 240 screen')
 
 STYLES="""
 QWidget { background: transparent; color: #eae7e3; font-family: 'Public Sans', 'Noto Sans'; font-size: 13px; }

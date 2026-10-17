@@ -54,6 +54,23 @@ def probe(path,pipe,allow_audio=False):
                 if result.returncode==0 and len(result.stdout)<2_000_000:send(pipe,'preview',image=result.stdout)
             except subprocess.TimeoutExpired:pass
         send(pipe,'done',result={'probed':True});return
+    from audio_metadata import music_info,read_metadata
+    # MP4 movies can also be parsed by Mutagen. Only classify known music
+    # extensions here; movies continue through the actual video probe.
+    music=music_info(source) if source.suffix.lower() in ('.mp3','.flac','.wav','.ogg','.oga','.opus','.m4a','.aac','.aiff','.aif','.wma','.ape','.wv') else None
+    if music:
+        audio=[asdict(t) for t in probe_audio_tracks(source,encoder.ffprobe_path())]
+        details=dict(path=str(source.resolve()),bytes=source.stat().st_size,width=0,height=0,
+            display_width=0,display_height=0,fps=0,duration=music['duration'],video_codec='',hdr=False,
+            audio=audio,subtitles=[],audio_only=True,music=music)
+        send(pipe,'source',info=details)
+        pictures=read_metadata(source).pictures
+        if pictures:
+            from PIL import Image
+            picture=next((p for p in pictures if p.type==3),pictures[0])
+            image=Image.open(io.BytesIO(picture.data));image.thumbnail((640,640))
+            output=io.BytesIO();image.convert('RGB').save(output,'PNG');send(pipe,'preview',image=output.getvalue())
+        send(pipe,'done',result={'probed':True});return
     try:video=encoder.probe_video(source)
     except RuntimeError:
         if not allow_audio:raise
@@ -67,6 +84,7 @@ def probe(path,pipe,allow_audio=False):
         "width":video.storage_width,"height":video.storage_height,
         "display_width":video.display_width,"display_height":video.display_height,
         "fps":video.fps,"duration":video.duration,"video_codec":"", "hdr":False,
+        "audio_only":not video.storage_width,
         "audio":[asdict(t) for t in probe_audio_tracks(source,encoder.ffprobe_path())],
         "subtitles":[asdict(t) for t in encoder.probe_embedded_subtitle_tracks(source)]}
     # Normalize the existing encoder's subtitle track descriptors for the UI.
@@ -122,14 +140,17 @@ def encode(request,pipe):
         send(pipe,"progress",stage="Encoding audio",ratio=None)
         return original_audio(*args,**kwargs)
     audio_track.prepare_audio=prepare_audio
-    send(pipe,"progress",stage="Preparing track changes" if request['task']=='edit' else "Preparing video and subtitles",ratio=None)
-    if request['task']=='edit':
+    send(pipe,"progress",stage="Preparing audio" if request['task']=='audio' else "Preparing track changes" if request['task']=='edit' else "Preparing video and subtitles",ratio=None)
+    if request['task']=='audio':
+        from convert_audio import parse_args,convert
+        stats=convert(parse_args(arguments),progress=lambda stage,ratio:send(pipe,'progress',stage=stage,ratio=ratio))
+    elif request['task']=='edit':
         from edit_ndless_video import parse_args,settings
         from nvp_tracks import edit_tracks
         args=parse_args(arguments)
         stats=edit_tracks(args.input,stage_file,**settings(args),progress=lambda stage,ratio:send(pipe,'progress',stage=stage,ratio=ratio))
     else:stats=asdict(encoder.encode(encoder.parse_args(arguments)))
-    send(pipe,"progress",stage="Saving encoded video",ratio=None)
+    send(pipe,"progress",stage="Saving audio" if request['task']=='audio' else "Saving encoded video",ratio=None)
     # Encoding happens beside the destination. Existing output survives every
     # failure/cancellation; a completed primary file is installed by rename.
     stage_json=stage_file.with_suffix('.json')
@@ -236,11 +257,11 @@ class Task:
         remove_staging(self.request.get('staging'),self.request.get('output',''))
         return True
 
-def encode_task(arguments,edit=False):
+def encode_task(arguments,edit=False,audio=False):
     destination=Path(arguments[arguments.index('--output')+1]).resolve()
     destination.parent.mkdir(parents=True,exist_ok=True)
     stage=destination.parent/('.nmedia-'+uuid.uuid4().hex)
     stage.mkdir()
-    try:return Task({'task':'edit' if edit else 'encode','arguments':arguments,'output':str(destination),'staging':str(stage)})
+    try:return Task({'task':'audio' if audio else 'edit' if edit else 'encode','arguments':arguments,'output':str(destination),'staging':str(stage)})
     except BaseException:
         remove_staging(stage,destination);raise

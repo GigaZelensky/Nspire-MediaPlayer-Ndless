@@ -60,6 +60,7 @@ class EncodeOptions:
     crf:float=24
     rate_mode:str="quality"
     target_mb:float=85
+    two_pass:bool=True
     video_kbps:int=500
     preset:str="slow"
     stream_profile:str="fast"
@@ -151,7 +152,9 @@ class EncodeOptions:
               "--codec",self.codec,"--fps",self.fps,"--max-width",str(self.width),"--max-height",str(self.height),
               "--preset",self.preset,"--stream-profile",self.stream_profile,"--idr-frames",self.idr,
               "--max-chunk-kib",str(self.chunk_kib)]
-        if self.rate_mode=="size":args += ["--bitrate-kbps",str(self.budget_kbps(info)),"--two-pass"]
+        if self.rate_mode=="size":
+            args += ["--bitrate-kbps",str(self.budget_kbps(info))]
+            if self.two_pass:args.append('--two-pass')
         elif self.codec=="mpeg4":args += ["--bitrate-kbps",str(self.video_kbps)]
         else:args += ["--crf",str(self.crf)]
         if self.hdr:args.append("--hdr-to-sdr")
@@ -170,6 +173,60 @@ class EncodeOptions:
         if self.crop:args += ["--crop",self.crop]
         if self.active_aspect:args += ["--active-aspect",self.active_aspect]
         if self.preview:args.append("--preview-mp4")
+        return args
+
+@dataclass
+class AudioOptions(EncodeOptions):
+    keep_tags:bool=True
+    keep_art:bool=True
+
+    def metadata_overhead(self,info):
+        # Probe records the embedded pictures separately, so disabling them
+        # releases their budget immediately, before conversion starts.
+        music=(info or {}).get('music',{})
+        total=music.get('metadata_bytes',{}).get(self.audio_codec,8192)
+        if not self.keep_art:
+            art=music.get('cover_bytes',0)
+            total-=art*4//3 if self.audio_codec in ('opus','vorbis') else art
+        return max(8192,total)
+
+    def budget_kbps(self,info):
+        from convert_audio import target_bitrate
+        return target_bitrate(self.target_mb,self.clip_duration(info),self.metadata_overhead(info),
+                              self.audio_codec,self.audio_rate or info.get('music',{}).get('rate') or 48000)
+
+    def errors(self,info):
+        from convert_audio import output_path as audio_path
+        errors={}
+        try:
+            if not self.source or not Path(self.source).is_file():errors['source']='Choose an available music or video file.'
+            if not self.output.strip():errors['output']='Choose where to save the converted audio.'
+            elif Path(audio_path(self.output,self.audio_codec)).resolve()==Path(self.source).resolve():errors['output']='Use a different output filename to keep your original file.'
+            elif Path(audio_path(self.output,self.audio_codec)).is_dir():errors['output']='Choose a filename, rather than a folder.'
+        except (OSError,ValueError):errors['output']='Choose a valid output filename.'
+        if not info:errors['source']='Wait for the media details to load.'
+        if self.audio_track not in [t['ordinal'] for t in (info or {}).get('audio',[])]:errors['audio']='Choose a source audio track.'
+        try:
+            duration=self.clip_duration(info or {})
+            start=time_value(self.start)
+            if duration<=0 or (info and start+duration>info['duration']+.1):errors['trim']='Keep the selected range within the source file.'
+        except ValueError as error:errors['trim']=str(error)
+        if self.rate_mode=='size' and info and 'trim' not in errors:
+            if self.audio_codec not in ('opus','mp3','aac','vorbis'):errors['size']='Choose Opus, MP3, AAC or Vorbis for a target size. Lossless and WAV sizes depend on the recording.'
+            elif self.target_mb<=0 or self.budget_kbps(info)<8:errors['size']='This target leaves too little room for audio and the cover. Increase it or turn off album art.'
+        return errors
+
+    def arguments(self,info):
+        from convert_audio import output_path as audio_path
+        errors=self.errors(info)
+        if errors:raise ValueError(next(iter(errors.values())))
+        args=[self.source,'--output',audio_path(self.output,self.audio_codec),'--codec',self.audio_codec,
+              '--bitrate',str(self.audio_bitrate),'--rate',str(self.audio_rate),
+              '--channels',str(self.audio_channels),'--track',str(self.audio_track),'--start',str(time_value(self.start))]
+        if self.end.strip():args+=['--duration',str(self.clip_duration(info))]
+        if self.rate_mode=='size':args+=['--target-mb',str(self.target_mb)]
+        if not self.keep_tags:args.append('--strip-tags')
+        if not self.keep_art:args.append('--strip-art')
         return args
 
 @dataclass
@@ -219,7 +276,7 @@ class TrackEditOptions(EncodeOptions):
             for path in self.external_subtitles:args+=['--subtitle',path]
         return args
 
-def cli_command(arguments,editor=False):
-    args=["python","tools/edit_ndless_video.py" if editor else "tools/encode_ndless_video.py",*arguments]
+def cli_command(arguments,editor=False,audio=False):
+    args=["python","tools/convert_audio.py" if audio else "tools/edit_ndless_video.py" if editor else "tools/encode_ndless_video.py",*arguments]
     if os.name=="nt":return "python "+" ".join("'"+s.replace("'","''")+"'" for s in args[1:])
     return shlex.join(args)

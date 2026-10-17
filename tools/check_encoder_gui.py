@@ -42,6 +42,8 @@ def main():
             subtitle_mode='embedded',subtitle_tracks=[1],preset='ultrafast')
         assert not options.errors(info),options.errors(info)
         options.rate_mode='size';options.target_mb=1;assert options.budget_kbps(info)>0
+        assert '--two-pass' in options.arguments(info)
+        options.two_pass=False;assert '--two-pass' not in options.arguments(info);options.two_pass=True
         options.start='invalid';assert 'trim' in options.errors(info)
         options.start='0';options.audio_codec='flac';assert 'size' in options.errors(info)
         options.audio_codec='opus';options.rate_mode='quality'
@@ -66,6 +68,13 @@ def main():
         assert 850<crossings/(len(samples)/8000)<910,'The selected soundtrack must be the 880 Hz second track'
         from check_nvp_tracks import check_tracks
         stripped=check_tracks(source,destination,work)
+        options.rate_mode='size';options.target_mb=.15
+        for two_pass in (False,True):
+            options.two_pass=two_pass;options.output=str(work/f'video-size-{two_pass}.nvp.tns')
+            sized,records=wait(encode_task(options.arguments(info)))
+            assert sized and not [e for e in records if e['kind']=='error'],records
+            assert 1000<Path(options.output).stat().st_size<180000
+        options.rate_mode='quality';options.output=str(destination)
         print('PASS actual probe, language/title tracks, Unicode paths, real H.264 + selected Opus soundtrack, subtitles and final metadata')
         kept=destination.read_bytes()
         bad=options.arguments(info);bad[bad.index('--codec')+1]='invalid'
@@ -120,6 +129,13 @@ def main():
         window.codec.setCurrentIndex(3);assert window.preset.isEnabled()
         assert [window.stream_profile.itemData(i) for i in range(window.stream_profile.count())]==['fast','quality','intra']
         window.codec.setCurrentIndex(0)
+        window.size_mode.setChecked(True);window.size_preset.setCurrentIndex(2)
+        assert window.options().target_mb==25 and '--two-pass' in window.options().arguments(info)
+        window.two_pass.setChecked(False);assert '--two-pass' not in window.options().arguments(info)
+        if args.screenshots:
+            args.screenshots.mkdir(parents=True,exist_ok=True)
+            window.tabs.setCurrentIndex(0);app.processEvents();window.grab().save(str(args.screenshots/'target-size.png'))
+        window.quality_mode.setChecked(True)
         if args.screenshots:
             args.screenshots.mkdir(parents=True,exist_ok=True)
             for index,name in enumerate(('video','audio','subtitles')):
@@ -140,6 +156,8 @@ def main():
         assert NvpFile.read(target).video_hash()==NvpFile.read(stripped).video_hash()
         assert window.encode.text()=='Save edited video'
         window.close();print('PASS native controls, track selection, inline validation, CLI copy and compact window layout')
+        from check_audio_conversion import check
+        check(work,args.screenshots)
 
 if __name__=='__main__':
     multiprocessing.freeze_support();main()

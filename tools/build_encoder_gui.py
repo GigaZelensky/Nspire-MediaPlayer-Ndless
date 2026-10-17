@@ -22,7 +22,7 @@ def main():
     data=QByteArray();buffer=QBuffer(data);buffer.open(QIODevice.OpenModeFlag.WriteOnly);image.save(buffer,'PNG')
     app_icon=work/'app.ico';Image.open(io.BytesIO(bytes(data))).save(app_icon,format='ICO',sizes=[(n,n) for n in (16,24,32,48,64,128,256)])
     licenses=work/'licenses';licenses.mkdir(exist_ok=True)
-    for name in ('PySide6-Essentials','shiboken6','PyInstaller','Pillow','cryptography','psutil','imageio-ffmpeg'):
+    for name in ('PySide6-Essentials','shiboken6','PyInstaller','Pillow','cryptography','psutil','imageio-ffmpeg','mutagen'):
         dist=distribution(name)
         for file in dist.files or []:
             if any(part.lower() in ('licenses','license','copying','copyright') or part.lower().startswith(('license.','copying.','copyright.')) for part in file.parts):
@@ -41,6 +41,7 @@ def main():
         '--hidden-import','encode_ndless_video','--hidden-import','av1_stream','--hidden-import','media_tracks',
         '--hidden-import','audio_track','--hidden-import','check_encoder_gui',
         '--hidden-import','nvp_tracks','--hidden-import','edit_ndless_video','--hidden-import','check_nvp_tracks',
+        '--hidden-import','convert_audio','--collect-submodules','mutagen','--hidden-import','check_audio_conversion',
         '--exclude-module','numpy','--exclude-module','PySide6.QtNetwork','--exclude-module','PySide6.QtQml',
         '--exclude-module','PySide6.QtQuick','--exclude-module','PySide6.QtWebEngineCore',str(ROOT/'tools/encode_gui.py')]
     environment=os.environ.copy()
@@ -61,7 +62,9 @@ def main():
     notes='''nMedia Encoder
 
 Open nMedia-Encoder-Windows-x64.exe. No Python installation is required.
-Choose or drop a source video, choose audio/subtitles, then Encode video.
+Choose or drop a video or music file. Select Video for nMedia or Audio file.
+Music conversion keeps text tags and embedded album art by default.
+Choose quality/bitrate or a target file size; two-pass is available for video.
 The encoder runs on your computer and does not upload your media.
 Use the existing tools/encode_ndless_video.py for command-line encoding.
 
@@ -78,6 +81,7 @@ FFmpeg source: https://ffmpeg.org/download.html
 Pillow (HPND): https://github.com/python-pillow/Pillow
 cryptography (Apache-2.0 or BSD): https://github.com/pyca/cryptography
 psutil (BSD-3-Clause): https://github.com/giampaolo/psutil
+Mutagen (GPL-2.0-or-later): https://github.com/quodlibet/mutagen
 
 Public Sans (SIL Open Font License): https://github.com/uswds/public-sans
 The nMedia application source is distributed under the included GPL-3.0 license.

@@ -8,7 +8,8 @@ from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QLabel,QPushButt
     QGridLayout,QFormLayout,QTabWidget,QScrollArea,QTreeWidget,QTreeWidgetItem,QHeaderView,
     QProgressBar,QPlainTextEdit,QFileDialog,QMessageBox)
 from . import VERSION
-from .model import EncodeOptions,TrackEditOptions,VIDEO_CODECS,AUDIO_CODECS,LANGUAGES,track_label,duration_text,size_text,output_path,cli_command
+from .model import EncodeOptions,AudioOptions,TrackEditOptions,VIDEO_CODECS,AUDIO_CODECS,LANGUAGES,track_label,duration_text,size_text,output_path,cli_command
+from convert_audio import output_path as audio_path,EXTENSIONS
 from .widgets import SourceCard,Preview,STYLES,icon
 from .worker import Task,encode_task
 
@@ -41,6 +42,7 @@ class SettingsForm(QFormLayout):
 
 def form():
     layout=SettingsForm();layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+    layout.setContentsMargins(0,0,0,0)
     layout.setHorizontalSpacing(24);layout.setVerticalSpacing(14);layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
     return layout
 
@@ -57,6 +59,9 @@ class EncoderWindow(QMainWindow):
         self.copy=QPushButton('Copy command');self.copy.setIcon(icon('copy'));self.copy.setToolTip('Copy the equivalent Python CLI command. Run it from the source repository.');header.addWidget(self.copy)
         main.addLayout(header)
         self.source=SourceCard();main.addWidget(self.source)
+        mode_row=QHBoxLayout();mode_row.addWidget(QLabel('Create'))
+        self.operation=combo([('Video for nMedia','video'),('Audio file','audio')]);self.operation.setMinimumWidth(220)
+        mode_row.addWidget(self.operation);self.operation_hint=muted('Video, with optional audio and subtitles.');mode_row.addWidget(self.operation_hint,1);main.addLayout(mode_row)
         self.edit_hint=muted('The encoded video is copied unchanged. Subtitles burned into the picture cannot be removed.');self.edit_hint.hide();main.addWidget(self.edit_hint)
         self.original_bar=QWidget();original_layout=QGridLayout(self.original_bar);original_layout.setContentsMargins(0,0,0,0);original_layout.setHorizontalSpacing(12);original_layout.setVerticalSpacing(8)
         self.original_entry=QLineEdit();self.original_entry.setReadOnly(True);self.original_entry.setPlaceholderText('Choose the original video or an audio file to add tracks')
@@ -68,7 +73,7 @@ class EncoderWindow(QMainWindow):
         content=QHBoxLayout();content.setSpacing(22)
         left=QFrame();left.setObjectName('previewPanel');left.setMinimumWidth(280)
         left_layout=QVBoxLayout(left);left_layout.setContentsMargins(16,14,16,14);left_layout.setSpacing(9)
-        preview_title=QLabel('Framing preview');preview_title.setObjectName('sectionTitle');left_layout.addWidget(preview_title)
+        self.preview_title=QLabel('Framing preview');self.preview_title.setObjectName('sectionTitle');left_layout.addWidget(self.preview_title)
         self.preview=Preview();left_layout.addWidget(self.preview)
         self.framing=muted('Choose a video to preview its framing.');left_layout.addWidget(self.framing)
         line=QFrame();line.setObjectName('divider');line.setFrameShape(QFrame.Shape.HLine);left_layout.addWidget(line)
@@ -98,6 +103,7 @@ class EncoderWindow(QMainWindow):
         self.output_browse.clicked.connect(self.choose_output);self.copy.clicked.connect(self.copy_command);self.encode.clicked.connect(self.start_encode)
         self.cancel.clicked.connect(self.cancel_task);self.open_folder.clicked.connect(lambda:QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(self.completed_output).parent))))
         self.profile.currentIndexChanged.connect(self.apply_profile)
+        self.operation.currentIndexChanged.connect(self.change_operation)
         self.timer=QTimer(self);self.timer.setInterval(50);self.timer.timeout.connect(self.poll_task);self.timer.start()
         QShortcut(QKeySequence.StandardKey.Open,self,activated=self.choose_source)
         QShortcut(QKeySequence('Ctrl+Return'),self,activated=self.start_encode)
@@ -129,8 +135,13 @@ class EncoderWindow(QMainWindow):
         self.quality_choice=combo([('Higher quality','high'),('Balanced','balanced'),('Smaller file','small'),('Custom','custom')]);self.quality_choice.setCurrentIndex(1);quality.addRow('Quality',self.quality_choice)
         self.quality_help=muted('Higher quality keeps more detail and uses more space.');quality.addRow('',self.quality_help)
         box.addWidget(self.quality_box)
-        self.size_box=QWidget();size=form();self.size_box.setLayout(size);self.target_size=spin(1,100000,85,1);self.target_size.setSuffix(' MB');size.addRow('Total file size',self.target_size)
-        size.addRow('',muted('Includes video and audio. Uses two-pass video encoding, with 3% reserved for overhead. Final size can vary.'));box.addWidget(self.size_box)
+        self.size_box=QWidget();size=form();self.size_box.setLayout(size)
+        self.size_preset=combo([('Calculator · 85 MB',85),('50 MB',50),('25 MB',25),('Custom size',0)]);size.addRow('Size preset',self.size_preset)
+        self.target_size=spin(.1,100000,85,1);self.target_size.setSuffix(' MB');size.addRow('Total file size',self.target_size)
+        self.two_pass=QCheckBox('Two-pass encoding');self.two_pass.setChecked(True);size.addRow('',self.two_pass)
+        size.addRow('',muted('Two passes improve how quality is distributed at a fixed size. Includes video and audio, with 3% reserved for overhead. MB = 1,000,000 bytes. Final size can vary.'));box.addWidget(self.size_box)
+        self.size_preset.currentIndexChanged.connect(self.apply_size_preset)
+        self.target_size.editingFinished.connect(lambda:self.size_preset.setCurrentIndex(3))
         self.advanced_button=QToolButton();self.advanced_button.setText('Advanced video settings');self.advanced_button.setCheckable(True);self.advanced_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon);self.advanced_button.setArrowType(Qt.ArrowType.RightArrow);box.addWidget(self.advanced_button)
         self.advanced=QWidget();advanced=form();self.advanced.setLayout(advanced)
         self.quality=spin(0,51,24,1);self.quality_label=QLabel('Quality (CRF)');advanced.addRow(self.quality_label,self.quality)
@@ -153,14 +164,71 @@ class EncoderWindow(QMainWindow):
     def _audio_tab(self):
         body,box=self.tab_page('Audio');self.audio_enabled=QCheckBox('Include audio');self.audio_enabled.setChecked(self.audio_requested);self.audio_enabled.clicked.connect(self.remember_audio);box.addWidget(self.audio_enabled)
         self.audio_edit=QWidget();edit_fields=form();self.audio_edit.setLayout(edit_fields);self.audio_current=muted('');self.audio_action=combo([('Keep current soundtrack','keep'),('Remove soundtrack','remove'),('Add / replace from source','replace')]);edit_fields.addRow('Soundtrack',self.audio_action);edit_fields.addRow('',self.audio_current);self.audio_edit.hide();box.addWidget(self.audio_edit)
-        box.addWidget(muted('Sound plays through compatible USB headphones, speakers or an audio adapter connected to the calculator.'))
-        self.audio_fields=QWidget();fields=form();self.audio_fields.setLayout(fields)
+        self.audio_notice=muted('Sound plays through compatible USB headphones, speakers or an audio adapter connected to the calculator.');box.addWidget(self.audio_notice)
+        self.music_preset_bar=QWidget();preset_form=form();self.music_preset_bar.setLayout(preset_form)
+        self.music_preset=combo([('Opus · 128 kbps · compact music',('opus',128)),('MP3 · 192 kbps · broad compatibility',('mp3',192)),('AAC · 128 kbps',('aac',128)),('Vorbis · 160 kbps',('vorbis',160)),('FLAC · lossless',('flac',128)),('Custom settings',None)])
+        preset_form.addRow('Music preset',self.music_preset);box.addWidget(self.music_preset_bar);self.music_preset_bar.hide()
+        self.audio_fields=QWidget();fields=form();self.audio_form=fields;self.audio_fields.setLayout(fields)
         self.audio_track=QComboBox();self.audio_track.setMinimumContentsLength(20);self.audio_track.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon);fields.addRow('Source track',self.audio_track)
         self.audio_codec=combo([(name,key) for key,name in AUDIO_CODECS.items()]);fields.addRow('Audio codec',self.audio_codec)
         self.audio_hint=muted('Opus keeps good quality at small sizes.');fields.addRow('',self.audio_hint)
         self.audio_bitrate=combo([(f'{n} kbps',n) for n in (32,48,64,96,128,160,192,256,320)]);self.audio_bitrate.setCurrentIndex(4);fields.addRow('Audio bitrate',self.audio_bitrate)
-        self.audio_rate=combo([(f'{n:,} Hz',n) for n in (8000,16000,22050,32000,44100,48000,96000)]);self.audio_rate.setCurrentIndex(5);fields.addRow('Sample rate',self.audio_rate)
-        self.audio_channels=combo([('Stereo',2),('Mono',1)]);fields.addRow('Channels',self.audio_channels);box.addWidget(self.audio_fields);box.addStretch()
+        self.audio_rate=combo([('Source',0)]+[(f'{n:,} Hz',n) for n in (8000,16000,22050,32000,44100,48000,96000)]);self.audio_rate.setCurrentIndex(6);fields.addRow('Sample rate',self.audio_rate)
+        self.audio_channels=combo([('Stereo',2),('Mono',1),('Source (up to stereo)',0)]);fields.addRow('Channels',self.audio_channels);box.addWidget(self.audio_fields)
+        self.music_box=QWidget();music=QVBoxLayout(self.music_box);music.setContentsMargins(0,0,0,0);music.setSpacing(14)
+        self.music_size=QCheckBox('Target a final file size');music.addWidget(self.music_size)
+        music_form=form();self.music_size_form=music_form;self.music_target=spin(.01,100000,5,2);self.music_target.setSuffix(' MB');music_form.addRow('Total file size',self.music_target);music.addLayout(music_form)
+        self.music_size_help=muted('Includes tags and embedded art. The bitrate is calculated from the duration; audio does not need a video-style two-pass encode.');music.addWidget(self.music_size_help)
+        self.keep_tags=QCheckBox('Keep tags');self.keep_tags.setChecked(True);self.keep_tags.setToolTip('Keep title, artist, album, track/disc numbers, date, genre, comments, lyrics and additional text tags.')
+        self.keep_art=QCheckBox('Keep embedded album art');self.keep_art.setChecked(True);music.addWidget(horizontal(self.keep_tags,self.keep_art))
+        self.music_metadata=muted('');music.addWidget(self.music_metadata)
+        self.music_tns=QCheckBox('Add .tns for calculator storage');music.addWidget(self.music_tns)
+        self.music_advanced=QToolButton();self.music_advanced.setText('Advanced audio settings');self.music_advanced.setCheckable(True);self.music_advanced.setArrowType(Qt.ArrowType.RightArrow);self.music_advanced.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon);music.addWidget(self.music_advanced)
+        self.music_trim=QWidget();trim=form();self.music_trim.setLayout(trim);self.music_start=QLineEdit('0');self.music_end=QLineEdit();self.music_end.setPlaceholderText('End of track');trim.addRow('Trim from / to',horizontal(self.music_start,self.music_end));music.addWidget(self.music_trim)
+        box.addWidget(self.music_box);self.music_box.hide();box.addStretch()
+        self.music_preset.currentIndexChanged.connect(self.apply_music_preset)
+        self.audio_codec.currentIndexChanged.connect(self.update_audio_filename)
+        self.music_tns.toggled.connect(self.update_audio_filename)
+        self.music_size.toggled.connect(lambda on:self.music_preset.setCurrentIndex(5) if on else None)
+        self.music_advanced.toggled.connect(self.update_options)
+        self.audio_codec.activated.connect(lambda:self.music_preset.setCurrentIndex(5))
+        self.audio_bitrate.activated.connect(lambda:self.music_preset.setCurrentIndex(5))
+
+    def apply_size_preset(self):
+        value=self.size_preset.currentData()
+        if value:self.target_size.setValue(value)
+
+    def apply_music_preset(self):
+        value=self.music_preset.currentData()
+        if value:
+            self.audio_codec.setCurrentIndex(self.audio_codec.findData(value[0]));self.audio_bitrate.setCurrentIndex(self.audio_bitrate.findData(value[1]))
+            self.music_size.setChecked(False)
+
+    def is_audio(self):return self.operation.currentData()=='audio' and not (self.info or {}).get('encoded')
+
+    def update_audio_filename(self):
+        if not hasattr(self,'output') or not self.is_audio() or not self.output.text():return
+        value=self.output.text()
+        if value.lower().endswith('.nvp.tns'):value=value[:-8]
+        elif value.lower().endswith('.tns'):value=value[:-4]
+        value=audio_path(value,self.audio_codec.currentData())
+        if self.selected_path and Path(value).resolve()==Path(self.selected_path).resolve():
+            path=Path(value);value=str(path.with_name(path.stem+'.converted'+path.suffix))
+        if self.music_tns.isChecked():value+='.tns'
+        if value!=self.output.text():self.output.setText(value)
+
+    def change_operation(self):
+        if not hasattr(self,'output'):return
+        audio=self.is_audio()
+        self.tabs.widget(0).setEnabled(not audio and not (self.info or {}).get('encoded'))
+        self.tabs.widget(2).setEnabled(not audio)
+        if audio:
+            self.tabs.setCurrentIndex(1);self.audio_rate.setCurrentIndex(0);self.audio_channels.setCurrentIndex(2);self.update_audio_filename()
+        else:
+            if not self.audio_rate.currentData():self.audio_rate.setCurrentIndex(6)
+            if not self.audio_channels.currentData():self.audio_channels.setCurrentIndex(0)
+            if self.selected_path and not (self.info or {}).get('encoded'):self.output.setText(str(Path(self.selected_path).with_suffix('.nvp.tns')))
+        self.update_options()
 
     def _subtitle_tab(self):
         body,box=self.tab_page('Subtitles');fields=form()
@@ -214,11 +282,15 @@ class EncoderWindow(QMainWindow):
                 else:external.append(value)
         fields=dict(source=self.selected_path,output=self.output.text(),codec=self.codec.currentData(),fps=str(fps),
             width=self.width.value(),height=self.height.value(),crf=self.quality.value(),rate_mode='size' if self.size_mode.isChecked() else 'quality',
-            target_mb=self.target_size.value(),video_kbps=self.mpeg_bitrate.value(),preset=self.preset.currentData(),stream_profile=self.stream_profile.currentData(),hdr=self.hdr.isChecked(),
+            target_mb=self.target_size.value(),two_pass=self.two_pass.isChecked(),video_kbps=self.mpeg_bitrate.value(),preset=self.preset.currentData(),stream_profile=self.stream_profile.currentData(),hdr=self.hdr.isChecked(),
             audio=self.audio_enabled.isChecked(),audio_track=self.audio_track.currentData() if self.audio_track.currentData() is not None else -1,
             audio_codec=self.audio_codec.currentData(),audio_bitrate=self.audio_bitrate.currentData(),audio_rate=self.audio_rate.currentData(),audio_channels=self.audio_channels.currentData(),
             subtitle_mode=self.subtitle_mode.currentData(),subtitle_tracks=tracks,external_subtitles=external,subtitle_size=self.burn_size.value(),start=self.start.text(),end=self.end.text(),
             crop=self.crop.text().strip(),active_aspect=self.aspect.currentData(),idr=str(idr),chunk_kib=self.chunk.value(),preview=self.preview_mp4.isChecked())
+        if self.is_audio():
+            fields.update(rate_mode='size' if self.music_size.isChecked() else 'quality',target_mb=self.music_target.value(),
+                start=self.music_start.text(),end=self.music_end.text(),keep_tags=self.keep_tags.isChecked(),keep_art=self.keep_art.isChecked())
+            return AudioOptions(**fields)
         if (self.info or {}).get('encoded'):
             return TrackEditOptions(**fields,track_source=self.original_path,source_start=self.original_start.text(),audio_action=self.audio_action.currentData(),
                 keep_subtitle_tracks=keep,source_subtitle_tracks=source_tracks,original_info=self.original_info)
@@ -229,9 +301,32 @@ class EncoderWindow(QMainWindow):
         options=self.options();busy=bool(self.task)
         self.quality_box.setVisible(not self.size_mode.isChecked());self.size_box.setVisible(self.size_mode.isChecked())
         mpeg=options.codec=='mpeg4';quality_mode=options.rate_mode=='quality';self.mpeg_bitrate.setVisible(mpeg and quality_mode);self.mpeg_label.setVisible(mpeg and quality_mode);self.quality.setVisible(not mpeg and quality_mode);self.quality_label.setVisible(not mpeg and quality_mode)
-        editing=bool((self.info or {}).get('encoded'))
-        self.audio_fields.setEnabled((self.audio_action.currentData()=='replace' and bool((self.original_info or {}).get('audio'))) if editing else self.audio_enabled.isChecked() and bool((self.info or {}).get('audio')))
-        compressed=options.audio_codec in ('opus','mp3','aac','vorbis');self.audio_bitrate.setEnabled(compressed)
+        editing=bool((self.info or {}).get('encoded'));music=self.is_audio()
+        self.music_box.setVisible(music);self.audio_enabled.setVisible(not editing and not music)
+        self.music_preset_bar.setVisible(music)
+        self.operation.setEnabled(not busy and not editing and not (self.info or {}).get('audio_only'))
+        self.audio_notice.setVisible(not music)
+        self.operation_hint.setText('Ordinary music files, with tags and embedded album art.' if music else 'Edit tracks without re-encoding the picture.' if editing else 'Video, with optional audio and subtitles.')
+        self.preview_title.setText('Album art' if music else 'Framing preview')
+        self.preview.audio=music
+        if music:
+            metadata=(self.info or {}).get('music',{})
+            tags=metadata.get('tags',{})
+            self.framing.setText('\n'.join(', '.join(tags.get(key,[])) for key in ('TITLE','ARTIST','ALBUM') if tags.get(key)) or 'Embedded album art is kept when available.')
+            self.music_metadata.setText(f"{len(tags)} tags · {metadata.get('covers',0)} embedded cover(s) · {size_text(metadata.get('cover_bytes',0))} of art" if metadata else 'Standard source metadata is kept where the output format supports it.')
+        self.music_target.setEnabled(self.music_size.isChecked());self.music_size_help.setVisible(self.music_size.isChecked())
+        self.music_size_form.setRowVisible(self.music_target,self.music_size.isChecked())
+        self.audio_form.setRowVisible(self.audio_track,not music or len((self.info or {}).get('audio',[]))>1)
+        self.audio_form.setRowVisible(self.audio_bitrate,not music or not self.music_size.isChecked())
+        self.audio_form.setRowVisible(self.audio_rate,not music or self.music_advanced.isChecked())
+        self.audio_form.setRowVisible(self.audio_channels,not music or self.music_advanced.isChecked())
+        self.music_trim.setVisible(self.music_advanced.isChecked());self.music_advanced.setArrowType(Qt.ArrowType.DownArrow if self.music_advanced.isChecked() else Qt.ArrowType.RightArrow)
+        self.audio_bitrate.setToolTip('Calculated from the size target.' if music and self.music_size.isChecked() else 'Audio bitrate in kilobits per second.')
+        self.audio_fields.setEnabled((self.audio_action.currentData()=='replace' and bool((self.original_info or {}).get('audio'))) if editing else (music or self.audio_enabled.isChecked()) and bool((self.info or {}).get('audio')))
+        compressed=options.audio_codec in ('opus','mp3','aac','vorbis');self.audio_bitrate.setEnabled(compressed and not (music and self.music_size.isChecked()))
+        # Source is meaningful for ordinary music conversion; NVP soundtracks
+        # require explicit rate/channel values supported by the calculator.
+        self.audio_rate.model().item(0).setEnabled(music);self.audio_channels.model().item(2).setEnabled(music)
         self.audio_rate.setEnabled(options.audio_codec!='opus');self.burn_size.setEnabled(options.subtitle_mode=='burn')
         self.burn_form.setRowVisible(self.burn_size,not editing and options.subtitle_mode=='burn')
         self.audio_track.setToolTip(self.audio_track.currentText())
@@ -244,7 +339,8 @@ class EncoderWindow(QMainWindow):
         if show_error:self.error.setText(next(iter(errors.values())))
         for control,key in ((self.output,'output'),(self.fps,'fps'),(self.width,'dimensions'),(self.height,'dimensions'),
             (self.target_size,'size'),(self.start,'trim'),(self.end,'trim'),(self.audio_track,'audio'),
-            (self.subtitle_mode,'subtitles'),(self.crop,'advanced'),(self.idr,'advanced'),(self.original_start,'trim')):
+            (self.subtitle_mode,'subtitles'),(self.crop,'advanced'),(self.idr,'advanced'),(self.original_start,'trim'),
+            (self.music_target,'size'),(self.music_start,'trim'),(self.music_end,'trim')):
             invalid=bool(show_error and key in errors)
             if control.property('invalid')!=invalid:
                 control.setProperty('invalid',invalid);control.style().unpolish(control);control.style().polish(control)
@@ -253,32 +349,40 @@ class EncoderWindow(QMainWindow):
         audio=f"{AUDIO_CODECS[options.audio_codec]} · {options.audio_bitrate} kbps" if options.audio and compressed else AUDIO_CODECS[options.audio_codec] if options.audio else 'No audio'
         if editing:audio='Keep current soundtrack' if options.audio_action=='keep' and self.info['audio'] else 'No audio' if options.audio_action!='replace' else f'{AUDIO_CODECS[options.audio_codec]} · {options.audio_bitrate} kbps'
         self.summary.setText(f"{VIDEO_CODECS[options.codec]} · {'Source FPS' if options.fps=='source' else options.fps+' FPS'}\n{audio}\n{subtitle_count} subtitle track{'s' if subtitle_count!=1 else ''}")
-        if editing:self.size_hint.setText('Video copied unchanged. Only the selected tracks are changed.')
+        if music:
+            self.summary.setText(f"{AUDIO_CODECS[options.audio_codec]} · {EXTENSIONS[options.audio_codec]}\n"+('Bitrate from size target' if options.rate_mode=='size' else f'{options.audio_bitrate} kbps' if compressed else 'Lossless compression' if options.audio_codec=='flac' else '16-bit uncompressed audio' if options.audio_codec=='pcm' else '4-bit ADPCM audio'))
+            if self.info and 'trim' not in errors:
+                if options.rate_mode=='size':self.size_hint.setText(f"Limit: {options.target_mb:g} MB\nAudio budget: {max(0,options.budget_kbps(self.info))} kbps\nIncludes tags and album art.")
+                else:
+                    estimate=options.clip_duration(self.info)*(options.audio_bitrate if compressed else (options.audio_rate or self.info.get('music',{}).get('rate',48000))*(options.audio_channels or 2)*(16 if options.audio_codec=='pcm' else 4)/1000)*125+options.metadata_overhead(self.info)
+                    self.size_hint.setText('Final size depends on the recording.' if options.audio_codec=='flac' else 'Estimated size: '+size_text(estimate))
+            else:self.size_hint.setText('')
+        elif editing:self.size_hint.setText('Video copied unchanged. Only the selected tracks are changed.')
         elif options.rate_mode=='size' and self.info and 'trim' not in errors:
-            self.size_hint.setText(f"Target: {options.target_mb:g} MB\nVideo budget: {max(0,options.budget_kbps(self.info)):,} kbps")
+            self.size_hint.setText(f"Target: {options.target_mb:g} MB\nVideo budget: {max(0,options.budget_kbps(self.info)):,} kbps\n{'Two passes' if options.two_pass else 'Single pass'} · {options.preset} encoding")
         else:self.size_hint.setText('Final size depends on the picture and selected quality.')
         self.preview.fit=(options.width,options.height);self.preview.crop='' if editing else options.crop;self.preview.aspect='' if editing else options.active_aspect;self.preview.update()
-        if not busy:self.encode.setText('Save edited video' if editing else 'Encode video')
-        if not busy and not self.completed_output:self.status.setText(('Ready to save track changes.' if editing else 'Ready to encode.') if self.info and not errors else 'Choose a video to get started.' if not self.selected_path else 'Check the highlighted settings.' if errors and self.info else 'Reading video details…')
+        if not busy:self.encode.setText('Convert audio' if music else 'Save edited video' if editing else 'Encode video')
+        if not busy and not self.completed_output:self.status.setText(('Ready to convert audio.' if music else 'Ready to save track changes.' if editing else 'Ready to encode.') if self.info and not errors else 'Choose a video or music file to get started.' if not self.selected_path else 'Check the highlighted settings.' if errors and self.info else 'Reading media details…')
 
     def choose_source(self):
         if self.task:return
-        path,_=QFileDialog.getOpenFileName(self,'Choose a video',self.settings.value('last_directory',''),'Videos and nMedia files (*.mkv *.mp4 *.mov *.avi *.webm *.m4v *.ts *.m2ts *.nut *.nvp.tns);;All files (*)')
+        path,_=QFileDialog.getOpenFileName(self,'Choose a video or music file',self.settings.value('last_directory',''),'Media files (*.mkv *.mp4 *.mov *.avi *.webm *.m4v *.ts *.m2ts *.nut *.nvp.tns *.mp3 *.flac *.wav *.ogg *.oga *.opus *.m4a *.aac *.aiff *.aif *.wma *.ape *.wv);;All files (*)')
         if path:self.load_source(path)
     def load_source(self,path):
         if self.task:return
         self.selected_path=str(Path(path).resolve());self.info=None;self.original_info=None;self.original_path='';self.original_entry.clear();self.original_start.setText('0');self.completed_output='';self.open_folder.hide();self.log.clear();self.error.hide()
         self.source.title.setText(Path(path).name);self.source.detail.setText('Reading video details…');self.source.browse.setText('Change…');self.source.setToolTip(self.selected_path)
-        self.preview.set_image(QPixmap());self.output.setText(str(Path(path).with_suffix('.nvp.tns')))
+        self.preview.set_image(QPixmap());self.source.set_image(QPixmap());self.output.setText(str(Path(path).with_suffix('.nvp.tns')))
         self.settings.setValue('last_directory',str(Path(path).parent))
         self.task_type='probe';self.task_error=None
-        try:self.task=Task({'task':'probe','path':self.selected_path})
+        try:self.task=Task({'task':'probe','path':self.selected_path,'allow_audio':True})
         except OSError as error:
             self.error.setText(f'Could not read this video: {error}');self.error.show();return
         self.set_busy(True)
-        self.status.setText('Reading video details…');self.status_detail.setText('You can cancel if this file is unavailable.');self.progress.setRange(0,0)
+        self.status.setText('Reading media details…');self.status_detail.setText('You can cancel if this file is unavailable.');self.progress.setRange(0,0)
     def set_source_info(self,info):
-        self.info=info;self.source.detail.setText(f"{duration_text(info['duration'])}  ·  {info['width']} × {info['height']}  ·  {info['fps']:.3g} FPS  ·  {size_text(info['bytes'])}")
+        self.info=info;self.source.detail.setText(f"{duration_text(info['duration'])}  ·  "+(f"{info['width']} × {info['height']}  ·  {info['fps']:.3g} FPS  ·  " if info['width'] else 'Audio file  ·  ')+size_text(info['bytes']))
         self.framing.setText(f"{info.get('video_codec') or 'Video'}{' · HDR source' if info['hdr'] else ' · SDR source'}\nSubtitles appear in the encoded file.")
         self.preview.source_size=(info['width'],info['height'])
         editing=bool(info.get('encoded'));self.edit_hint.setVisible(editing);self.original_bar.setVisible(editing);self.audio_enabled.setVisible(not editing);self.audio_edit.setVisible(editing);self.tabs.widget(0).setEnabled(not editing)
@@ -305,6 +409,8 @@ class EncoderWindow(QMainWindow):
             item=QTreeWidgetItem([title, 'Text' if track['text_supported'] else 'Image'])
             item.setFlags(item.flags()|Qt.ItemFlag.ItemIsUserCheckable);item.setCheckState(0,Qt.CheckState.Checked if editing else Qt.CheckState.Unchecked);item.setData(0,Qt.ItemDataRole.UserRole,('existing' if editing else 'embedded',track['ordinal']));self.tracks.addTopLevelItem(item)
         self.loading_tracks=False;self.subtitle_mode.setCurrentIndex(0);self.update_options()
+        self.operation.setCurrentIndex(1 if info.get('audio_only') or not info['width'] else 0)
+        self.change_operation()
         if not info['subtitles']:self.subtitle_hint.setText('No embedded subtitles were found. You can add an SRT, ASS or SSA subtitle file.')
         elif editing:self.subtitle_hint.setText('Keep the checked current tracks, add text tracks from the original, or add subtitle files. Burned-in subtitles remain part of the picture.')
         else:self.subtitle_hint.setText('Selectable subtitles can be changed or turned off during playback. Image-based subtitles need to be burned in.')
@@ -330,8 +436,8 @@ class EncoderWindow(QMainWindow):
         if not self.info['audio'] and info['audio']:self.audio_action.setCurrentIndex(2)
         self.update_options()
     def choose_output(self):
-        path,_=QFileDialog.getSaveFileName(self,'Save encoded video',self.output.text(),'nMedia video (*.nvp.tns)')
-        if path:self.output.setText(output_path(path))
+        path,_=QFileDialog.getSaveFileName(self,'Save converted audio' if self.is_audio() else 'Save encoded video',self.output.text(),f'Audio (*{EXTENSIONS[self.audio_codec.currentData()]} *{EXTENSIONS[self.audio_codec.currentData()]}.tns)' if self.is_audio() else 'nMedia video (*.nvp.tns)')
+        if path:self.output.setText(audio_path(path,self.audio_codec.currentData()) if self.is_audio() else output_path(path))
     def choose_subtitle(self):
         paths,_=QFileDialog.getOpenFileNames(self,'Choose subtitle files',self.settings.value('last_directory',''),'Text subtitles (*.srt *.ass *.ssa);;All files (*)')
         if paths and self.subtitle_mode.currentData()=='none':self.subtitle_mode.setCurrentIndex(1)
@@ -354,7 +460,7 @@ class EncoderWindow(QMainWindow):
             self.loading_tracks=False
         self.update_options()
     def copy_command(self):
-        try:QApplication.clipboard().setText(cli_command(self.options().arguments(self.info),bool((self.info or {}).get('encoded'))))
+        try:QApplication.clipboard().setText(cli_command(self.options().arguments(self.info),bool((self.info or {}).get('encoded')),self.is_audio()))
         except ValueError:return
         self.copy.setText('Copied');QTimer.singleShot(1500,lambda:self.copy.setText('Copy command'))
     def set_busy(self,busy):
@@ -367,15 +473,15 @@ class EncoderWindow(QMainWindow):
         options=self.options()
         try:arguments=options.arguments(self.info)
         except ValueError as error:self.error.setText(str(error));self.error.show();return
-        destination=Path(output_path(options.output)).resolve()
+        destination=Path(audio_path(options.output,options.audio_codec) if self.is_audio() else output_path(options.output)).resolve()
         if destination.exists():
-            answer=QMessageBox.question(self,'Replace existing video?',f'{destination.name} already exists. Replace it when encoding finishes?',QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)
+            answer=QMessageBox.question(self,'Replace existing file?',f'{destination.name} already exists. Replace it when encoding finishes?',QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)
             if answer!=QMessageBox.StandardButton.Yes:return
         editing=bool(self.info.get('encoded'))
-        try:self.task=encode_task(arguments,edit=editing)
+        try:self.task=encode_task(arguments,edit=editing,audio=self.is_audio())
         except (OSError,ValueError) as error:self.error.setText(f'Could not start encoding: {error}');self.error.show();return
-        self.output.setText(str(destination));self.task_type='edit' if editing else 'encode';self.task_error=None;self.job_started=time.monotonic();self.completed_output='';self.open_folder.hide();self.log.clear();self.error.hide();self.set_busy(True)
-        self.progress.setRange(0,0);self.status.setText('Preparing video…');self.status_detail.setText('The source file stays unchanged.');self.encode.setText('Encoding…')
+        self.output.setText(str(destination));self.task_type='audio' if self.is_audio() else 'edit' if editing else 'encode';self.task_error=None;self.job_started=time.monotonic();self.completed_output='';self.open_folder.hide();self.log.clear();self.error.hide();self.set_busy(True)
+        self.progress.setRange(0,0);self.status.setText('Preparing audio…' if self.is_audio() else 'Preparing video…');self.status_detail.setText('The source file stays unchanged.');self.encode.setText('Encoding…')
     def cancel_task(self):
         if self.task:
             self.task.cancel();self.cancel.setEnabled(False);self.status.setText('Stopping…');self.status_detail.setText('Waiting for the encoder to stop before removing temporary files.')
@@ -403,8 +509,10 @@ class EncoderWindow(QMainWindow):
         task=self.task;result=task.result;cancelled=task.cancelled
         try:task.close()
         except OSError as error:self.log.appendPlainText(f'Temporary file cleanup: {error}')
-        self.task=None;self.set_busy(False);self.cancel.setEnabled(True);self.encode.setText('Save edited video' if (self.info or {}).get('encoded') else 'Encode video');self.progress.hide()
-        if result and self.task_type in ('encode','edit'):
+        self.task=None;self.set_busy(False);self.cancel.setEnabled(True);self.progress.hide()
+        if result and self.task_type=='audio':
+            self.completed_output=result['output_path'];self.open_folder.show();self.status.setText('Audio ready.');self.status_detail.setText(f"{size_text(result['bytes_written'])} · {duration_text(result['encoded_duration'])} · {result['audio_codec'].upper()} · {result['tags']} tags · {result['covers']} cover(s)")
+        elif result and self.task_type in ('encode','edit'):
             self.completed_output=result['output_path'];self.open_folder.show();self.status.setText('Video ready.');self.status_detail.setText(f"{size_text(result['bytes_written'])} · {duration_text(result['encoded_duration'])} · {result['width']} × {result['height']} · {result['fps']:.3g} FPS")
         elif cancelled:
             self.status.setText('Cancelled.');self.status_detail.setText('Your source and any existing output were kept.')

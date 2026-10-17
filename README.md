@@ -330,13 +330,17 @@ These alternatives use version 11 containers.
 
 ### Desktop encoder (Windows)
 
-Download **`nMedia-Encoder-Windows-x64.exe`** from [Releases](https://github.com/GigaZelensky/Nspire-MediaPlayer-Ndless/releases/latest). Open it, choose or drop a video, choose the picture, audio and subtitle settings, then click **Encode video**. Python is not required for the executable. It runs native FFmpeg on your computer and does not upload your media.
+Download **`nMedia-Encoder-Windows-x64.exe`** from [Releases](https://github.com/GigaZelensky/Nspire-MediaPlayer-Ndless/releases/latest). Open it, choose or drop a video or music file, then choose **Video for nMedia** or **Audio file**. Python is not required for the executable. It runs native FFmpeg on your computer and does not upload your media.
 
-The GUI can select soundtrack languages/titles and subtitle tracks, embed text subtitles or burn them in, trim/crop a video, convert HDR to SDR, and target a total file size. Existing output is replaced only after encoding succeeds. **Copy command** gives the equivalent Python CLI command, which remains available below.
+The GUI can select soundtrack languages/titles and subtitle tracks, embed text subtitles or burn them in, trim/crop a video, convert HDR to SDR, and target a total file size. Choose quality or a size preset/custom MB target; **Two-pass encoding** is selectable for video, and **Encoding effort** controls the computer's encoding preset. The video budget subtracts the soundtrack and reserves 3% for overhead; final video size can vary. Existing output is replaced only after encoding succeeds. **Copy command** gives the equivalent Python CLI command, which remains available below.
 
-| Encode a source video | Edit an encoded video's tracks |
-| --- | --- |
-| <img src="examples/screenshots/encoder-video.png" width="440" alt="nMedia Encoder video settings"> | <img src="examples/screenshots/encoder-edit.png" width="440" alt="nMedia Encoder editing tracks without re-encoding video"> |
+For music, choose a preset or set the codec and bitrate yourself. Outputs are ordinary **Opus, MP3, AAC/M4A, Ogg Vorbis, FLAC, PCM WAV or IMA-ADPCM WAV** files. Text tags and embedded covers are kept by default, including accented text, multiple artists, album/track/disc information and additional text tags. JPEG/PNG covers are copied without recompression. Old encoder, duration and loudness-analysis tags are discarded because they describe the previous encoded stream. AAC/M4A converts other cover image types to PNG when necessary. **Add .tns for calculator storage** adds the suffix without changing the audio format.
+
+Music can also target a final size, including the tags and cover. The app calculates a bitrate from the duration, checks the completed file and lowers the bitrate if needed to fit. This works with Opus, MP3, AAC and Vorbis; lossless/WAV formats cannot promise a chosen size. Audio does not use video-style two-pass encoding. A music file's source sample rate is kept where the codec supports it; Opus uses 48 kHz, and MP3/AAC/Vorbis output is limited to 48 kHz. The source channel setting keeps mono/stereo and downmixes multichannel audio to stereo.
+
+| Encode a source video | Edit an encoded video's tracks | Convert music |
+| --- | --- | --- |
+| <img src="examples/screenshots/encoder-video.png" width="300" alt="nMedia Encoder video settings"> | <img src="examples/screenshots/encoder-edit.png" width="300" alt="nMedia Encoder editing tracks without re-encoding video"> | <img src="examples/screenshots/encoder-music.png" width="300" alt="nMedia Encoder converting a FLAC song to Opus with tags and album art"> |
 
 To run the GUI from source:
 
@@ -346,6 +350,15 @@ python tools/encode_gui.py
 ```
 
 To build the executable, install `requirements-encoder-build.txt` and run `python tools/build_encoder_gui.py`. GitHub Actions builds and tests the app, including an actual encode and cancellation inside the packaged executable, and attaches it to releases. The Windows executable targets Windows 10/11 x64; it does not support Windows XP.
+
+Audio-only conversion is also available from the CLI (install `requirements-encoder.txt` first):
+
+```powershell
+python .\tools\convert_audio.py "song.flac" --output "song.opus" --codec opus --bitrate 128
+python .\tools\convert_audio.py "song.flac" --output "song.mp3" --codec mp3 --target-mb 4
+```
+
+Tags and embedded art are kept automatically. Use `--strip-tags` or `--strip-art` to omit either; `--track N` selects an audio track when extracting audio from a movie.
 
 Open an existing unencrypted `.nvp.tns` in the same app to edit its tracks. You can keep, replace or remove its soundtrack and selectable subtitles without encoding the video again. Choose the original video (or an audio file) as the track source when adding audio; if the encoded video was trimmed, enter where it starts in the original. Image subtitles already burned into the picture cannot be removed this way.
 
