@@ -71,17 +71,22 @@ def main():
         bad=options.arguments(info);bad[bad.index('--codec')+1]='invalid'
         result,events=wait(encode_task(bad));assert not result and any(e['kind']=='error' for e in events)
         assert destination.read_bytes()==kept
-        options.codec='av1';options.crf=40;options.fps='60';options.preset='placebo'
+        # A longer native encoding pass makes cancellation deterministic on
+        # fast hosts; a three-second clip can finish between process polls.
+        cancel_source=work/'cancel-encoding.mkv'
+        subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(),'-v','error','-y','-f','lavfi','-i',
+            'testsrc2=size=384x216:rate=24','-t','45','-c:v','libx264','-preset','ultrafast',str(cancel_source)],check=True,timeout=30)
+        options.source=str(cancel_source);options.codec='h264';options.crf=18;options.fps='60';options.preset='veryslow';options.audio=False;options.subtitle_mode='none'
         task=encode_task(options.arguments(info));staging=Path(task.request['staging'])
         import psutil
-        deadline=time.monotonic()+15;children=[]
+        deadline=time.monotonic()+15;children=[];cancel_events=[]
         while time.monotonic()<deadline and task.process.is_alive():
-            task.messages()
+            cancel_events.extend(task.messages())
             try:children=[child for child in psutil.Process(task.process.pid).children(recursive=True) if '-progress' in child.cmdline()]
             except psutil.NoSuchProcess:break
             if children:break
             time.sleep(.02)
-        assert children,'Cancellation test must interrupt an actual encoding pass, not its metadata probe'
+        assert children,('Cancellation test must interrupt an actual encoding pass, not its metadata probe',cancel_events[-8:])
         assert (staging/'scratch').is_dir()
         task.cancel();task.process.join(timeout=8)
         assert not task.process.is_alive();task.close();assert not staging.exists()
@@ -110,6 +115,11 @@ def main():
         window.start.setText('bad');assert not window.encode.isEnabled()
         window.start.setText('0');assert window.encode.isEnabled()
         window.copy_command();assert '--audio-track' in app.clipboard().text()
+        window.codec.setCurrentIndex(1);assert not window.preset.isEnabled()
+        assert [window.stream_profile.itemData(i) for i in range(window.stream_profile.count())]==['fast','intra']
+        window.codec.setCurrentIndex(3);assert window.preset.isEnabled()
+        assert [window.stream_profile.itemData(i) for i in range(window.stream_profile.count())]==['fast','quality','intra']
+        window.codec.setCurrentIndex(0)
         if args.screenshots:
             args.screenshots.mkdir(parents=True,exist_ok=True)
             for index,name in enumerate(('video','audio','subtitles')):

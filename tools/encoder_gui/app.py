@@ -181,6 +181,15 @@ class EncoderWindow(QMainWindow):
         self.log.setVisible(on);self.save_log.setVisible(on);self.details.setText('Hide details' if on else 'Show details')
     def change_codec(self):
         key=self.codec.currentData();self.quality.setMaximum(63 if key=='av1' else 51);self.quality.setDecimals(0 if key=='av1' else 1)
+        previous=self.stream_profile.currentData()
+        choices=[('Fast playback','fast'),('Balanced','balanced'),('Higher detail','quality'),('Every frame independent','intra')]
+        if key=='mpeg4':choices=[choices[0],choices[3]]
+        elif key=='av1':choices=[choices[0],choices[2],choices[3]]
+        self.stream_profile.blockSignals(True);self.stream_profile.clear()
+        for label,value in choices:self.stream_profile.addItem(label,value)
+        self.stream_profile.setCurrentIndex(next((i for i,(_,value) in enumerate(choices) if value==previous),0));self.stream_profile.blockSignals(False)
+        self.preset.setEnabled(key!='mpeg4')
+        self.preset.setToolTip('MPEG-4 uses fixed encoder settings.' if key=='mpeg4' else 'Controls encoding effort on this computer. Slower settings spend more time on compression.')
         self.apply_quality();self.update_options()
     def apply_quality(self):
         choice=self.quality_choice.currentData();key=self.codec.currentData()
