@@ -12,8 +12,9 @@ int native_usb_ui_reassert(void);
 int native_usb_ui_wait(void);
 /* Bounded IRQ span; no OS sleep/yield call. */
 int native_usb_ui_poll(void);
-/* Resume a suspended bus, or start a verified CX II root-only bus whose
- * interrupt is not registered. Never recreate the whole host. */
+/* Resume an existing bus, or request its native OTG owner's power/reset/start
+ * sequence for a verified cold CX II root. A queued request is not readiness;
+ * callers recheck current native/MMIO state before borrowing the bus. */
 int native_usb_ui_resume_host(void);
 /* Read-only candidate discovery. The controller authenticates its own
  * resident callbacks before reusing a binding from a previous app launch. */

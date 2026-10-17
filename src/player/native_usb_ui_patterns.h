@@ -1,6 +1,10 @@
 /* Checked ARM function bodies, with external branches and explicit local
  * switch tables normalized. Runtime bindings are discovered, not fixed OS addresses. */
 static const UiCodeWitness witnesses[] = {
+    {UI_OTG_ENGINE_CREATE, 284, 0x4727e114U, {0xe92d40f8U,0xe1a06000U,0xe1a07001U,0xe3a0007cU}},
+    {UI_OTG_APP_MODE, 64, 0x5d6e3384U, {0xe3510001U,0x0a000006U,0x312fff1eU,0xe3510002U}},
+    {UI_OTG_APP_NOTIFY, 116, 0xd3ca1c97U, {0xe3510000U,0xe92d4038U,0xe1a05000U,0x1a00000fU}},
+    {UI_OTG_SESSION_REQUEST, 48, 0xbcb016f2U, {0xe59f3028U,0xe5d32000U,0xe3520000U,0x1a000001U}},
     {UI_HUB_EXPLORE, 1800, 0x5b6315e4U, {0xe92d4ff0U,0xe5902060U,0xe24dd02cU,0xe58d200cU}},
     {UI_PORT_RESET, 696, 0xba434449U, {0xe92d40f0U,0xe3a03000U,0xe24dd00cU,0xe1a05001U}},
     {UI_HCD_CORE_CONTROL, 372, 0x3e77e740U, {0xe2413009U,0xe92d41f0U,0xe1a05001U,0xe1a04000U}},

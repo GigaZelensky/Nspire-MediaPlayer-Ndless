@@ -28,12 +28,13 @@ static unsigned binding_trace_count;
  * not guaranteed to meet that requirement. Both BSD locks serialize this
  * temporary argument block, including across the native attach call's waits. */
 static uint32_t reprobe_args[12];
-static unsigned start_count;
-static int start_result;
-static int start_cleanup_result;
-static uint32_t start_phy_before[10],start_phy_after[10];
 static unsigned enumeration_count;
 static int enumeration_result;
+static unsigned session_requests;
+static int session_result;
+static const char *session_stage = "not requested";
+static uint32_t session_trace[9];
+static uint32_t session_phy_before[10],session_phy_after[10];
 static bool memory(uint32_t at, unsigned bytes);
 static bool route_layout_valid(void);
 static uint32_t original_input, original_tracking, original_display, original_busy, original_cursor;
@@ -102,6 +103,56 @@ static uint32_t resume_method(uint32_t device, unsigned role)
     return native_usb_ui_role_matches(v, function, role) ? function : 0;
 }
 
+/* Bind the existing OTG owner's normal application session request. This is
+ * not its raw VBUS callback: the owner retains its fault policy, event queue,
+ * power-valid wait and root-port reset/start ordering. No OS addresses or
+ * device IDs are assumed. Caller holds global USB while inspecting identity. */
+static uint32_t native_session_request(const UsbHostTree *tree)
+{
+    if (api.classic_cx) return 0;
+    const PortableView *v = portable_reader_platform_view(&mapping);
+    if (!v) return 0;
+    uint32_t info=WORD(tree->hub+96U);
+    /* A device under construction can already own root_port.child before it
+     * appears in the bus address array. Do not treat that as an empty root. */
+    if (!memory(info,68) || WORD(info+4U)!=tree->hub_state || WORD(info+56U) ||
+        *(const volatile uint8_t *)(uintptr_t)(info+10U)!=1 ||
+        !native_usb_ui_role_matches(v,WORD(info),UI_HUB_EXPLORE)) return 0;
+    uint32_t attach = api.function[UI_OTG_ATTACH];
+    if (!native_usb_ui_role_matches(v,attach,UI_OTG_ATTACH) ||
+        !v->allow_span(v->context,attach+0x130U,16,PORTABLE_CODE) ||
+        WORD(attach+0x130U)!=0xe1a00004U || WORD(attach+0x134U)!=0xe59f1568U ||
+        WORD(attach+0x138U)!=0xe284200cU ||
+        !native_usb_ui_role_matches(v,code_branch(attach+0x13cU),UI_OTG_ENGINE_CREATE) ||
+        !v->allow_span(v->context,attach+0x6a4U,4,PORTABLE_CODE)) return 0;
+    uint32_t table=WORD(attach+0x6a4U),engine=WORD(tree->otg+0x0cU);
+    if (!memory(table,44) || !memory(engine,124) || WORD(engine+0x10U)!=table ||
+        WORD(engine+0x14U)!=tree->otg || (WORD(engine)&1U)) return 0;
+    uint32_t handler=WORD(engine+0x0cU);
+    if ((handler&3U) || handler<v->code_begin || v->code_end<4U ||
+        handler>v->code_end-4U || !v->allow_span(v->context,handler,4,PORTABLE_CODE)) return 0;
+    uint32_t notify=WORD(engine+0x2cU),mode=WORD(engine+0x28U);
+    if (!native_usb_ui_role_matches(v,notify,UI_OTG_APP_NOTIFY) ||
+        !native_usb_ui_role_matches(v,mode,UI_OTG_APP_MODE)) return 0;
+    uint32_t request=code_branch(notify+0x5cU);
+    if (!native_usb_ui_role_matches(v,request,UI_OTG_SESSION_REQUEST) ||
+        !v->allow_span(v->context,request+0x30U,4,PORTABLE_CODE) ||
+        !v->allow_span(v->context,mode+0x40U,4,PORTABLE_CODE)) return 0;
+    uint32_t policy=WORD(request+0x30U);
+    if (!memory(policy,8) || WORD(mode+0x40U)!=policy ||
+        WORD(engine+0x44U)!=policy || WORD(policy+4)!=engine ||
+        *(const volatile uint8_t *)(uintptr_t)policy>1) return 0;
+    uint32_t semaphore=WORD(engine+0x68U),head=WORD(engine+0x6cU),tail=WORD(engine+0x70U);
+    if (!memory(semaphore,40) || WORD(semaphore+12)!=0x53454d41U ||
+        WORD(semaphore+24)>1 || !memory(tail,4) || WORD(tail) ||
+        (head ? !memory(head,12) : tail!=engine+0x6cU)) return 0;
+    session_trace[0]=engine;session_trace[1]=WORD(engine);
+    session_trace[2]=WORD(engine+4);session_trace[3]=WORD(engine+8);
+    session_trace[4]=WORD(engine+0x0cU);session_trace[5]=head;session_trace[6]=tail;
+    session_trace[7]=policy;session_trace[8]=*(const volatile uint8_t *)(uintptr_t)policy;
+    return request;
+}
+
 static bool resume_tree(UsbHostTree *tree, uint32_t *resume)
 {
     if (!host_tree(tree)) return false;
@@ -125,10 +176,9 @@ static bool resume_tree(UsbHostTree *tree, uint32_t *resume)
 
 static int cold_start_check(const UsbHostTree *tree)
 {
-    /* CX II can retain an initialized, root-only bus after the OS rejects a
-     * peripheral, with no registered HCD interrupt and no suspend flag. The
-     * resume method cannot start that bus. Control 18 registers its interrupt
-     * and starts the existing schedules; it does not allocate a second bus. */
+    /* Prove a quiescent existing root before requesting its native OTG owner.
+     * A root-only address array alone misses a child still being constructed
+     * or a linked native transfer. Never start/reset over either one. */
     if (api.classic_cx || WORD(tree->bus + 604) || WORD(tree->bus + 1772) || WORD(tree->handle + 32) ||
         WORD(tree->hub_state + 36)) return -31;
     /* bus+1744 is the native free-transfer pool, not an active-transfer list.
@@ -163,7 +213,14 @@ static int cold_start_check(const UsbHostTree *tree)
         if (device != tree->hub || root_found) return -36;
         root_found = true;
     }
-    return root_found ? 0 : -38;
+    if (!root_found) return -38;
+    /* Native new-device construction publishes this child before its USB
+     * address/array slot. A reset/start must not race that partial device. */
+    uint32_t info=WORD(tree->hub+96U);
+    if (!memory(info,68) || WORD(info+4U)!=tree->hub_state || WORD(info+56U) ||
+        *(const volatile uint8_t *)(uintptr_t)(info+10U)!=1 ||
+        !native_usb_ui_role_matches(v,WORD(info),UI_HUB_EXPLORE)) return -55;
+    return 0;
 }
 
 static bool cold_advance_idle(const UsbHostTree *tree,uint32_t status)
@@ -640,8 +697,11 @@ void native_usb_ui_debug(FILE *file)
         (unsigned long)async_details[9],(unsigned long)async_details[10],(unsigned long)async_details[11],
         (unsigned long)async_details[12],(unsigned long)async_details[13],(unsigned long)async_details[14],
         (unsigned long)async_details[15]);
-    fprintf(file, "usb_ui_start attempts=%u result=%d cleanup=%d\n",
-            start_count, start_result, start_cleanup_result);
+    fprintf(file,"usb_ui_session stage=%s requests=%u result=%d engine=%08lx flags=%08lx/%08lx/%08lx "
+        "handler=%08lx head=%08lx tail=%08lx policy=%08lx mode=%lu\n",session_stage,session_requests,session_result,
+        (unsigned long)session_trace[0],(unsigned long)session_trace[1],(unsigned long)session_trace[2],
+        (unsigned long)session_trace[3],(unsigned long)session_trace[4],(unsigned long)session_trace[5],
+        (unsigned long)session_trace[6],(unsigned long)session_trace[7],(unsigned long)session_trace[8]);
     debug_phy(file,"current",phy_details);
     fprintf(file,"usb_ui_advance_event address=%08lx magic=%08lx flags=%08lx waiters=%lu head=%08lx "
         "task=%08lx reason=%lu timer_armed=%lu timer_delta=%lu hz=%lu tick=%lu\n",
@@ -654,9 +714,9 @@ void native_usb_ui_debug(FILE *file)
         (unsigned long)linked_qh[0],(unsigned long)linked_qh[1],(unsigned long)linked_qh[2],
         (unsigned long)linked_qh[3],(unsigned long)linked_qh[4],(unsigned long)linked_qh[5],
         (unsigned long)linked_qh[6],(unsigned long)linked_qh[7],(unsigned long)linked_qh[8]);
-    if(start_count) {
-        debug_phy(file,"before-start",start_phy_before);
-        debug_phy(file,"after-start",start_phy_after);
+    if(session_requests) {
+        debug_phy(file,"before-session",session_phy_before);
+        debug_phy(file,"after-session",session_phy_after);
     }
     fprintf(file, "usb_ui_enumerate attempts=%u result=%d\n", enumeration_count, enumeration_result);
     for (unsigned i = 0; i < binding_trace_count && i < 16; ++i) {
@@ -918,18 +978,51 @@ static int resume_host(bool retain_bus)
         !usb_registers_valid(&registers) || (WORD(registers.otg) & registers.role_mask)) goto done;
     uint32_t command = WORD(registers.command), status = WORD(registers.command + 4);
     if ((command & 2U) || (status & 16U)) goto done;
-    /* Control19 can leave IAAD set after its last queue wait timed out. With
-     * that driver completely stopped and both schedules quiescent, its
-     * matching control18 replaces the stale command along with the lists.
-     * An active/suspended owner or running schedule still owns its advance;
-     * do not acknowledge it, change a queue, or manufacture a completion. */
+    /* A stopped owner can retain IAAD. Only a proved quiescent native queue
+     * may ask its OTG owner to recover. A live advance remains its owner's:
+     * never acknowledge it or manufacture a completion. */
     if ((command & 64U) && (!cold || !cold_advance_idle(&tree,status))) goto done;
+    if (cold) {
+        /* All cold starts belong to the OTG owner, even if power/CONNECT
+         * already appeared: its reset/start timer may still be pending.
+         * A direct HCD start here races that owner and can publish a root
+         * before power/reset, stranding a native address-zero request.
+         * Its queue can release/reacquire global USB: NEVER keep our tree
+         * lock across that call, and never use these tree pointers afterward. */
+        result=-54;session_stage="session identity";
+        if ((WORD(registers.otg)&0x300000U) ||
+            (status&(0x4000U|0x8000U)) || native_usb_ui_bus_is_leased()) goto done;
+        uint32_t request=native_session_request(&tree);
+        if (!request) goto done;
+        native_usb_ui_bus_phy(session_phy_before);
+        /* Hardware schedule transitions can finish after the initial sample.
+         * Keep the cold/quiescent proof valid up to the owner-call boundary. */
+        if (!session_phy_before[0] || (session_phy_before[1]&2U) ||
+            (session_phy_before[2]&(16U|0x4000U|0x8000U)) ||
+            (session_phy_before[4]&0x300000U) ||
+            ((session_phy_before[1]&64U) && !cold_advance_idle(&tree,session_phy_before[2]))) {
+            result=-28;session_stage="session state changed";goto done;
+        }
+        ((int (*)(uint32_t))(uintptr_t)api.function[UI_SEM_GIVE])(tree_lock);
+        native_critical_enter();tree_locked=false;
+        session_stage="native session request";
+        ++session_requests;
+        native_critical_leave(0);
+        session_result=((int (*)(void))(uintptr_t)request)();
+        native_critical_enter();
+        native_usb_ui_bus_phy(session_phy_after);
+        session_stage=session_result?"native request refused":"native request accepted";
+        result=session_result;
+        /* Accepted/queued is not connected or ready. The caller services OS
+         * work and rechecks fresh MMIO/native state before any bus lease. */
+        goto done;
+    }
     /* PORT_CONNECT may stay clear until a stopped/suspended host wakes.
      * A running empty root must also consume its pending disconnect changes;
      * returning success here would skip both operations indefinitely. */
     /* A live host must not be resumed again while its worker enumerates a
      * new child. Only inspect an empty root or rebind unclaimed storage. */
-    if (!cold && !WORD(tree.handle + 32) && (WORD(registers.command) & 1U) &&
+    if (!WORD(tree.handle + 32) && (WORD(registers.command) & 1U) &&
         !(WORD(registers.command + 4) & 0x1000U)) {
         result = enumerate_empty_root(&tree, &registers);
         if (!result && (WORD(registers.port) & 1U) &&
@@ -937,61 +1030,22 @@ static int resume_host(bool retain_bus)
         goto done;
     }
     result = -29;
-    /* Native control 19 unregisters the HCD and clears its active flag, but
-     * leaves USBCMD.RUN and the schedule registers intact. Its matching
-     * control 18 republishes the existing schedules and starts the host.
-     * cold_start_check already proves no IRQ, active hub, child or linked
-     * async queue survives. Requiring HALTED here would strand that normal
-     * stopped-driver state forever. A suspended live bus still needs the
-     * separate halt/saved-command checks before its resume method runs. */
-    if (!cold && WORD(tree.handle + 32) &&
+    /* A suspended live bus retains its existing halt/saved-command contract. */
+    if (WORD(tree.handle + 32) &&
         ((WORD(registers.command) & 1U) || !(WORD(registers.command + 4) & 0x1000U) ||
          !(WORD(tree.bus + 648) & 1U))) goto done;
-    stage = cold ? "start existing EHCI host" : "resume existing EHCI host";
-    if (cold) {
-        native_usb_ui_bus_phy(start_phy_before);
-        /* Recheck hardware at the native-call boundary while both software
-         * locks still exclude a replacement driver or newly linked child. */
-        if (!start_phy_before[0] || (start_phy_before[1] & 2U) || (start_phy_before[2] & 16U) ||
-            ((start_phy_before[1] & 64U) && !cold_advance_idle(&tree,start_phy_before[2]))) {
-            result = -28; goto done;
-        }
-        ++start_count; start_cleanup_result = 0;
-    }
+    stage = "resume existing EHCI host";
     native_critical_leave(0);
-    if (cold) {
-        result = ((int (*)(uint32_t, unsigned, unsigned))(uintptr_t)
-            api.function[UI_HCD_CONTROL])(tree.hcd, 18, 0);
-    } else {
-        result = ((int (*)(uint32_t))(uintptr_t)resume)(tree.hcd);
-    }
+    result = ((int (*)(uint32_t))(uintptr_t)resume)(tree.hcd);
     native_critical_enter();
-    if(cold)native_usb_ui_bus_phy(start_phy_after);
     if (!result) {
         if (!portable_reader_platform_refresh(&mapping) || !resume_tree(&tree, &resume) ||
             WORD(tree.bus + 1772) != 1 || !WORD(tree.bus + 604) ||
-            (cold && WORD(tree.hub_state + 36) != 1) ||
             !(WORD(registers.command) & 1U) || (WORD(registers.command + 4) & (0x1000U | 16U))) result = -30;
         else {
             result = enumerate_empty_root(&tree, &registers);
             if (!result && (WORD(registers.port) & 1U) &&
                 portable_reader_platform_refresh(&mapping)) reprobe_storage(&tree);
-        }
-    }
-    if (cold) {
-        start_result = result;
-        if (result) {
-            /* Registration may have succeeded before the native start failed.
-             * Let its matching stop method release the interrupt and halt the
-             * schedules. Never leave a half-started controller after failure. */
-            UsbHostTree current;
-            if (portable_reader_platform_refresh(&mapping) && host_tree(&current) &&
-                current.hcd == tree.hcd && WORD(current.bus + 604)) {
-                native_critical_leave(0);
-                start_cleanup_result = ((int (*)(uint32_t, unsigned, unsigned))(uintptr_t)
-                    api.function[UI_HCD_CONTROL])(current.hcd, 19, 0);
-                native_critical_enter();
-            }
         }
     }
 done:

@@ -37,10 +37,14 @@ with tempfile.TemporaryDirectory(prefix='ndvideo-usb-restart-') as temporary:
     root_port=function(source,'enumerate_empty_root')
     root_port=root_port.replace('((int (*)(uint32_t, unsigned, void *))(uintptr_t)reset)', 'reset_port')
     root_port=root_port.replace('((int (*)(uint32_t, unsigned))(uintptr_t)explore)', 'explore_root')
+    session=function(source,'native_session_request')
     resume=function(source,'resume_host').replace(
         '((int (*)(uint32_t))(uintptr_t)resume)(tree.hcd)', 'resume_existing(tree.hcd)')
+    owner_call='((int (*)(void))(uintptr_t)request)()'
+    assert resume.count(owner_call)==1, 'Native owner request boundary changed; review fixture redirection.'
+    resume=resume.replace(owner_call, 'request_owner_session()')
     fixture=(root/'tools/tests/usb/native_restart.c').read_text().replace(
-        '/* PRODUCTION_NATIVE_RESTART */', root_port+'\n'+ '\n'.join(function(source,name) for name in (
+        '/* PRODUCTION_NATIVE_RESTART */', session+'\n'+root_port+'\n'+ '\n'.join(function(source,name) for name in (
             'cold_start_check','cold_advance_idle'))+'\n'+resume)
     (work/'restart.c').write_text(fixture)
     subprocess.run([gcc,'-std=c99','-O2','-Wall','-Wextra','-Werror',str(work/'restart.c'),'-o',str(work/'restart.exe')],check=True)
