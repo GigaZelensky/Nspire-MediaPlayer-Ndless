@@ -501,6 +501,8 @@ void native_usb_ui_debug(FILE *file)
              hub_active = tree_valid ? WORD(tree.hub_state + 36) : 0,
              hub_port = tree_valid ? *(const volatile uint8_t *)(uintptr_t)(tree.hub_state + 32) : 0;
     uint32_t start_resources[12] = {0};
+    uint32_t async_details[16];
+    native_usb_ui_bus_details(async_details);
     uint32_t root_port[3] = {0};
     if (tree_valid) {
         uint32_t info = WORD(tree.hub + 96);
@@ -585,6 +587,15 @@ void native_usb_ui_debug(FILE *file)
             (unsigned long)api.bsd_mode, (unsigned long)bsd_mode);
     fprintf(file, "usb_ui_locks usb_count=%lu tree_count=%lu\n",
             (unsigned long)lock_counts[0], (unsigned long)lock_counts[1]);
+    fprintf(file,"usb_ui_async valid=%lu pending=%08lx cached_mask=%08lx polling=%lu dying=%lu "
+        "event=%08lx head=%08lx head_pa=%08lx link=%08lx token=%08lx current=%08lx "
+        "software_next=%08lx free_qh=%08lx frindex=%08lx async=%08lx cmd=%08lx\n",
+        (unsigned long)async_details[0],(unsigned long)async_details[1],(unsigned long)async_details[2],
+        (unsigned long)async_details[3],(unsigned long)async_details[4],(unsigned long)async_details[5],
+        (unsigned long)async_details[6],(unsigned long)async_details[7],(unsigned long)async_details[8],
+        (unsigned long)async_details[9],(unsigned long)async_details[10],(unsigned long)async_details[11],
+        (unsigned long)async_details[12],(unsigned long)async_details[13],(unsigned long)async_details[14],
+        (unsigned long)async_details[15]);
     fprintf(file, "usb_ui_start attempts=%u result=%d cleanup=%d\n",
             start_count, start_result, start_cleanup_result);
     fprintf(file, "usb_ui_enumerate attempts=%u result=%d\n", enumeration_count, enumeration_result);

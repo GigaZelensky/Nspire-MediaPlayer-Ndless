@@ -15,6 +15,7 @@ typedef struct {
     int wake, wait, reassert, lock;
     unsigned lock_stage;
     uint32_t native[8];
+    uint32_t detail[16];
 } HostSample;
 static HostSample samples[12];
 static unsigned sample_count;
@@ -22,6 +23,9 @@ static UsbRegisters registers;
 static int wake_result, wait_result, reassert_result, lock_result;
 static unsigned host_turns, host_stalls, host_wakes;
 static uint32_t host_elapsed;
+static unsigned cleanup_changes;
+static uint32_t cleanup_signature,cleanup_last_ms;
+static bool cleanup_known;
 static void barrier(void)
 {
     __asm__ volatile("mcr p15,0,%0,c7,c10,4" ::"r"(0) : "memory");
@@ -45,6 +49,19 @@ static void sample(const char *stage)
     s->irq = WORD(0xdc000010U);
     s->presence = usb_auto_connect_presence(&registers, s->cap, s->cap, s->otg, s->port);
     native_usb_ui_bus_snapshot(s->native);
+    native_usb_ui_bus_details(s->detail);
+    if(s->detail[0]) {
+        const unsigned fields[]={6,7,8,11,12};
+        uint32_t signature=2166136261U;
+        for(unsigned i=0;i<sizeof(fields)/sizeof(fields[0]);++i)
+            signature=(signature^s->detail[fields[i]])*16777619U;
+        signature=(signature^s->native[7])*16777619U;
+        if(cleanup_known && signature!=cleanup_signature) {
+            ++cleanup_changes;
+            cleanup_last_ms=host_elapsed;
+        }
+        cleanup_signature=signature;cleanup_known=true;
+    }
     s->lock_stage = native_usb_ui_bus_lock_stage();
     native_critical_leave(mask);
 }
@@ -112,6 +129,7 @@ bool usb_host_session_prepare(uint32_t (*now)(void), bool (*progress)(void *), v
     wake_result = wait_result = reassert_result = lock_result = 0;
     host_turns = host_stalls = host_wakes = 0;
     host_elapsed = 0;
+    cleanup_changes=0;cleanup_signature=cleanup_last_ms=0;cleanup_known=false;
     if (!nspire_is_cx2() || !usb_registers_current(&registers)) {
         snprintf(message, capacity, "Shared USB session needs a CX II");
         return false;
@@ -223,6 +241,7 @@ void usb_host_session_debug(FILE *file)
     fprintf(file, "native_usb_irq_mask=%08lx\n", (unsigned long)native_usb_ui_bus_irq_mask());
     fprintf(file, "host_wait elapsed_ms=%lu turns=%u consecutive_clock_stalls=%u wake_calls=%u\n",
             (unsigned long)host_elapsed, host_turns, host_stalls, host_wakes);
+    fprintf(file,"host_cleanup changes=%u last_change_ms=%lu\n",cleanup_changes,(unsigned long)cleanup_last_ms);
     for (unsigned i = 0; i < sample_count; ++i) {
         HostSample *s = samples + i;
         fprintf(
@@ -240,6 +259,15 @@ void usb_host_session_debug(FILE *file)
                 (unsigned long)s->native[2], (unsigned long)s->native[3],
                 (unsigned long)s->native[4], (unsigned long)s->native[5],
                 (unsigned long)s->native[6], (unsigned long)s->native[7]);
+        fprintf(file,"host_async stage=%s valid=%lu pending=%08lx cached_mask=%08lx polling=%lu "
+            "dying=%lu event=%08lx head=%08lx head_pa=%08lx link=%08lx token=%08lx current=%08lx "
+            "software_next=%08lx free_qh=%08lx frindex=%08lx async=%08lx cmd=%08lx\n",
+            s->stage,(unsigned long)s->detail[0],(unsigned long)s->detail[1],
+            (unsigned long)s->detail[2],(unsigned long)s->detail[3],(unsigned long)s->detail[4],
+            (unsigned long)s->detail[5],(unsigned long)s->detail[6],(unsigned long)s->detail[7],
+            (unsigned long)s->detail[8],(unsigned long)s->detail[9],(unsigned long)s->detail[10],
+            (unsigned long)s->detail[11],(unsigned long)s->detail[12],(unsigned long)s->detail[13],
+            (unsigned long)s->detail[14],(unsigned long)s->detail[15]);
     }
     native_usb_ui_debug(file);
 }

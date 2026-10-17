@@ -96,6 +96,37 @@ void native_usb_ui_bus_snapshot(uint32_t out[8])
     native_critical_leave(mask);
 }
 
+void native_usb_ui_bus_details(uint32_t out[16])
+{
+    memset(out,0,16*sizeof(*out));
+    unsigned mask=native_critical_enter();
+    UsbHostTree tree;
+    if(resolved && !api.classic_cx && portable_reader_platform_refresh(&mapping) && host_tree(&tree)) {
+        out[0]=1;
+        out[1]=WORD(tree.bus+592);  /* IRQ events pending for the native worker. */
+        out[2]=WORD(tree.bus+1736); /* Cached native interrupt mask. */
+        out[3]=WORD(tree.bus+564)&255U;
+        out[4]=WORD(tree.bus+1756)&255U;
+        out[5]=WORD(tree.bus+1764);
+        out[6]=WORD(tree.bus+1740);
+        if(memory(out[6],80)) {
+            out[7]=WORD(out[6]+76); /* DMA address of the native async head. */
+            out[8]=WORD(out[6]);
+            out[9]=WORD(out[6]+24);
+            out[10]=WORD(out[6]+12);
+            out[11]=WORD(out[6]+68); /* Software next, changed by native unlink. */
+        }
+        out[12]=WORD(tree.bus+1704); /* Retired/free QH list. */
+        UsbRegisters r;
+        if(usb_registers_for_asic(0x202U,&r) && usb_registers_valid(&r)) {
+            out[13]=WORD(r.command+12);
+            out[14]=WORD(r.command+24);
+            out[15]=WORD(r.command);
+        }
+    }
+    native_critical_leave(mask);
+}
+
 static bool native_irq_shape(uint32_t at, const uint32_t *words, unsigned count)
 {
     const PortableView *v = portable_reader_platform_view(&mapping);

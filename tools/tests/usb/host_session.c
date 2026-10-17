@@ -23,6 +23,7 @@ bool nspire_is_cx2(void){return true;}
 static unsigned native_critical_enter(void){unsigned old=mask;mask=0xc0;return old;}
 static void native_critical_leave(unsigned value){mask=value;}
 static void native_usb_ui_bus_snapshot(uint32_t out[8]){memcpy(out,native_state,sizeof(native_state));}
+static void native_usb_ui_bus_details(uint32_t out[16]){memset(out,0,16*sizeof(*out));out[0]=1;out[12]=waits/100;}
 static unsigned native_usb_ui_bus_lock_stage(void){return native_lease?3:0;}
 static bool native_usb_ui_bus_is_leased(void){return native_lease;}
 static int native_usb_ui_bus_acquire(void)
