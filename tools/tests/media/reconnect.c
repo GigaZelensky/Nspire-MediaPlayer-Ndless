@@ -36,6 +36,7 @@ static bool mounted;
 static bool quiet_reconnect;
 static LoadingProgress *retry_progress;
 static unsigned recovery_saves;
+static unsigned native_polls;
 typedef struct {bool cancelled;} UsbConnectWindow;
 static bool render_retry(UsbConnectWindow *window);
 static void native_critical_enter(void){}
@@ -76,6 +77,7 @@ bool audio_playback_seek(AudioPlayback *a,uint32_t sample){assert(a && a->live);
 void audio_playback_tick_loading(AudioPlayback *a,LoadingProgress *l,bool paused,unsigned num,unsigned den)
 {assert(a && l && num==1 && den==1);clock_ms+=200;
  if(scenario==7){a->failed=a->cancelled=true;}
+ else if(scenario==13 && native_polls<6){a->failed=a->retry=true;}
  else if(attempt_failures){--attempt_failures;a->failed=a->retry=true;}else a->running=!paused;}
 void audio_playback_suspend(AudioPlayback *a){if(a)a->running=false;}
 void audio_playback_diagnostics(AudioPlayback *a,void (*fn)(FILE *,const void *),const void *context,bool error)
@@ -89,6 +91,7 @@ static bool usb_browser_device_present(void){
 }
 static bool usb_browser_adapter_present(void){return scenario!=12;}
 static void usb_browser_idle_discovery(SDL_Surface *s,uint32_t now){(void)s;(void)now;++discovery;}
+static bool usb_browser_recovery_poll(SDL_Surface *s){(void)s;++native_polls;return true;}
 static bool usb_browser_connect(SDL_Surface *s,const Fonts *f,PointerState *p,
     void (*backdrop)(SDL_Surface *,void *,uint32_t),void *context)
 {(void)s;(void)f;(void)p;(void)context;assert(!current && quiet_reconnect && retry_progress && !backdrop);
@@ -112,15 +115,16 @@ static void ui_transition_begin_press_release(UiTransition *t,uint32_t now){(voi
 static void draw_prompt_button(SDL_Surface *s,const Fonts *f,const SDL_Rect *r,const char *text,unsigned a,unsigned b){(void)s;(void)f;(void)a;(void)b;assert(!strcmp(text,"Cancel") && r->y==154);}
 static void draw_cursor(SDL_Surface *s,int x,int y){(void)s;(void)x;(void)y;}
 static void present_screen(SDL_Surface *s){(void)s;}
-static void save_recovery(const MusicUi *ui,int result){assert(ui->reconnect_max_ms==clock_ms);if(result<=0)++recovery_saves;}
+static void save_recovery(const MusicUi *ui,int result,AudioPlayback *audio){(void)audio;assert(ui->reconnect_max_ms==clock_ms);if(result<=0)++recovery_saves;}
 /* PRODUCTION_RECONNECT */
 int main(void)
 {
     SDL_Surface screen={0};Fonts fonts={0};PointerState pointer={0};
-    for(scenario=0;scenario<13;++scenario){
+    for(scenario=0;scenario<14;++scenario){
         clock_ms=closes=quiet_closes=opens=source_retries=frames=discovery=0;
         cancel_at=scenario==1?200:scenario==4 || scenario==12?1000:0;
         recovery_saves=0;pointer=(PointerState){0};retry_progress=NULL;
+        native_polls=0;
         mounted=scenario!=2 && scenario!=6 && scenario!=11;quiet_reconnect=last_connection_cancelled=false;attempt_failures=scenario==0?2:0;
         original=(AudioPlayback){.live=true,.failed=true,.retry=true,.rate=44100,.position=44100};
         current=&original;AudioPlayback *audio=&original;
@@ -139,12 +143,13 @@ int main(void)
             if(scenario==2)assert(source_retries==2 && discovery);
             if(scenario==10)assert(opens==1 && discovery && !source_retries);
             if(scenario==11)assert(source_retries==2 && discovery);
+            if(scenario==13)assert(opens==1 && native_polls>=6 && !discovery);
         }
         if(scenario==12)assert(!opens && !source_retries && discovery);
         if(audio)audio_playback_close(audio);
         assert(!current && frames && ui.reconnect_max_ms==clock_ms && !quiet_reconnect && !retry_progress);
         assert(recovery_saves==(result<=0));
     }
-    puts("PASS music reconnect: saved time/rate, repeated quiet failures, drive remount, paused state, fatal decoder and Esc during backoff/setup");
+    puts("PASS music reconnect: adapter-only wake, native child recovery behind a connected hub, saved position/rate, repeated quiet failures, remount, pause and cancellation");
     return 0;
 }

@@ -67,7 +67,8 @@ def main():
         subprocess.run([str(exe)], check=True, timeout=10)
         browser = (ROOT / 'src/player/usb_browser.c').read_text()
         file.write_text((ROOT / 'tools/tests/usb/idle_steps.c').read_text().replace(
-            '/* PRODUCTION_IDLE */', function(browser, 'usb_browser_idle_discovery')))
+            '/* PRODUCTION_IDLE */', function(browser, 'usb_browser_idle_discovery')+'\n'+
+            function(browser,'usb_browser_recovery_poll')))
         subprocess.run([compiler, '-std=c99', '-O2', '-Wall', '-Wextra', '-Werror',
                         str(file), '-o', str(exe)], check=True)
         subprocess.run([str(exe)], check=True, timeout=10)

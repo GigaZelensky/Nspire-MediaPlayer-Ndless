@@ -61,7 +61,7 @@ static void recovery_draw(void *context,uint32_t now)
     present_screen(screen);
 }
 
-static void save_recovery(const MusicUi *ui,int result)
+static void save_recovery(const MusicUi *ui,int result,AudioPlayback *audio)
 {
     /* One terminal error record covers attempts which never opened a decoder.
      * A successful recovery is recorded by the ordinary eventual audio close. */
@@ -78,6 +78,10 @@ static void save_recovery(const MusicUi *ui,int result)
                 (unsigned long)ui->reconnect_sample);
             usb_storage_debug(file);
             usb_browser_debug(file);
+            if(audio) {
+                fputs("music_last_retry:\n",file);
+                audio_playback_debug(audio,file);
+            }
             fclose(file);
         }
     }
@@ -93,6 +97,7 @@ int music_wait_for_audio(SDL_Surface *screen,const Fonts *fonts,const char *path
 {
     uint32_t resume=info->position,rate=info->rate,started=monotonic_clock_now_ms();
     uint32_t retry_at=started+500,backoff=500;
+    uint32_t native_after=started;
     uint32_t present_since=0;
     int result=0;
     controls->capture=0;
@@ -116,6 +121,15 @@ int music_wait_for_audio(SDL_Surface *screen,const Fonts *fonts,const char *path
         if(isKeyPressed(KEY_NSPIRE_ESC))break;
         loading_progress_tick(&loading,false);
         if(view.cancelled)break;
+        /* Root-port presence only describes the hub. Its DAC can detach or
+         * reset while that port remains connected. Let the native hub/USB
+         * workers finish their debounce/teardown during the retry backoff,
+         * using the OS timer domain rather than app-side busy delays. */
+        if((int32_t)(now-native_after)>=0) {
+            usb_browser_recovery_poll(screen);
+            now=monotonic_clock_now_ms();
+            native_after=now+16U;
+        }
         if((int32_t)(now-retry_at)<0) {player_delay_ms(16);continue;}
         if(!usb_browser_device_present()) {
             (void)usb_storage_mounted(); /* Poll and invalidate the old volume. */
@@ -174,7 +188,7 @@ int music_wait_for_audio(SDL_Surface *screen,const Fonts *fonts,const char *path
     }
     uint32_t elapsed=monotonic_clock_now_ms()-started;
     if(elapsed>ui->reconnect_max_ms)ui->reconnect_max_ms=elapsed;
-    save_recovery(ui,result);
+    save_recovery(ui,result,*audio);
     if(snapshot)SDL_FreeSurface(snapshot);
     pointer_init(pointer);
     return result;

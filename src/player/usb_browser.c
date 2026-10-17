@@ -275,6 +275,24 @@ void usb_browser_idle_discovery(SDL_Surface *screen, uint32_t now)
         detection.presence = connection_presence();
     }
 }
+bool usb_browser_recovery_poll(SDL_Surface *screen)
+{
+    if(app_task_io_pending() || storage_native_active()) {
+        app_task_io_service(32U);
+        return false;
+    }
+    if(!usb_storage_quiescent())return false;
+    if(!raw_player_prepare_native()) {
+        raw_player_native_released();
+        return false;
+    }
+    usb_browser_release_io();
+    storage_mutation_invalidate();
+    ++discovery_turns;
+    if(!sram_with_native_mapping(discovery_native,screen))discovery_result=-20;
+    raw_player_native_released();
+    return discovery_result==0;
+}
 void usb_browser_debug(FILE *file)
 {
     if (file) fprintf(file, "usb_connect preconnected=%u stage=%s auto_state=%u auto_candidate=%u resume_attempts=%u resume_result=%d\n",

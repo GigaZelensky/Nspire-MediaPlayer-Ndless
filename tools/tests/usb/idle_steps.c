@@ -15,9 +15,11 @@ static uint32_t discovery_after, now_ticks;
 static bool mounted, pending, active, park_ok = true;
 static bool quiescent=true;
 static unsigned lease_releases;
+static unsigned file_service_turns;
 static bool usb_storage_mounted(void) { return mounted; }
 static bool storage_native_active(void) { return active; }
 static bool app_task_io_pending(void) { return pending; }
+static void app_task_io_service(unsigned budget) {assert(budget==32U);++file_service_turns;}
 static bool usb_storage_quiescent(void) { return quiescent; }
 static void usb_browser_release_io(void) { ++lease_releases; }
 static int native_usb_ui_prepare_step(void) { ++preparations; return prepare_result; }
@@ -69,6 +71,16 @@ int main(void)
     discovery_prepared = -1;
     usb_browser_idle_discovery(&screen,2500);
     assert(preparations == 2 && wakes == 3);
+    /* Audio recovery cannot wait for a root disconnect or picker metadata.
+     * Native device cleanup behind a live mounted hub must still advance. */
+    files[0].timing_checked=false;
+    assert(usb_browser_recovery_poll(&screen) && wakes==4 && lease_releases==4);
+    pending=true;assert(!usb_browser_recovery_poll(&screen) && wakes==4);pending=false;
+    active=true;assert(!usb_browser_recovery_poll(&screen) && wakes==4);active=false;
+    assert(file_service_turns==2);
+    quiescent=false;assert(!usb_browser_recovery_poll(&screen) && wakes==4);quiescent=true;
+    unsigned before_releases=releases;
+    park_ok=false;assert(!usb_browser_recovery_poll(&screen) && wakes==4 && releases==before_releases+1);
     puts("PASS background discovery: one slice per frame, no blocking file joins, writer/reader exclusion and wake retry deadline");
     return 0;
 }

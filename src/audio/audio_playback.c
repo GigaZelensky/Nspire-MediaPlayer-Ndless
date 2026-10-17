@@ -722,6 +722,8 @@ void audio_playback_debug(const AudioPlayback *a, FILE *file)
     fprintf(file, "audio_notice=%s position=%llu transfer_fault=%s\n", a->text,
             (unsigned long long)(a->position >> 32),
             *a->transfer_fault ? a->transfer_fault : usb_audio_transfer_fault());
+    fprintf(file,"audio_hardware stage=%s result=%d source_errno=%d usb_failed=%u\n",
+        a->hardware_stage?a->hardware_stage:"not entered",a->hardware_result,a->source_error,a->usb_failed);
     audio_decoder_debug(a->decoder, file);
     usb_host_session_debug(file);
     usb_audio_topology_debug(file);
