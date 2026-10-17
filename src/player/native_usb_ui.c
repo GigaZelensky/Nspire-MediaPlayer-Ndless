@@ -322,18 +322,18 @@ bool native_usb_ui_storage_binding(uint32_t *owner,uint32_t *device,uint32_t *in
 
 static int enumerate_empty_root(const UsbHostTree *tree, const UsbRegisters *registers)
 {
-    /* Resume deliberately scans with explore(hub, 0), which cannot discover
-     * a new device. Handle a connected device on an otherwise empty root
-     * separately; never reset an existing child or another driver's device. */
+    /* Resume scans with explore(hub, 0), which cannot consume a connection
+     * change or discover a new device. Service an otherwise empty root
+     * through its owner; never reset an existing child or another device. */
     for (unsigned slot = 1; slot < 128; ++slot) {
         uint32_t child = WORD(tree->bus + 52 + slot * 4);
         if (child && child != tree->hub) return 0;
     }
     uint32_t port = WORD(registers->port);
-    /* The OS may have acknowledged CONNECT_CHANGE before our driver was
-     * registered. Current connection state plus the verified empty child
-     * slots is what matters; requiring that transient flag strands the drive. */
-    if (!(port & 1U)) return 0;
+    /* A connected port can need discovery after its change was acknowledged.
+     * A disconnected port can still have pending CONNECT/ENABLE changes:
+     * ignoring those leaves the native hub's cached state stale on replug. */
+    if (!(port & (1U | 2U | 8U))) return 0;
     const PortableView *v = portable_reader_platform_view(&mapping);
     uint32_t hub_resume = resume_method(tree->hub_owner, UI_HUB_RESUME);
     uint32_t explore = hub_resume ? code_branch(hub_resume + 36) : 0;
@@ -349,8 +349,8 @@ static int enumerate_empty_root(const UsbHostTree *tree, const UsbRegisters *reg
         WORD(tree->hub_state + 36) != 1) return -42;
     ++enumeration_count;
     enumeration_result = 0;
-    stage = "enumerate connected root port";
-    if (!(port & 4U)) {
+    stage = port & 1U ? "enumerate connected root port" : "process root-port changes";
+    if ((port & 1U) && !(port & 4U)) {
         /* The OTG root port is reset by its owner during normal insertion;
          * uhub_explore skips that reset for this port. Complete it through
          * USBdi before asking the hub to discover the connected device. */
@@ -924,20 +924,16 @@ static int resume_host(bool retain_bus)
      * An active/suspended owner or running schedule still owns its advance;
      * do not acknowledge it, change a queue, or manufacture a completion. */
     if ((command & 64U) && (!cold || !cold_advance_idle(&tree,status))) goto done;
-    if (!(WORD(registers.port) & 1U) && !cold) {
-        /* An initialized, running host can simply wait for insertion. A cold
-         * root-only host below must be started even before PORT_CONNECT:
-         * detecting the adapter must not depend on an already running host. */
-        if (!WORD(tree.handle + 32) && (WORD(registers.command) & 1U) &&
-            !(WORD(registers.command + 4) & 0x1000U)) result = 0;
-        goto done;
-    }
+    /* PORT_CONNECT may stay clear until a stopped/suspended host wakes.
+     * A running empty root must also consume its pending disconnect changes;
+     * returning success here would skip both operations indefinitely. */
     /* A live host must not be resumed again while its worker enumerates a
      * new child. Only inspect an empty root or rebind unclaimed storage. */
     if (!cold && !WORD(tree.handle + 32) && (WORD(registers.command) & 1U) &&
         !(WORD(registers.command + 4) & 0x1000U)) {
         result = enumerate_empty_root(&tree, &registers);
-        if (!result && portable_reader_platform_refresh(&mapping)) reprobe_storage(&tree);
+        if (!result && (WORD(registers.port) & 1U) &&
+            portable_reader_platform_refresh(&mapping)) reprobe_storage(&tree);
         goto done;
     }
     result = -29;
@@ -978,7 +974,8 @@ static int resume_host(bool retain_bus)
             !(WORD(registers.command) & 1U) || (WORD(registers.command + 4) & (0x1000U | 16U))) result = -30;
         else {
             result = enumerate_empty_root(&tree, &registers);
-            if (!result && portable_reader_platform_refresh(&mapping)) reprobe_storage(&tree);
+            if (!result && (WORD(registers.port) & 1U) &&
+                portable_reader_platform_refresh(&mapping)) reprobe_storage(&tree);
         }
     }
     if (cold) {

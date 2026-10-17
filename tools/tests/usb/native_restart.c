@@ -13,14 +13,17 @@
 #endif
 
 typedef unsigned PortableView;
-typedef struct {uint32_t bus,handle,hub_state,hub,hcd;} UsbHostTree;
+typedef struct {uint32_t bus,handle,hub_state,hub,hcd,hub_owner;} UsbHostTree;
 typedef struct {uint32_t command,port,otg,role_mask;} UsbRegisters;
-enum {UI_SEM_TAKE,UI_SEM_GIVE,UI_HCD_CONTROL,UI_HCD_CORE_CONTROL,UI_EHCI_START,UI_IRQ_REGISTER};
+enum {UI_SEM_TAKE,UI_SEM_GIVE,UI_HCD_CONTROL,UI_HCD_CORE_CONTROL,UI_EHCI_START,UI_IRQ_REGISTER,
+      UI_HUB_RESUME,UI_HUB_EXPLORE,UI_PORT_RESET};
 static struct {bool classic_cx;uint32_t bsd_locks,bsd_mode;uintptr_t function[6];} api;
 static unsigned mapping,mask,borrow_lock_stage,starts,stops,enumerations,reprobes;
 static bool resolved,tree_valid,code_valid;
-static bool schedule_changed_before_start;
+static bool schedule_changed_before_start,explore_suspends;
 static int start_error;
+static unsigned port_resets,resumes,enumeration_count;
+static int enumeration_result,explore_error;
 static unsigned start_count;
 static int start_result,start_cleanup_result;
 static uint32_t start_phy_before[10],start_phy_after[10];
@@ -41,11 +44,16 @@ static uint32_t base;
 #define TREE_LOCK (base+0x1800)
 #define MODE (base+0x1901)
 #define HUB (base+0x1a00)
+#define HUB_OWNER (base+0x1b00)
+#define HUB_INFO (base+0x1b40)
 #define ADVANCE_EVENT (base+0x1e00)
 #define PERIODIC (base+0x2000)
 #define CORE 0x81000000U
 #define START 0x82000000U
 #define REGISTER_IRQ 0x83000000U
+#define HUB_RESUME 0x84000000U
+#define EXPLORE 0x85000000U
+#define RESET_PORT 0x86000000U
 static bool memory(uint32_t address,unsigned bytes)
 {return bytes<=0x8000 && address>=base && address-base<=0x8000-bytes;}
 static unsigned native_critical_enter(void){unsigned old=mask;mask=0xc0;return old;}
@@ -57,7 +65,8 @@ static bool native_usb_ui_role_matches(const PortableView *v,uint32_t address,un
 {
     assert(v==&mapping);
     return code_valid && ((address==CORE && role==UI_HCD_CORE_CONTROL) ||
-        (address==START && role==UI_EHCI_START) || (address==REGISTER_IRQ && role==UI_IRQ_REGISTER));
+        (address==START && role==UI_EHCI_START) || (address==REGISTER_IRQ && role==UI_IRQ_REGISTER) ||
+        (address==EXPLORE && role==UI_HUB_EXPLORE) || (address==RESET_PORT && role==UI_PORT_RESET));
 }
 static uint32_t code_branch(uint32_t address)
 {
@@ -65,11 +74,18 @@ static uint32_t code_branch(uint32_t address)
     if(address==control+40 || address==control+188)return CORE;
     if(address==control+124)return REGISTER_IRQ;
     if(address==CORE+248)return START;
+    if(address==HUB_RESUME+36)return EXPLORE;
+    if(address==EXPLORE+408)return RESET_PORT;
     return 0;
+}
+static int resume_existing(uint32_t hcd) {
+    assert(!mask && hcd==base+0x1c00); ++resumes;
+    WORD(BUS+1760)=WORD(HANDLE+32)=0;
+    WORD(MMIO)=0x80031;WORD(MMIO+4)=0xc000;return 0;
 }
 static bool resume_tree(UsbHostTree *tree,uint32_t *resume)
 {
-    *tree=(UsbHostTree){BUS,HANDLE,HUB_STATE,HUB,base+0x1c00};*resume=1;
+    *tree=(UsbHostTree){BUS,HANDLE,HUB_STATE,HUB,base+0x1c00,HUB_OWNER};*resume=1;
     return tree_valid && WORD(BUS+1772)<=1 && WORD(BUS+1760)<=1 &&
         WORD(BUS+1760)==WORD(HANDLE+32);
 }
@@ -100,8 +116,22 @@ static int control(uint32_t hcd,unsigned command,unsigned argument)
     }
     return 0;
 }
-static int enumerate_empty_root(const UsbHostTree *t,const UsbRegisters *r)
-{assert(t->bus==BUS && r->command==MMIO && WORD(BUS+1772));++enumerations;return 0;}
+static uint32_t resume_method(uint32_t owner,unsigned role)
+{assert(owner==HUB_OWNER && role==UI_HUB_RESUME);return HUB_RESUME;}
+static int reset_port(uint32_t hub,unsigned port,void *status)
+{assert(!mask && hub==HUB && port==1 && status);++port_resets;WORD(MMIO+0x20)|=4;return 0;}
+static int explore_root(uint32_t hub,unsigned discover)
+{
+    assert(!mask && hub==HUB && discover==1 && !WORD(USB_LOCK+24) && !WORD(TREE_LOCK+24));
+    ++enumerations;
+    /* Model only the witnessed native change acknowledgement, not attachment. */
+    WORD(MMIO+0x20)&=~(2U|8U);
+    if(explore_suspends) {
+        WORD(BUS+1760)=WORD(HANDLE+32)=1;WORD(BUS+648)=0x80031;
+        WORD(MMIO)=0;WORD(MMIO+4)=0x1000;
+    }
+    return explore_error;
+}
 static void reprobe_storage(const UsbHostTree *t){assert(t->bus==BUS);++reprobes;}
 static bool retain_bus_lease(uint32_t first,uint32_t second)
 {assert(first==USB_LOCK && second==TREE_LOCK);return false;}
@@ -115,8 +145,9 @@ static void reset(bool run)
 {
     memset(arena,0,0x8000);resolved=tree_valid=code_valid=true;mask=0x80;
     borrow_lock_stage=starts=stops=enumerations=reprobes=start_count=0;
+    port_resets=resumes=enumeration_count=0;enumeration_result=explore_error=0;
     start_error=start_result=start_cleanup_result=0;
-    schedule_changed_before_start=false;
+    schedule_changed_before_start=explore_suspends=false;
     api.classic_cx=false;api.bsd_locks=LOCKS;api.bsd_mode=MODE;arena[0x1901]=1;
     api.function[UI_SEM_TAKE]=(uintptr_t)take;api.function[UI_SEM_GIVE]=(uintptr_t)give;
     api.function[UI_HCD_CONTROL]=(uintptr_t)control;
@@ -129,6 +160,8 @@ static void reset(bool run)
     WORD(DMA+4)=PERIODIC;WORD(BUS+1740)=HEAD;
     WORD(HEAD+76)=HEAD;WORD(HEAD)=HEAD|2;WORD(HEAD+16)=1;WORD(HEAD+24)=0x40;
     WORD(BUS+52+4)=HUB;
+    WORD(HUB+96)=HUB_INFO;WORD(HUB_INFO)=EXPLORE;WORD(HUB_INFO+4)=HUB_STATE;
+    arena[0x1b40+10]=1;arena[0x1000+25]=arena[0x1000+32]=1;
     WORD(BUS+1764)=ADVANCE_EVENT;WORD(ADVANCE_EVENT+12)=0x45564e54;
     WORD(MMIO)=run?0x80031:0;WORD(MMIO+4)=run?0xc000:0x1000;WORD(MMIO+0x20)=0xd;
 }
@@ -193,7 +226,7 @@ int main(void)
     puts("PASS stale advance restarts only an authenticated stopped native driver with no linked queue and quiescent schedules");
     reset(true);WORD(MMIO)|=64;WORD(MMIO+4)=8;schedule_changed_before_start=true;
     assert(resume_host(false)==-28 && !starts && !stops && (WORD(MMIO)&64));unlocked();
-    reset(true);WORD(BUS+604)=IRQ;WORD(BUS+1772)=1;
+    reset(true);WORD(BUS+604)=IRQ;WORD(BUS+1772)=WORD(HUB_STATE+36)=1;
     assert(!resume_host(false) && !starts && enumerations==1);unlocked();
     WORD(BUS+1760)=WORD(HANDLE+32)=1;
     assert(resume_host(false)==-29 && !starts);unlocked();
@@ -204,5 +237,35 @@ int main(void)
     reset(true);start_error=5;
     assert(resume_host(false)==5 && starts==1 && stops==1 && !WORD(BUS+604));unlocked();
     puts("PASS restart refuses live children/queues, active or unknown hosts, pending reset/advance, fatal status and contended locks; failed start releases its native IRQ");
+    /* Captured failed retry: root-only native host, CONNECT clear, CSC/PEC
+     * still latched. Both the already-running and cold paths must dispatch
+     * native explore(1), never reset a disconnected port or probe storage. */
+    for(unsigned active=0;active<2;++active) {
+        reset(true);WORD(MMIO+4)=0;WORD(MMIO+0x20)=0x80a;
+        if(active){WORD(BUS+604)=IRQ;WORD(BUS+1772)=WORD(HUB_STATE+36)=1;}
+        assert(!resume_host(false) && enumerations==1 && !port_resets && !reprobes);
+        assert(!(WORD(MMIO+0x20)&(1U|2U|8U)) && starts==!active);unlocked();
+        assert(!resume_host(false) && enumerations==1 && !port_resets);unlocked();
+        WORD(MMIO+0x20)=3; /* A later real insertion needs its ordinary reset. */
+        assert(!resume_host(false) && enumerations==2 && port_resets==1 && reprobes==1);unlocked();
+    }
+    reset(true);WORD(BUS+604)=IRQ;WORD(BUS+1772)=WORD(HUB_STATE+36)=1;
+    WORD(MMIO+0x20)=0x80a;WORD(BUS+52+8)=HUB+0x100;
+    assert(!resume_host(false) && !enumerations && !port_resets && !reprobes);unlocked();
+    reset(true);WORD(BUS+604)=IRQ;WORD(BUS+1772)=WORD(HUB_STATE+36)=1;
+    WORD(MMIO+0x20)=0x80a;WORD(HUB_INFO+56)=HUB+0x100;
+    assert(resume_host(false)==-42 && !enumerations && !port_resets);unlocked();
+    reset(true);WORD(BUS+604)=IRQ;WORD(BUS+1772)=WORD(HUB_STATE+36)=1;
+    WORD(MMIO+0x20)=0x80a;explore_error=5;
+    assert(resume_host(false)==5 && enumerations==1 && !port_resets && !reprobes);unlocked();
+    reset(true);WORD(BUS+604)=IRQ;WORD(BUS+1772)=WORD(HUB_STATE+36)=1;
+    WORD(BUS+1760)=WORD(HANDLE+32)=1;WORD(BUS+648)=0x80031;
+    WORD(MMIO)=0;WORD(MMIO+4)=0x1000;WORD(MMIO+0x20)=0;
+    assert(!resume_host(false) && resumes==1 && !enumerations && !port_resets && !reprobes);unlocked();
+    reset(true);WORD(BUS+604)=IRQ;WORD(BUS+1772)=WORD(HUB_STATE+36)=1;
+    WORD(MMIO+0x20)=0x80a;explore_suspends=true;
+    assert(!resume_host(false) && enumerations==1 && WORD(HANDLE+32) && !WORD(MMIO));unlocked();
+    assert(!resume_host(false) && resumes==1 && enumerations==1 && !WORD(HANDLE+32));unlocked();
+    puts("PASS disconnected root changes reach native explore(1), empty ports are not reset, later insertion can enumerate, and authentic suspended hosts wake without CONNECT");
     return 0;
 }

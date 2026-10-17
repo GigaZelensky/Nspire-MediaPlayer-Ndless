@@ -33,9 +33,15 @@ with tempfile.TemporaryDirectory(prefix='ndvideo-usb-lease-') as temporary:
 with tempfile.TemporaryDirectory(prefix='ndvideo-usb-restart-') as temporary:
     work=Path(temporary)
     source=(root/'src/player/native_usb_ui.c').read_text()
+    # Redirect only native-call boundaries; execute the production guards and dispatch.
+    root_port=function(source,'enumerate_empty_root')
+    root_port=root_port.replace('((int (*)(uint32_t, unsigned, void *))(uintptr_t)reset)', 'reset_port')
+    root_port=root_port.replace('((int (*)(uint32_t, unsigned))(uintptr_t)explore)', 'explore_root')
+    resume=function(source,'resume_host').replace(
+        '((int (*)(uint32_t))(uintptr_t)resume)(tree.hcd)', 'resume_existing(tree.hcd)')
     fixture=(root/'tools/tests/usb/native_restart.c').read_text().replace(
-        '/* PRODUCTION_NATIVE_RESTART */', '\n'.join(function(source,name) for name in (
-            'cold_start_check','cold_advance_idle','resume_host')))
+        '/* PRODUCTION_NATIVE_RESTART */', root_port+'\n'+ '\n'.join(function(source,name) for name in (
+            'cold_start_check','cold_advance_idle'))+'\n'+resume)
     (work/'restart.c').write_text(fixture)
     subprocess.run([gcc,'-std=c99','-O2','-Wall','-Wextra','-Werror',str(work/'restart.c'),'-o',str(work/'restart.exe')],check=True)
     subprocess.run([str(work/'restart.exe')],check=True,timeout=10)

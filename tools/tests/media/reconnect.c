@@ -37,6 +37,7 @@ static bool quiet_reconnect;
 static LoadingProgress *retry_progress;
 static unsigned recovery_saves;
 static unsigned native_polls;
+static unsigned retry_feedback;
 typedef struct {bool cancelled;} UsbConnectWindow;
 static bool render_retry(UsbConnectWindow *window);
 static void native_critical_enter(void){}
@@ -119,10 +120,10 @@ static void draw_ui_label(SDL_Surface *s,const Fonts *f,int x,int y,const char *
 static unsigned ui_transition_update(UiTransition *t,bool active,uint32_t now,unsigned ms){(void)t;(void)now;(void)ms;return active?255:0;}
 static unsigned ui_transition_update_press_ex(UiTransition *t,bool active,uint32_t now,unsigned a,unsigned b){(void)b;return ui_transition_update(t,active,now,a);}
 static void ui_transition_begin_press_release(UiTransition *t,uint32_t now){(void)t;(void)now;}
-static void draw_prompt_button(SDL_Surface *s,const Fonts *f,const SDL_Rect *r,const char *text,unsigned a,unsigned b){(void)s;(void)f;(void)a;(void)b;assert((!strcmp(text,"Cancel") || !strcmp(text,"Retry")) && r->y==154);}
+static void draw_prompt_button(SDL_Surface *s,const Fonts *f,const SDL_Rect *r,const char *text,unsigned a,unsigned b){(void)s;(void)f;(void)a;(void)b;assert((!strcmp(text,"Cancel") || !strcmp(text,"Retry") || !strcmp(text,"Retrying")) && r->y==154);if(!strcmp(text,"Retrying"))++retry_feedback;}
 static void draw_cursor(SDL_Surface *s,int x,int y){(void)s;(void)x;(void)y;}
 static void present_screen(SDL_Surface *s){(void)s;}
-static void save_recovery(const MusicUi *ui,int result,AudioPlayback *audio){(void)audio;assert(ui->reconnect_max_ms==clock_ms);if(result<=0)++recovery_saves;}
+static void save_recovery(const MusicUi *ui,int result,AudioPlayback *audio,unsigned manual_retries){(void)audio;assert(ui->reconnect_max_ms==clock_ms);assert(manual_retries==(scenario>=14?1U:0U));if(result<=0)++recovery_saves;}
 /* PRODUCTION_RECONNECT */
 int main(void)
 {
@@ -131,7 +132,7 @@ int main(void)
         clock_ms=closes=quiet_closes=opens=source_retries=frames=discovery=0;
         cancel_at=scenario==1?200:scenario==4 || scenario==12?1000:0;
         recovery_saves=0;pointer=(PointerState){0};retry_progress=NULL;
-        native_polls=0;
+        native_polls=retry_feedback=0;
         mounted=scenario!=2 && scenario!=6 && scenario!=11 && scenario<14;quiet_reconnect=last_connection_cancelled=false;attempt_failures=scenario==0?2:0;
         original=(AudioPlayback){.live=true,.failed=true,.retry=true,.rate=44100,.position=44100};
         current=&original;AudioPlayback *audio=&original;
@@ -151,7 +152,7 @@ int main(void)
             if(scenario==10)assert(opens==1 && discovery && !source_retries);
             if(scenario==11)assert(source_retries==2 && discovery);
             if(scenario==13)assert(opens==1 && native_polls>=6 && !discovery);
-            if(scenario>=14)assert(source_retries==2 && opens==1 && !recovery_saves);
+            if(scenario>=14)assert(source_retries==2 && opens==1 && !recovery_saves && retry_feedback);
         }
         if(scenario==12)assert(!opens && !source_retries && discovery);
         if(audio)audio_playback_close(audio);

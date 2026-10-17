@@ -11,7 +11,8 @@ typedef struct {
     const Fonts *fonts;
     PointerState *pointer;
     UiTransition hover[2],press[2];
-    unsigned captured;
+    unsigned captured,manual_retries;
+    uint32_t retry_feedback_until;
     bool cancelled,retry_requested,keyboard_capture,previous_key;
 } MusicReconnectView;
 
@@ -42,7 +43,11 @@ static void recovery_draw(void *context,uint32_t now)
     }
     if(view->captured && !(view->keyboard_capture?key:pointer->down)) {
         if(hot==view->captured || (view->keyboard_capture && !hot)) {
-            if(view->captured==1)view->retry_requested=true;
+            if(view->captured==1) {
+                view->retry_requested=true;
+                ++view->manual_retries;
+                view->retry_feedback_until=now+750U;
+            }
             else view->cancelled=true;
         }
         ui_transition_begin_press_release(view->press+view->captured-1,now);
@@ -67,13 +72,14 @@ static void recovery_draw(void *context,uint32_t now)
         uint8_t hover=ui_transition_update(view->hover+i,hot==i+1,now,UI_HOVER_ANIM_MS);
         uint8_t press=ui_transition_update_press_ex(view->press+i,view->captured==i+1,now,
             UI_PRESS_ANIM_MS,PICKER_PRESS_RELEASE_ANIM_MS);
-        draw_prompt_button(screen,view->fonts,buttons+i,i?"Cancel":"Retry",hover,press);
+        bool retrying=view->manual_retries && (int32_t)(now-view->retry_feedback_until)<0;
+        draw_prompt_button(screen,view->fonts,buttons+i,i?"Cancel":retrying?"Retrying":"Retry",hover,press);
     }
     if(pointer->visible)draw_cursor(screen,pointer->x,pointer->y);
     present_screen(screen);
 }
 
-static void save_recovery(const MusicUi *ui,int result,AudioPlayback *audio)
+static void save_recovery(const MusicUi *ui,int result,AudioPlayback *audio,unsigned manual_retries)
 {
     /* One terminal error record covers attempts which never opened a decoder.
      * A successful recovery is recorded by the ordinary eventual audio close. */
@@ -85,9 +91,9 @@ static void save_recovery(const MusicUi *ui,int result,AudioPlayback *audio)
     if(player_data_prepare() && player_data_path("ndmedia-timing.log.tns",path,sizeof(path))) {
         FILE *file=player_error_log_open(path,true);
         if(file) {
-            fprintf(file,"music_recovery_end result=%d attempts=%lu wait_ms=%lu sample=%lu\n",result,
+            fprintf(file,"music_recovery_end result=%d attempts=%lu wait_ms=%lu sample=%lu manual_retries=%u\n",result,
                 (unsigned long)ui->reconnect_attempts,(unsigned long)ui->reconnect_max_ms,
-                (unsigned long)ui->reconnect_sample);
+                (unsigned long)ui->reconnect_sample,manual_retries);
             usb_storage_debug(file);
             usb_browser_debug(file);
             if(audio) {
@@ -213,7 +219,7 @@ retry_now:
     }
     uint32_t elapsed=monotonic_clock_now_ms()-started;
     if(elapsed>ui->reconnect_max_ms)ui->reconnect_max_ms=elapsed;
-    save_recovery(ui,result,*audio);
+    save_recovery(ui,result,*audio,view.manual_retries);
     if(snapshot)SDL_FreeSurface(snapshot);
     pointer_init(pointer);
     return result;
