@@ -1,13 +1,16 @@
 #include "player_internal.h"
 #include "player_data.h"
+#include "media_files.h"
 #include "../storage/usb/usb_storage.h"
 
 static MovieFile *counting;
 static DIR *local_directory;
 static UsbDirectory *usb_directory;
+static uint32_t pending_files,pending_folders;
 
 bool movie_picker_metadata_pending(const MovieFile *file)
 {
+    if(file && file->path && usb_path(file->path) && !usb_storage_mounted())return false;
     return file && (file->kind == PICKER_FOLDER ? !file->folder_count_checked
                                               : !file->timing_checked);
 }
@@ -24,8 +27,13 @@ void picker_folder_counts_stop(void)
 static void count_finished(bool valid)
 {
     counting->folder_count_checked = true;
-    counting->folder_count_valid = valid;
-    counting->folder_count_ready_ms = monotonic_clock_now_ms();
+    if(valid) {
+        bool changed=!counting->folder_count_valid || counting->folder_files!=pending_files ||
+            counting->folder_folders!=pending_folders;
+        counting->folder_files=pending_files;counting->folder_folders=pending_folders;
+        counting->folder_count_valid=true;
+        if(changed)counting->folder_count_ready_ms = monotonic_clock_now_ms();
+    }
     picker_folder_counts_stop();
 }
 
@@ -36,7 +44,7 @@ void picker_folder_counts_step(MovieFile *file)
     if (counting != file) {
         picker_folder_counts_stop();
         counting = file;
-        file->folder_files = file->folder_folders = 0;
+        pending_files=pending_folders=0;
         if (usb_path(file->path)) {
             int error = 0;
             usb_directory = usb_directory_open(file->path, &error);
@@ -73,8 +81,8 @@ void picker_folder_counts_step(MovieFile *file)
         folder = (status.st_mode & 0170000) == 0040000;
     }
     if (folder) {
-        if (file->folder_folders != UINT32_MAX) ++file->folder_folders;
-    } else if (has_suffix(name, ".nvp") || has_suffix(name, ".nvp.tns")) {
-        if (file->folder_files != UINT32_MAX) ++file->folder_files;
+        if (pending_folders != UINT32_MAX) ++pending_folders;
+    } else if (media_is_playable(name)) {
+        if (pending_files != UINT32_MAX) ++pending_files;
     }
 }

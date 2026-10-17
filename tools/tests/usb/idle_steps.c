@@ -2,16 +2,24 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stddef.h>
+#define NDMEDIA_USB_STORAGE 1
 typedef int SDL_Surface;
-enum { USB_AUTO_UNKNOWN, USB_AUTO_PRESENT };
-static struct { unsigned presence; } detection;
+enum { USB_AUTO_UNKNOWN=255, USB_AUTO_ADAPTER=1, PICKER_MOVIE, PICKER_FOLDER };
+typedef struct {unsigned kind;bool timing_checked,folder_count_checked;} MovieFile;
+static struct {MovieFile *files;size_t count;} g_picker_cache;
+static struct { unsigned presence; } detection={USB_AUTO_UNKNOWN};
 static int discovery_prepared, discovery_result, prepare_result;
 static unsigned discovery_turns, preparations, wakes, parks, releases, invalidations;
 static uint32_t discovery_after, now_ticks;
 static bool mounted, pending, active, park_ok = true;
+static bool quiescent=true;
+static unsigned lease_releases;
 static bool usb_storage_mounted(void) { return mounted; }
 static bool storage_native_active(void) { return active; }
 static bool app_task_io_pending(void) { return pending; }
+static bool usb_storage_quiescent(void) { return quiescent; }
+static void usb_browser_release_io(void) { ++lease_releases; }
 static int native_usb_ui_prepare_step(void) { ++preparations; return prepare_result; }
 static bool raw_player_prepare_native(void) { ++parks; return park_ok; }
 static void raw_player_native_released(void) { ++releases; }
@@ -43,14 +51,24 @@ int main(void)
     park_ok = true;
     usb_browser_idle_discovery(&screen, 0);
     assert(parks == 2 && releases == 2 && wakes == 1 && invalidations == 1);
-    usb_browser_idle_discovery(&screen, 499);
+    usb_browser_idle_discovery(&screen, 749);
     assert(wakes == 1);
-    now_ticks = 500;
-    usb_browser_idle_discovery(&screen, 500);
+    now_ticks = 750;
+    usb_browser_idle_discovery(&screen, 750);
     assert(wakes == 2);
+    now_ticks=1500;mounted=true;detection.presence=USB_AUTO_ADAPTER;
+    MovieFile files[2]={{.kind=PICKER_MOVIE},{.kind=PICKER_FOLDER}};
+    g_picker_cache.files=files;g_picker_cache.count=2;
+    usb_browser_idle_discovery(&screen,1500);assert(wakes==2);
+    files[0].timing_checked=true;
+    usb_browser_idle_discovery(&screen,1500);assert(wakes==2);
+    files[1].folder_count_checked=true;quiescent=false;
+    usb_browser_idle_discovery(&screen,1500);assert(wakes==2);
+    quiescent=true;usb_browser_idle_discovery(&screen,1500);
+    assert(wakes==3 && lease_releases==3);
     discovery_prepared = -1;
-    usb_browser_idle_discovery(&screen, 1000);
-    assert(preparations == 2 && wakes == 2);
+    usb_browser_idle_discovery(&screen,2500);
+    assert(preparations == 2 && wakes == 3);
     puts("PASS background discovery: one slice per frame, no blocking file joins, writer/reader exclusion and wake retry deadline");
     return 0;
 }

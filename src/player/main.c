@@ -5,10 +5,11 @@
 #include "performance_clock.h"
 #include "movie_crypto_session.h"
 #include "media_browser.h"
+#include "media_files.h"
 #include "usb_browser.h"
 #include "native_screen_power.h"
 #include "../storage/usb/usb_storage.h"
-#if NDVIDEO_CODEC_MODULES
+#if NDVIDEO_CODEC_MODULES || NDVIDEO_AUDIO_MODULES
 #include "codecs/codec_module_api.h"
 #include "codec_module_manifest.h"
 #endif
@@ -40,7 +41,7 @@ int main(int argc, char **argv)
     /* Resolve the read-only power bindings before playback/diagnostics can
      * request a transition. The On key must not perform a firmware scan. */
     (void)native_screen_power_supported();
-#if NDVIDEO_CODEC_MODULES
+#if NDVIDEO_CODEC_MODULES || NDVIDEO_AUDIO_MODULES
     if (!codec_modules_configure(argv[0], codec_modules_default_host_api()) ||
         !codec_modules_set_expected_hashes(CODEC_MODULE_EXPECTED_HASHES, CODEC_MODULE_EXPECTED_MASK)) {
         report_app_failure(argv[0], "startup-failure", codec_module_error());
@@ -57,6 +58,7 @@ int main(int argc, char **argv)
     unsigned saved_clock = history_load_clock_preference(argv[0], &keep_clock);
     performance_clock_load(saved_clock, keep_clock);
     performance_clock_startup_begin();
+    ui_load_theme();
     screen = SDL_SetVideoMode(SCREEN_W, SCREEN_H, 16, SDL_SWSURFACE);
     if (!screen) {
         SDL_Quit();
@@ -65,6 +67,8 @@ int main(int argc, char **argv)
         report_app_failure(argv[0], "startup-failure", "Failed to create the screen surface.");
         return 1;
     }
+    SDL_Rect startup_background={0,0,SCREEN_W,SCREEN_H};
+    draw_vertical_gradient(screen,&startup_background,UI_COLOR_BG_TOP,UI_COLOR_BG_BOTTOM);
     if (!lcd_init(screen_lcd_type())) {
         SDL_Quit();
         performance_clock_restore();
@@ -74,6 +78,9 @@ int main(int argc, char **argv)
     }
     patch_cx2_lcd_edge_timing();
     display_power_init(&g_display_power_state, monotonic_clock_now_ms());
+    /* The SDL surface already contains the background. Publish it as soon as
+     * the LCD is ready, before font allocation; picker entrance starts later. */
+    present_screen(screen);
     if (!init_fonts(&fonts)) {
         lcd_init(SCR_TYPE_INVALID);
         SDL_Quit();
@@ -88,7 +95,9 @@ int main(int argc, char **argv)
     directory[sizeof(directory) - 1] = '\0';
     strip_filename(directory);
     media_browser_configure(directory);
-    ui_load_theme();
+    uint32_t startup_now=monotonic_clock_now_ms();
+    render_picker(screen,&fonts,NULL,0,0,0,0,0,0,0,0,-1,0,-1,0,-1,0,-1,-1,0,NULL,NULL,
+        startup_now,startup_now,PICKER_EXIT_INACTIVE,0,"Loading library",0,true);
     /* Native startup may reject an early transition or change the clock after
      * it. Reconcile once here, with genuine SRAM and before app I/O begins. */
     if (!performance_clock_startup_complete()) {
@@ -137,7 +146,7 @@ int main(int argc, char **argv)
             }
             picker_opened_loading = true;
         }
-        if (!picker_opened_loading) {
+        if (!picker_opened_loading && !media_is_audio(movie_path)) {
             int unlocked = unlock_movie_prompt(screen, &fonts, movie_path, NULL, NULL);
             if (unlocked != 1) {
                 movie_crypto_clear();
@@ -149,6 +158,11 @@ int main(int argc, char **argv)
                 break;
             }
         }
+#if NDMEDIA_AUDIO
+        if (media_is_audio(movie_path))
+            result=play_audio_file(screen,&fonts,movie_path,queued_movie_path,sizeof(queued_movie_path));
+        else
+#endif
         result = play_movie(
             screen,
             &fonts,
@@ -193,6 +207,7 @@ int main(int argc, char **argv)
         }
     }
 
+    usb_browser_release_io();
     player_crash_trace_end(NULL, PLAYER_CRASH_EXIT);
     screenshot_writer_shutdown();
     flush_queued_history_save(&g_pending_history_save, "shutdown");
@@ -205,9 +220,10 @@ int main(int argc, char **argv)
     display_power_restore(&g_display_power_state, monotonic_clock_now_ms());
     cleanup_deferred_playback_movie();
     clear_movie_picker_cache(&g_picker_cache);
+    clear_movie_picker_cache(&g_previous_picker_cache);
     usb_browser_shutdown(screen, &fonts);
     media_browser_shutdown();
-#if NDVIDEO_CODEC_MODULES
+#if NDVIDEO_CODEC_MODULES || NDVIDEO_AUDIO_MODULES
     char module_shutdown_error[192] = {0};
     if (!codec_modules_shutdown())
         snprintf(module_shutdown_error, sizeof(module_shutdown_error), "%s", codec_module_error());
@@ -222,7 +238,7 @@ int main(int argc, char **argv)
     lcd_init(SCR_TYPE_INVALID);
     SDL_Quit();
     sram_shutdown();
-#if NDVIDEO_CODEC_MODULES
+#if NDVIDEO_CODEC_MODULES || NDVIDEO_AUDIO_MODULES
     if (module_shutdown_error[0])
         report_app_failure(argv[0], "codec-cleanup-failure", module_shutdown_error);
 #endif

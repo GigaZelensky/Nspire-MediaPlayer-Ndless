@@ -53,7 +53,7 @@ static void history_store_init_defaults(HistoryStore *history)
     }
     memset(history, 0, sizeof(*history));
     history_entry_init_defaults(&history->default_settings);
-    history->theme_id = UI_THEME_DORFIC;
+    history->theme_id = UI_THEME_AMBER;
 }
 
 void apply_history_entry_subtitle_track(const HistoryEntry *entry, Movie *movie)

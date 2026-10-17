@@ -32,6 +32,7 @@ MAGIC = b"NVP1"
 VERSION = 10
 CODEC_TAGGED_VERSION = 11
 LARGE_FILE_VERSION = 12
+MEDIA_VERSION = 13
 CODEC_FLAG_H264 = 0
 CODEC_FLAG_MPEG4 = 1
 CODEC_FLAG_HEVC = 2
@@ -2397,7 +2398,7 @@ def write_header(
 ) -> None:
     handle.seek(0)
     handle.write(
-        (LARGE_HEADER_STRUCT if version == LARGE_FILE_VERSION else HEADER_STRUCT).pack(
+        (LARGE_HEADER_STRUCT if version in (LARGE_FILE_VERSION, MEDIA_VERSION) else HEADER_STRUCT).pack(
             MAGIC,
             version,
             flags,
@@ -4121,12 +4122,18 @@ def encode(args: argparse.Namespace) -> EncodeStats:
     input_path = Path(args.input).resolve()
     if not input_path.is_file():
         raise FileNotFoundError(f"Input video not found: {input_path}")
+    if getattr(args,"audio",False):
+        from media_tracks import probe_audio_tracks,select_audio_track
+        tracks=probe_audio_tracks(input_path,ffprobe_path())
+        args.audio_track=select_audio_track(tracks,args.audio_track)
+        log("Source audio: "+tracks[args.audio_track].label(),quiet=args.quiet)
     output_path = normalize_output_path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     stats_path = output_path.with_suffix(".json")
     preview_output_path = preview_mp4_path_for_output(output_path) if args.preview_mp4 else None
     output_started = False
     stats_started = False
+    audio_track = None
 
     try:
         burn_subtitle = resolve_burn_subtitle_source(input_path, args.subtitle, args.subtitle_track) if args.burn_subtitles else None
@@ -4380,10 +4387,18 @@ def encode(args: argparse.Namespace) -> EncodeStats:
             header_flags = CODEC_FLAG_MPEG4
 
         header_struct, index_struct = HEADER_STRUCT, CHUNK_INDEX_STRUCT
-        if expected_output_size > 0xFFFFFFFF:
+        if expected_output_size > 0xFFFFFFFF or getattr(args, "audio", False):
             header_struct, index_struct = LARGE_HEADER_STRUCT, LARGE_CHUNK_INDEX_STRUCT
             expected_output_size += (header_struct.size - HEADER_STRUCT.size) + len(chunks) * (index_struct.size - CHUNK_INDEX_STRUCT.size)
             header_version = LARGE_FILE_VERSION
+        if getattr(args, "audio", False):
+            from audio_track import prepare_audio, FOOTER
+            header_version = MEDIA_VERSION
+            audio_track = prepare_audio(input_path, frames=frame_count,
+                fps_num=int(round(fps * 1000)), fps_den=1000, start=args.start,
+                track=args.audio_track, codec=args.audio_codec, rate=args.audio_rate,
+                channels=args.audio_channels, bitrate=args.audio_bitrate)
+            expected_output_size += audio_track.bytes + FOOTER.size
         if expected_output_size > 0x7FFFFFFFFFFFFFFF:
             raise ValueError("Movie exceeds the 64-bit container range.")
 
@@ -4512,6 +4527,8 @@ def encode(args: argparse.Namespace) -> EncodeStats:
                         )
                         output_handle.write(encoded)
 
+            if audio_track is not None:
+                audio_track.append(output_handle, output_handle.tell())
             write_header(
                 output_handle,
                 version=header_version,
@@ -4559,6 +4576,10 @@ def encode(args: argparse.Namespace) -> EncodeStats:
         with stats_path.open("w", encoding="utf-8") as stats_handle:
             stats_started = True
             stats_data = asdict(stats)
+            if audio_track is not None:
+                stats_data["audio"] = {"codec": args.audio_codec, "source_track":args.audio_track, "rate": audio_track.rate,
+                    "channels": audio_track.channels, "samples": audio_track.samples,
+                    "bytes": audio_track.bytes}
             if args.codec in {"hevc", "av1"}:
                 stats_data["gop_repairs"] = gop_repairs
             json.dump(stats_data, stats_handle, indent=2)
@@ -4577,12 +4598,15 @@ def encode(args: argparse.Namespace) -> EncodeStats:
         if stats_started:
             cleanup_partial_file(stats_path)
         raise
+    finally:
+        if audio_track is not None:
+            audio_track.close()
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", help="Input video file")
-    parser.add_argument("--output", required=True, help="Output .nvp.tns file")
+    parser.add_argument("--output", help="Output .nvp.tns file (required unless listing audio tracks)")
     parser.add_argument("--subtitle", action="append", help="Optional subtitle source path or 'embedded'; repeat to mix multiple subtitle sources")
     parser.add_argument("--burn-subtitles", action="store_true", help="Render the selected subtitles directly into the video instead of storing subtitle tracks in the container")
     parser.add_argument("--burn-subtitle-size", type=float, default=DEFAULT_BURN_SUBTITLE_SIZE, help="Relative size multiplier for burned subtitles (1.0 = default output-safe size)")
@@ -4609,9 +4633,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--timeline-drift-tolerance-ms", type=float, default=500.0, help="Maximum allowed encoded duration drift before failing")
     parser.add_argument("--quiet", action="store_true", help="Silence progress logging")
     parser.add_argument("--preview-mp4", action="store_true", help="Also write a video-only .preview.mp4 alongside the .nvp.tns output for quick inspection")
+    parser.add_argument("--audio", action="store_true", help="Include a synchronized soundtrack (NVP v13, USB audio output)")
+    parser.add_argument("--audio-codec", choices=("ima", "pcm", "mp3", "flac", "vorbis", "aac", "opus"), default="ima", help="Soundtrack codec; native music files need no conversion")
+    parser.add_argument("--audio-rate", type=int, choices=(8000, 16000, 22050, 32000, 44100, 48000, 96000), default=44100)
+    parser.add_argument("--audio-channels", type=int, choices=(1, 2), default=2)
+    parser.add_argument("--audio-track", help="Zero-based source audio index, or 'ask' to choose by language/title; prompts on a terminal for multi-track sources")
+    parser.add_argument("--list-audio-tracks", action="store_true", help="List source audio languages/titles and exit without encoding")
+    parser.add_argument("--audio-bitrate", type=int, default=192, help="MP3, Vorbis, AAC or Opus target bitrate in kb/s (32–320)")
     parser.add_argument("--encrypt", action="store_true", help="Encrypt the NVP with a prompted password (AES-256; requires cryptography)")
     parser.add_argument("--password-file", type=Path, help="Read the encryption password from a file instead of prompting")
     args = parser.parse_args(argv)
+    if not args.list_audio_tracks and not args.output:
+        parser.error("--output is required when encoding.")
+    if args.audio_track is not None and args.audio_track!='ask' and not args.audio_track.isdecimal():
+        parser.error("--audio-track must be a nonnegative index or 'ask'.")
+    if not 32 <= args.audio_bitrate <= 320:
+        parser.error("--audio-bitrate must be 32–320.")
     if args.password_file and not args.encrypt:
         parser.error("--password-file requires --encrypt.")
     if args.chunk_frames < 0:
@@ -4651,7 +4688,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     try:
-        encode(parse_args(argv or sys.argv[1:]))
+        args=parse_args(argv or sys.argv[1:])
+        if args.list_audio_tracks:
+            from media_tracks import probe_audio_tracks
+            path=Path(args.input).resolve()
+            if not path.is_file():raise FileNotFoundError(f"Input video not found: {path}")
+            tracks=probe_audio_tracks(path,ffprobe_path())
+            for track in tracks:print(track.label())
+            if not tracks:print("No audio tracks found.")
+        else:encode(args)
     except KeyboardInterrupt:
         log("Encoding interrupted by Ctrl+C.", quiet=False)
         return 130

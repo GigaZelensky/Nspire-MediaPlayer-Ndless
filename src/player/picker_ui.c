@@ -533,6 +533,9 @@ void loading_progress_init(
     progress->started_ms = monotonic_clock_now_ms();
     progress->last_draw_ms = 0;
     progress->dim_background = dim_background;
+    progress->render = NULL;
+    progress->cancelled = NULL;
+    progress->context = NULL;
 }
 
 void loading_progress_tick(LoadingProgress *progress, bool force)
@@ -551,6 +554,11 @@ void loading_progress_tick(LoadingProgress *progress, bool force)
         return;
     }
     if (progress->last_draw_ms == 0 && !force) {
+        progress->last_draw_ms = now_ms;
+        return;
+    }
+    if (progress->render) {
+        progress->render(progress->context, now_ms);
         progress->last_draw_ms = now_ms;
         return;
     }

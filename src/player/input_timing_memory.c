@@ -502,14 +502,21 @@ uint32_t movie_duration_ms(const Movie *movie)
     return movie_frame_time_ms(movie, movie->header.frame_count);
 }
 
-void reset_playback_timeline(Movie *movie, const PlaybackRate *playback_rate, uint64_t *anchor_ticks, uint32_t *anchor_frame, uint64_t *next_frame_due_ticks)
+void reset_playback_clock(Movie *movie, const PlaybackRate *playback_rate, uint64_t *anchor_ticks, uint32_t *anchor_frame, uint64_t *next_frame_due_ticks)
 {
+    movie_audio_pause(movie);
     uint64_t now_ticks = monotonic_clock_now_ticks();
     movie->cadence.valid = false;
     playback_capture_reset_timeline(movie);
     *anchor_ticks = now_ticks;
     *anchor_frame = movie->current_frame;
     *next_frame_due_ticks = now_ticks + movie_frame_time_scaled_ticks(movie, 1, playback_rate);
+}
+
+void reset_playback_timeline(Movie *movie, const PlaybackRate *playback_rate, uint64_t *anchor_ticks, uint32_t *anchor_frame, uint64_t *next_frame_due_ticks)
+{
+    movie_audio_reanchor(movie);
+    reset_playback_clock(movie, playback_rate, anchor_ticks, anchor_frame, next_frame_due_ticks);
 }
 
 bool step_movie_forward_one_frame(Movie *movie, bool *hover_preview_needs_rebuffer)
@@ -789,7 +796,8 @@ static bool playback_wait_touchpad_report_pending(const PointerState *pointer)
         return false;
     }
     report = g_input_touchpad_report;
-    current_down = (report.pressed && report.arrow == TPAD_ARROW_CLICK) ? true : false;
+    current_down = report.pressed &&
+        (audio_controls_touchpad_captured() || report.arrow == TPAD_ARROW_CLICK);
     if (current_down != pointer->down) {
         return true;
     }
@@ -898,6 +906,7 @@ void wait_until_ticks_playback(Movie *movie, uint64_t target_ticks, const Pointe
     next_poll_ticks = now_ticks + poll_interval_ticks;
     next_touch_ticks = now_ticks + touch_interval_ticks;
     while ((int64_t) (target_ticks - now_ticks) > 0) {
+        movie_audio_idle(movie);
         bool refresh_touchpad = is_touchpad && (int64_t) (now_ticks - next_touch_ticks) >= 0;
         if ((int64_t) (now_ticks - next_poll_ticks) >= 0 || refresh_touchpad) {
             playback_wait_snapshot(movie,&current_keys,refresh_touchpad);

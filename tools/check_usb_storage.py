@@ -35,7 +35,7 @@ def main():
         for key, value in (("FF_FS_READONLY", 0), ("FF_USE_MKFS", 1), ("FF_MIN_GPT", 1)):
             config = re.sub(r"(#define\s+" + key + r"\s+)[^\r\n]+", lambda match: match[1] + str(value), config)
         (fixture / "ffconf.h").write_text(config)
-        common = [compiler, "-std=c99", "-O2", "-Wall", "-Wextra"]
+        common = [compiler, "-std=c99", "-O2", "-Wall", "-Wextra", "-I" + str(ROOT / "src")]
         run(*common, "-I" + str(SRC), TEST / "registers.c", "-o", work / "registers.exe")
         run(work / "registers.exe")
         run(*common, "-I" + str(ROOT / "src/platform"), TEST / "cpu_alias.c", "-o", work / "cpu_alias.exe")
@@ -46,10 +46,11 @@ def main():
         run(work / "transport.exe")
         run(*common, "-I" + str(fixture), TEST / "fixture.c", fixture / "ff.c", fixture / "ffunicode.c", "-o", work / "fixture.exe")
         run(*common, "-I" + str(SRC), TEST / "filesystem.c", TEST / "fibers.c", SRC / "usb_volume.c", SRC / "usb_fs_worker.c", SRC / "fatfs/ff.c", SRC / "fatfs/ffunicode.c", "-o", work / "filesystem.exe")
-        for kind in range(4):
-            image = work / "drive.img"
-            run(work / "fixture.exe", kind, image)
-            run(work / "filesystem.exe", image)
+        for folder in ("nMedia", "ndvideo"):
+            for kind in range(4):
+                image = work / "drive.img"
+                run(work / "fixture.exe", kind, image, folder)
+                run(work / "filesystem.exe", image)
         print("PASS: USB transport and FAT16/FAT32/exFAT/GPT regressions.")
 
 

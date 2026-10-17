@@ -1,5 +1,6 @@
 #ifndef NDVIDEO_USB_STORAGE_H
 #define NDVIDEO_USB_STORAGE_H
+#include "../../media_config.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -22,9 +23,14 @@ size_t usb_storage_memory_bytes(void);
 bool usb_storage_supported(void);
 bool usb_storage_prepare_connection(void);
 bool usb_storage_attachment_ready(void);
+/* Candidate selection/endpoint setup require native clock/mapping. The final
+ * SCSI readiness/capacity probe requires the player's polled-transfer timer. */
+bool usb_storage_next_candidate(void);
+bool usb_storage_prepare_endpoints(void);
 bool usb_storage_driver_registered(void);
 bool usb_storage_finish_connection(void);
 void usb_storage_stop_accepting(void);
+void usb_storage_watch_attachments(void);
 bool usb_storage_shutdown(void);
 void usb_storage_poll_connection(void);
 /* Park only at a complete SCSI-command boundary before enabling OS services. */

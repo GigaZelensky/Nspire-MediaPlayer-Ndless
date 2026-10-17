@@ -4,6 +4,7 @@
 #include "native_screen_power.h"
 #include "screenshot_writer.h"
 #include "performance_clock.h"
+#include "usb_browser.h"
 
 /* Ownership is needed only for the explicit native standby/resume bridge.
  * Normal picker/playback does not run the OS scheduler or acquire these holds. */
@@ -85,6 +86,8 @@ bool player_standby(SDL_Surface *screen, Movie *movie, const char *path, bool is
             standby_screen_profile, standby_preflight, g_clock.using_hw_timer);
         return false;
     }
+    movie_audio_suspend(movie);
+    usb_browser_release_io();
     bool had_reader = movie_async_enabled(movie);
     bool retained_reader = movie_async_suspend(movie);
     player_crash_trace_end(movie, PLAYER_CRASH_STANDBY);

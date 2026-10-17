@@ -23,7 +23,7 @@
  */
 
 #include "inner.h"
-/* ND Video Player: erase temporary key/hash/keystream buffers. */
+/* nMedia Player: erase temporary key/hash/keystream buffers. */
 #include "../secure_zero.h"
 
 /* see inner.h */

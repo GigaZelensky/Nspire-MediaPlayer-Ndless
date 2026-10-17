@@ -2,6 +2,7 @@
 #include "performance_clock.h"
 #include "app_task_io.h"
 #include "raw_player_io.h"
+#include "usb_browser.h"
 
 static bool previous_o, footer_armed, footer_key_armed, footer_key_down;
 static bool footer_input_captured, footer_canceled, dialog_active, queued_shortcut;
@@ -370,6 +371,9 @@ bool clock_menu_poll(SDL_Surface *screen, const Fonts *fonts, Movie *movie, Poin
     if ((!edge && !click) || g_display_power_state.off || g_display_power_state.off_fade_active) return false;
     queued_shortcut = false;
     if (click) ui_transition_begin_press_release(&footer_press, now);
+    movie_audio_suspend(movie);
+    movie_audio_checkpoint(movie);
+    usb_browser_release_io();
     if (movie) playback_capture_tick(movie, monotonic_clock_now_ticks(), true);
     dialog_active = true;
     clock_dialog(screen, fonts, movie, pointer, path);

@@ -29,6 +29,7 @@ static FATFS volume;
 static uint32_t mounted_generation;
 static char root[32];
 static bool mounted;
+static const char *media_folder="nMedia";
 
 static int failure(FRESULT r)
 {
@@ -62,6 +63,7 @@ bool usb_path(const char *path)
 }
 bool usb_storage_mounted(void)
 {
+    if(!NDMEDIA_USB_STORAGE)return false;
     usb_storage_poll_connection();
     return mounted && usb_controller_online() && mounted_generation == usb_controller_generation();
 }
@@ -81,7 +83,7 @@ static bool relative_path(const char *path, char *out, size_t capacity)
     if (strncmp(path, root, prefix) || (path[prefix] && path[prefix] != '/'))
         return false;
     const char *relative = path + prefix;
-    /* Keep all access inside /ndvideo, including manually supplied paths. */
+    /* Keep all access inside the mounted media folder, including supplied paths. */
     for (const char *p = relative; *p;) {
         if (*p++ != '/')
             return false;
@@ -95,7 +97,7 @@ static bool relative_path(const char *path, char *out, size_t capacity)
         if (!n || (n == 1 && start[0] == '.') || (n == 2 && start[0] == '.' && start[1] == '.'))
             return false;
     }
-    int n = snprintf(out, capacity, "0:/ndvideo%s", relative);
+    int n = snprintf(out, capacity, "0:/%s%s", media_folder,relative);
     return n >= 0 && (size_t)n < capacity;
 }
 
@@ -193,7 +195,12 @@ static void mount_job(void *argument)
         r = f_getlabel("0:", NULL, &job->serial);
     DIR dir;
     if (r == FR_OK) {
-        r = f_opendir(&dir, "0:/ndvideo");
+        media_folder="nMedia";
+        r = f_opendir(&dir, "0:/nMedia");
+        if(r==FR_NO_PATH || r==FR_NO_FILE) {
+            media_folder="ndvideo"; /* Existing libraries keep working on upgrade. */
+            r=f_opendir(&dir,"0:/ndvideo");
+        }
         if (r == FR_OK)
             f_closedir(&dir);
     }
@@ -222,7 +229,7 @@ bool usb_volume_mount(int *error)
         if (error)
             *error = job.job.error ? job.job.error : EIO;
         usb_controller_set_error(job.job.error == ENOENT
-                                     ? "Create an ndvideo folder on the USB drive."
+                                     ? "Create an nMedia folder on the USB drive."
                                      : "Could not read the USB filesystem.",
                                  job.job.error);
     }

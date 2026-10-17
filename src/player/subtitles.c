@@ -706,6 +706,34 @@ void subtitle_layout_dst_rect(
     dst->h = (Uint16) surface_h;
 }
 
+static void repair_space_font(nSDL_Font *font)
+{
+    /* nSDL's Space bitmap has disconnected top-row pixels in these four
+     * glyphs. Match the whole original glyph before clearing that row, so
+     * corrected/different library versions retain their own artwork. */
+    static const struct { unsigned char ch, rows[8]; } fixes[] = {
+        {'-', {0x60,0,0,0,0xfc,0,0,0}},
+        {'q', {0x60,0,0,0x7e,0x46,0x42,0x7e,0x02}},
+        {'r', {0x02,0,0,0x7e,0x46,0x60,0x60,0x60}},
+        {'z', {0x7c,0,0,0x7e,0x0c,0x18,0x30,0x7e}}
+    };
+    if (!font) return;
+    for (unsigned i=0;i<sizeof(fixes)/sizeof(fixes[0]);++i) {
+        SDL_Surface *glyph=font->chars[fixes[i].ch];
+        if (!glyph || glyph->w!=8 || glyph->h!=8 || !(glyph->flags&SDL_SRCCOLORKEY)) continue;
+        bool locked=SDL_MUSTLOCK(glyph),matches=true;
+        if (locked && SDL_LockSurface(glyph)) continue;
+        for (int y=0;y<8 && matches;++y) for (int x=0;x<8;++x)
+            if (surface_pixel_has_ink(glyph,x,y)!=!!(fixes[i].rows[y]&(128U>>x))) {
+                matches=false;break;
+            }
+        if (locked) SDL_UnlockSurface(glyph);
+        if (matches) {
+            SDL_Rect top={0,0,8,1};
+            SDL_FillRect(glyph,&top,glyph->format->colorkey);
+        }
+    }
+}
 void subtitle_fonts_for_style(const Fonts *fonts, size_t subtitle_font_index, nSDL_Font **white_font, nSDL_Font **outline_font)
 {
     int font_id = subtitle_font_id_for_index(subtitle_font_index);
@@ -714,6 +742,10 @@ void subtitle_fonts_for_style(const Fonts *fonts, size_t subtitle_font_index, nS
         cache->attempted[font_id] = true;
         nSDL_Font *white = nSDL_LoadFont(font_id, 255, 255, 255);
         nSDL_Font *outline = nSDL_LoadFont(font_id, 0, 0, 0);
+        if (font_id==NSDL_FONT_SPACE) {
+            repair_space_font(white);
+            repair_space_font(outline);
+        }
         if (white && outline) {
             nSDL_SetFontSpacing(white, 0, 0);
             nSDL_SetFontSpacing(outline, 0, 0);

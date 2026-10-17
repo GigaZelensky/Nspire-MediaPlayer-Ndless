@@ -10,7 +10,7 @@ static struct {
     unsigned stage, stuck_native, stuck_private, stuck_force, never_complete, bad_csw, short_data,
         delayed_polls, tick_calls, tick_divisor, frozen_clock,
         disconnect, token_error;
-    bool private_dma;
+    bool private_dma,keep_periodic;
 } sim;
 static unsigned char bounce[USB_READ_BYTES];
 static UsbQueueHead queue;
@@ -70,6 +70,7 @@ static void writereg(void *unused, unsigned offset, uint32_t value)
     }
     sim.reg[offset / 4] = value;
     if (offset == 0x10) {
+        if(sim.keep_periodic && (value&1U))assert(value&16U);
         if (!(value & 1)) {
             if (!sim.stuck_force) {
                 sim.reg[STATUS] |= 4096;
@@ -138,7 +139,7 @@ static int finish(void)
 }
 static void restored(void)
 {
-    assert(!transport.owns_schedule && sim.reg[LIST] == 0x12340000 && sim.reg[CMD] == 0x80021 &&
+    assert(!transport.owns_schedule && sim.reg[LIST] == 0x12340000 && sim.reg[CMD] == (0x80021U|(sim.keep_periodic?16U:0U)) &&
            sim.reg[IMASK] == 0x17);
 }
 int main(void)
@@ -266,6 +267,14 @@ int main(void)
         assert(usb_transport_begin(&transport, true, NULL, USB_READ_BYTES));
         assert(((queue.endpoint >> 12) & 3) == 0 && ((queue.endpoint >> 16) & 0x7ff) == packet);
         assert(finish() == 1); restored(); ++cases;
+    }
+    for(unsigned fail=0;fail<2;++fail) {
+        init();sim.keep_periodic=true;sim.reg[CMD]|=16U;
+        sim.reg[STATUS]|=16384U;sim.reg[0x24/4]=0x11223000;
+        sim.never_complete=fail;
+        assert(usb_transport_begin(&transport,true,NULL,4096));
+        assert(finish()==(fail?-1:1));restored();
+        assert(sim.reg[0x24/4]==0x11223000 && (sim.reg[STATUS]&16384U));++cases;
     }
     printf("PASS %u cases: DMA sequencing, cache handoff, interrupt preservation, bounded "
            "timeouts, disconnect/cancel, poisoned ownership, BOT integrity\n",

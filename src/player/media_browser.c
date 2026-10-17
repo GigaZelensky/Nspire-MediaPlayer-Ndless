@@ -1,4 +1,5 @@
 #include "media_browser.h"
+#include "display_text.h"
 #include "../storage/usb/usb_storage.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -76,10 +77,10 @@ const char *media_local_directory(const char *path)
 {
     return usb_path(path) ? root : path;
 }
-void media_browser_breadcrumb(char *text, size_t bytes)
+static void breadcrumb_raw(char *text,size_t bytes)
 {
     if (media_browser_at_root()) {
-        snprintf(text, bytes, "Videos");
+        snprintf(text, bytes, "Media");
         return;
     }
     const char *relative = directory;
@@ -109,4 +110,10 @@ void media_browser_breadcrumb(char *text, size_t bytes)
             ++relative;
     }
     text[used] = 0;
+}
+
+void media_browser_breadcrumb(char *text,size_t bytes)
+{
+    char raw[PATH_BYTES];breadcrumb_raw(raw,sizeof(raw));
+    display_text_ascii(raw,text,bytes,usb_path(directory));
 }

@@ -61,7 +61,7 @@ uint32_t progress_bar_width_for_frame(const Movie *movie, const SDL_Rect *bar, u
 
 static const UiThemePalette g_ui_themes[UI_THEME_COUNT] = {
     {
-        "DORFic",
+        "Amber",
         UI_RGB565(255, 136, 28),
         UI_RGB565(255, 82, 0),
         UI_RGB565(194, 34, 0),
@@ -262,7 +262,7 @@ static const UiThemePalette g_ui_themes[UI_THEME_COUNT] = {
     }
 };
 
-UiThemeId g_ui_theme_id = UI_THEME_DORFIC;
+UiThemeId g_ui_theme_id = UI_THEME_AMBER;
 
 #define UI_THEME_TRANSITION_MS 180U
 
@@ -274,7 +274,7 @@ static bool g_ui_theme_transition_running = false;
 UiThemeId ui_theme_clamp(int theme_id)
 {
     if (theme_id < 0 || theme_id >= UI_THEME_COUNT) {
-        return UI_THEME_DORFIC;
+        return UI_THEME_AMBER;
     }
     return (UiThemeId) theme_id;
 }

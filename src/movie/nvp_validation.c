@@ -8,9 +8,9 @@ static uint32_t le32(const uint8_t *p)
 static uint64_t le64(const uint8_t *p)
 { return le32(p) | (uint64_t)le32(p+4)<<32; }
 unsigned nvp_header_wire_bytes(unsigned version)
-{ return version == MOVIE_VERSION_LARGE_FILES ? 56U : 48U; }
+{ return version == MOVIE_VERSION_LARGE_FILES || version == MOVIE_VERSION_MEDIA ? 56U : 48U; }
 unsigned nvp_index_wire_bytes(unsigned version)
-{ return version == MOVIE_VERSION_LARGE_FILES ? 28U : 24U; }
+{ return version == MOVIE_VERSION_LARGE_FILES || version == MOVIE_VERSION_MEDIA ? 28U : 24U; }
 bool nvp_header_parse(MovieHeader *header, const void *data, size_t bytes)
 {
     if (!header || !data || bytes < 48U) return false;
@@ -19,7 +19,7 @@ bool nvp_header_parse(MovieHeader *header, const void *data, size_t bytes)
     if (bytes < nvp_header_wire_bytes(version)) return false;
     memset(header,0,sizeof(*header));
     memcpy(header,p,40);
-    if (version == MOVIE_VERSION_LARGE_FILES) {
+    if (version == MOVIE_VERSION_LARGE_FILES || version == MOVIE_VERSION_MEDIA) {
         header->index_offset=le64(p+40);header->subtitle_offset=le64(p+48);
     } else { header->index_offset=le32(p+40);header->subtitle_offset=le32(p+44); }
     return movie_codec_from_header(header) != MOVIE_CODEC_UNKNOWN;
@@ -27,7 +27,7 @@ bool nvp_header_parse(MovieHeader *header, const void *data, size_t bytes)
 void nvp_index_parse(ChunkIndexEntry *entry, const void *data, unsigned version)
 {
     const uint8_t *p=data;
-    unsigned offset_bytes=version == MOVIE_VERSION_LARGE_FILES ? 8U : 4U;
+    unsigned offset_bytes=nvp_index_wire_bytes(version)==28U?8U:4U;
     entry->offset=offset_bytes==8?le64(p):le32(p);
     memcpy(&entry->packed_size,p+offset_bytes,20);
 }

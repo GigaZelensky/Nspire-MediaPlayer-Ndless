@@ -14,6 +14,7 @@
 #include "codecs/av1_decoder.h"
 #include "codecs/h264bsd/h264bsd_decoder.h"
 #include "movie/nvp_format.h"
+#include "movie/nvp_audio.h"
 #include "player/playback_cadence.h"
 
 /* Short, high-motion chunks can exhaust five slots in well under a second.
@@ -110,6 +111,9 @@ typedef struct Movie {
     int32_t diag_async_native_error;
     int64_t current_file_pos;
     MovieHeader header;
+    uint64_t video_bytes;
+    NvpAudioTrack audio_track;
+    struct AudioPlayback *audio;
     bool encrypted;
     /* Reduced once on load; keep the original serialized header for metadata. */
     uint16_t timing_fps_num;

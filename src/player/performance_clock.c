@@ -349,6 +349,27 @@ static bool selected_clock_matches(void)
            !(CLOCK_WORD(EMI_CONTROL) & 0x40CU);
 }
 
+void performance_clock_sample(PerformanceClockSample *sample)
+{
+    if (!sample) return;
+    unsigned saved = native_critical_enter();
+    *sample = (PerformanceClockSample){0};
+    sample->target_hz = clock_state.target_hz;
+    if (clock_state.supported) {
+        bool cx = nspire_asic_is_cx(clock_state.asic);
+        sample->actual_hz = cpu_hz();
+        sample->pll = CLOCK_WORD(cx ? CX_CLOCK_CURRENT : CLOCK_PLL);
+        sample->control = CLOCK_WORD(cx ? CX_CLOCK_LOAD : CLOCK_DIVIDER);
+        if (!cx) {
+            sample->timing74 = CLOCK_WORD(EMI_TIMING74);
+            sample->timing1c = CLOCK_WORD(EMI_TIMING1C);
+            sample->emi_control = CLOCK_WORD(EMI_CONTROL);
+        }
+        sample->matches = selected_clock_matches();
+    }
+    native_critical_leave(saved);
+}
+
 void performance_clock_startup_begin(void)
 {
     if (startup_clock.begun) return;

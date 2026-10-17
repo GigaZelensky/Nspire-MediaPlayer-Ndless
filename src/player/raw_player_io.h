@@ -19,6 +19,7 @@ void raw_player_cancel(RawPlayerIo *);
 int raw_player_read(RawPlayerIo *, uint64_t, void *, size_t, bool wait);
 bool raw_player_idle(unsigned milliseconds);
 void raw_player_before_native(void);
+void raw_player_set_native_guard(void (*)(void *),void *);
 /* Serialize another independent reader without pretending it changed flash. */
 void raw_player_before_read(void);
 bool raw_player_prepare_native(void);

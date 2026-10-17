@@ -1,4 +1,4 @@
-#if NDVIDEO_CODEC_MODULES
+#if NDVIDEO_CODEC_MODULES || NDVIDEO_AUDIO_MODULES
 #include "codec_module_api.h"
 #include "codec_module_format.h"
 #include "crypto/bearssl/bearssl_hash.h"

@@ -67,5 +67,14 @@ int main(void)
     assert(!usb_auto_connect_poll(&s, 0, 1350, false));
     assert(!usb_auto_connect_poll(&s, 1, 1400, false));
     assert(usb_auto_connect_poll(&s, 1, 1650, false));
+    usb_auto_connect_acknowledge(&s,3,2000);
+    usb_auto_connect_removed(&s,3,2100); /* cleanup missed the brief low level */
+    assert(!usb_auto_connect_poll(&s,3,2110,false));
+    assert(usb_auto_connect_poll(&s,3,2360,false));
+    usb_auto_connect_acknowledge(&s,3,2400);
+    assert(!usb_auto_connect_poll(&s,3,3000,false));
+    usb_auto_connect_removed(&s,USB_AUTO_UNKNOWN,3100);
+    assert(!usb_auto_connect_poll(&s,3,3110,false));
+    assert(usb_auto_connect_poll(&s,3,3360,false));
     puts("PASS automatic USB insertion: adapter-first discovery, preconnected drive, debounce, cancel suppression, replacement, mounted state and timer wrap");
 }

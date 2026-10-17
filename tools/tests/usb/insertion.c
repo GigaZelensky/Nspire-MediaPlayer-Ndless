@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#define NDMEDIA_USB_STORAGE 1
 #include "usb_autoconnect.h"
 #include <assert.h>
 #include <stdio.h>
@@ -16,9 +17,11 @@ static unsigned native_critical_enter(void) { unsigned old = cpu_mask; cpu_mask 
 static void native_critical_leave(unsigned old) { cpu_mask = old; }
 static void test_barrier(void) { assert(cpu_mask == 0xc0); }
 static UsbAutoConnect auto_connection;
+static bool last_attachment_ready, attachment_ready;
 static struct { uint32_t cap, identity, otg, port, samples, unknown, insertions; unsigned presence; } detection;
 uint32_t nspire_hardware_id(void) { return model; }
 static bool usb_storage_mounted(void) { return false; }
+static bool usb_storage_attachment_ready(void) { return attachment_ready; }
 /* PRODUCTION_SAMPLE */
 /* PRODUCTION_POLL */
 static void map_page(uint32_t address)
@@ -50,6 +53,12 @@ int main(void)
         auto_connection = (UsbAutoConnect){0};
         assert(!usb_browser_auto_pending(10));
         assert(usb_browser_auto_pending(260));
+        WORD(layout.port)=1; /* Existing hub stays electrically attached. */
+        usb_auto_connect_acknowledge(&auto_connection,USB_AUTO_ADAPTER|USB_AUTO_DEVICE,260);
+        attachment_ready=true;
+        assert(!usb_browser_auto_pending(270));
+        assert(usb_browser_auto_pending(520));
+        attachment_ready=last_attachment_ready=false;
         WORD(layout.otg) = layout.role_mask;
         assert(sample_usb_registers(&sampled, &cap, &identity, &otg, &port));
         assert(usb_auto_connect_presence(&sampled, cap, identity, otg, port) == 0);

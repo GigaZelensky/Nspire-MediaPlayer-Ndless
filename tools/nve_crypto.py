@@ -161,7 +161,7 @@ def encrypt_existing(source: Path, output: Path, password: bytearray) -> None:
             raise ValueError("Input must be an unencrypted NVP movie.")
         values = struct.unpack("<4s12H5I", header)
         version, flags = values[1:3]
-        codec_hint = 1 if version in (9, 10) else ((flags & 15) + 1 if version in (11, 12) and (flags & 15) < 4 else 0)
+        codec_hint = 1 if version in (9, 10) else ((flags & 15) + 1 if version in (11, 12, 13) and (flags & 15) < 4 else 0)
         if not values[9] or not values[10]:
             raise ValueError("Invalid movie frame rate.")
         duration_ms = values[13] * values[10] * 1000 // values[9]

@@ -44,6 +44,15 @@ static inline bool usb_auto_connect_poll(UsbAutoConnect *s, unsigned observed,
     return !mounted && (observed & USB_AUTO_ADAPTER) && inserted;
 }
 
+/* A confirmed transport removal can happen while the picker is blocked in
+ * cleanup. Re-arm that fact instead of acknowledging a possibly reinserted
+ * device as already handled. Mere electrical bounce does not call this. */
+static inline void usb_auto_connect_removed(UsbAutoConnect *s,unsigned observed,uint32_t now)
+{
+    s->stable=s->candidate=observed==USB_AUTO_UNKNOWN?0:observed&~USB_AUTO_DEVICE;
+    s->changed_at=now;
+}
+
 /* A manual attempt or a completed connection consumes the current state.
  * It must not cause another popup immediately after Cancel or an error. */
 static inline void usb_auto_connect_acknowledge(UsbAutoConnect *s, unsigned observed,

@@ -226,6 +226,7 @@ int play_movie(
 )
 {
     static Movie movie;
+    audio_controls_reset();
     bool prev_enter = false;
     bool prev_space = false;
     bool prev_left = false;
@@ -254,7 +255,7 @@ int play_movie(
     bool prev_gthan = false;
     bool prev_f = false;
     bool prev_t = false;
-    bool prev_m = false;
+    bool prev_m = false,prev_audio_up=false,prev_audio_down=false;
     bool prev_d = false;
     bool prev_s = false;
     bool prev_p = false;
@@ -308,6 +309,7 @@ int play_movie(
     uint32_t last_screenshot_revision = 0;
     uint32_t last_render_night_revision = 0;
     uint32_t last_render_visibility = 0;
+    uint32_t last_render_audio_revision = 0;
     int last_render_pointer_x = -1, last_render_pointer_y = -1;
     bool last_render_pointer_visible = false;
     int last_render_buffer_width = -1;
@@ -543,6 +545,11 @@ int play_movie(
     if (loading_snapshot) {
         draw_movie_frame_background(loading_snapshot, &movie, scale_mode, video_align_x, video_align_y, NULL, NULL);
     }
+    /* The resume prompt can consume/free loading_snapshot. Audio reads draw
+     * progress again, so their context must borrow the current surface rather
+     * than the pointer captured before that modal ran. */
+    loading_progress_init(&loading_progress, screen, loading_snapshot, fonts, "Loading", true);
+    movie_audio_open(&movie,path,&loading_progress);
     finish_loading_transition(screen, &loading_snapshot, fonts, "Loading");
     pointer_init(&pointer);
     pointer_update(&pointer);
@@ -563,6 +570,8 @@ int play_movie(
     prev_9 = isKeyPressed(KEY_NSPIRE_9);
     prev_t = isKeyPressed(KEY_NSPIRE_T);
     prev_m = isKeyPressed(KEY_NSPIRE_M);
+    prev_audio_up = isKeyPressed(KEY_NSPIRE_A);
+    prev_audio_down = isKeyPressed(KEY_NSPIRE_Z);
     prev_d = isKeyPressed(KEY_NSPIRE_D);
     prev_s = isKeyPressed(KEY_NSPIRE_S);
     prev_p = isKeyPressed(KEY_NSPIRE_P);
@@ -612,6 +621,7 @@ int play_movie(
     }
 
     while (1) {
+        movie_audio_pump(&movie);
         screenshot_preview_tick(&screenshot_preview, monotonic_clock_now_ms());
         bool woke_from_idle_off = false;
         bool esc_down = isKeyPressed(KEY_NSPIRE_ESC) ? true : false;
@@ -630,6 +640,7 @@ int play_movie(
             display_power_restore_animated(&g_display_power_state, monotonic_clock_now_ms());
         }
         if (scratchpad_edge) {
+            movie_audio_suspend(&movie);
             playback_capture_stop(&movie);
             display_power_off_for_exit(&g_display_power_state, screen, true);
             result = PLAY_MOVIE_RESULT_SCRATCHPAD_EXIT;
@@ -640,6 +651,7 @@ int play_movie(
             break;
         }
         if (!g_display_power_state.off && !g_display_power_state.off_fade_active && !help_menu_open && esc_down && !esc_exit_suppressed_until_release) {
+            movie_audio_suspend(&movie);
             playback_capture_stop(&movie);
             SDL_Surface *collapse_overlay = capture_screen_surface(screen);
 
@@ -660,7 +672,12 @@ int play_movie(
         bool scheduled_frame_advanced = false;
         bool video_decode_pending = false;
         bool seek_work = false;
-        bool touchpad_click = pointer_update(&pointer);
+        bool audio_owns_pad=audio_controls_touchpad_captured();
+        bool touchpad_click;
+        if (audio_owns_pad) {
+            pointer_update_captured(&pointer);
+            touchpad_click=false;
+        } else touchpad_click=pointer_update(&pointer);
         if (clock_menu_poll(screen, fonts, &movie, &pointer, false, path)) {
             prev_esc = isKeyPressed(KEY_NSPIRE_ESC); prev_enter = isKeyPressed(KEY_NSPIRE_ENTER);
             prev_on = nspire_on_key_pressed();
@@ -668,7 +685,7 @@ int play_movie(
             playback_press_target = PLAYBACK_PRESS_NONE;
             render_gate.valid = false;
             playback_capture_tick(&movie, monotonic_clock_now_ticks(), paused || help_menu_open);
-            reset_playback_timeline(&movie, playback_rate_for_index(playback_rate_index),
+            reset_playback_clock(&movie, playback_rate_for_index(playback_rate_index),
                 &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
             continue;
         }
@@ -676,11 +693,12 @@ int play_movie(
         bool pending_seek_consumed_click = false;
         uint64_t now_ticks = monotonic_clock_now_ticks();
         uint32_t now_ms = monotonic_clock_ticks_to_ms(now_ticks);
-        bool night_input = night_mode_poll(now_ms, !g_display_power_state.off);
+        bool night_input = night_mode_poll(now_ms, !g_display_power_state.off && !audio_owns_pad);
         const PlaybackRate *playback_rate = playback_rate_for_index(playback_rate_index);
         playback_phase(&movie, PLAYER_CRASH_INPUT, paused, playback_rate);
         bool show_ui = help_menu_open || (paused && !pause_icon_only) || ui_time_before(now_ms, ui_visible_until);
         bool ctrl_down = isKeyPressed(KEY_NSPIRE_CTRL) ? true : false;
+        unsigned vertical_keys = audio_vertical_keys(ctrl_down, isKeyPressed(KEY_NSPIRE_SHIFT));
         bool enter_key_was_down = prev_enter;
         bool keypad_5_was_down = prev_5;
         bool keypad_1_edge = key_pressed_edge(KEY_NSPIRE_1, &prev_1);
@@ -717,16 +735,26 @@ int play_movie(
         bool speed_down_down = prev_lp || prev_lthan;
         bool speed_up_down = prev_rp || prev_gthan;
         bool speed_key_down = speed_down_down || speed_up_down;
-        bool seek_left_edge = key_pressed_edge(KEY_NSPIRE_LEFT, &prev_left) || (!ctrl_down && keypad_4_edge);
-        bool seek_right_edge = key_pressed_edge(KEY_NSPIRE_RIGHT, &prev_right) || (!ctrl_down && keypad_6_edge);
-        bool seek_left_down = prev_left || (!ctrl_down && prev_4);
-        bool seek_right_down = prev_right || (!ctrl_down && prev_6);
+        bool pad_left_edge=key_pressed_edge(KEY_NSPIRE_LEFT, &prev_left);
+        bool pad_right_edge=key_pressed_edge(KEY_NSPIRE_RIGHT, &prev_right);
+        bool seek_left_edge = (!audio_owns_pad && pad_left_edge) || (!ctrl_down && keypad_4_edge);
+        bool seek_right_edge = (!audio_owns_pad && pad_right_edge) || (!ctrl_down && keypad_6_edge);
+        bool seek_left_down = (!audio_owns_pad && prev_left) || (!ctrl_down && prev_4);
+        bool seek_right_down = (!audio_owns_pad && prev_right) || (!ctrl_down && prev_6);
         bool touchpad_up_edge = key_pressed_edge(KEY_NSPIRE_UP, &prev_up);
         bool touchpad_down_edge = key_pressed_edge(KEY_NSPIRE_DOWN, &prev_down);
-        bool brightness_up_edge = !ctrl_down && (touchpad_up_edge || keypad_8_edge);
-        bool brightness_down_edge = !ctrl_down && (touchpad_down_edge || keypad_2_edge);
-        bool brightness_up_down = !ctrl_down && (prev_up || prev_8);
-        bool brightness_down_down = !ctrl_down && (prev_down || prev_2);
+        touchpad_up_edge=touchpad_up_edge && !audio_owns_pad;
+        touchpad_down_edge=touchpad_down_edge && !audio_owns_pad;
+        bool brightness_up_edge = vertical_keys == AUDIO_KEYS_BRIGHTNESS && (touchpad_up_edge || keypad_8_edge);
+        bool brightness_down_edge = vertical_keys == AUDIO_KEYS_BRIGHTNESS && (touchpad_down_edge || keypad_2_edge);
+        bool brightness_up_down = vertical_keys == AUDIO_KEYS_BRIGHTNESS && ((!audio_owns_pad && prev_up) || prev_8);
+        bool brightness_down_down = vertical_keys == AUDIO_KEYS_BRIGHTNESS && ((!audio_owns_pad && prev_down) || prev_2);
+        bool audio_up_alias = key_pressed_edge(KEY_NSPIRE_A, &prev_audio_up);
+        bool audio_down_alias = key_pressed_edge(KEY_NSPIRE_Z, &prev_audio_down);
+        bool audio_up_edge = vertical_keys == AUDIO_KEYS_VOLUME && (touchpad_up_edge || keypad_8_edge || audio_up_alias);
+        bool audio_down_edge = vertical_keys == AUDIO_KEYS_VOLUME && (touchpad_down_edge || keypad_2_edge || audio_down_alias);
+        bool audio_up_held = vertical_keys == AUDIO_KEYS_VOLUME && ((!audio_owns_pad && prev_up) || prev_8 || prev_audio_up);
+        bool audio_down_held = vertical_keys == AUDIO_KEYS_VOLUME && ((!audio_owns_pad && prev_down) || prev_2 || prev_audio_down);
         bool video_down_left_edge = ctrl_down && keypad_1_edge;
         bool video_down_edge = ctrl_down && keypad_2_edge;
         bool video_down_right_edge = ctrl_down && keypad_3_edge;
@@ -738,7 +766,9 @@ int play_movie(
         bool video_up_right_edge = ctrl_down && keypad_9_edge;
         bool subtitle_font_edge = key_pressed_edge(KEY_NSPIRE_F, &prev_f);
         bool subtitle_track_edge = key_pressed_edge(KEY_NSPIRE_T, &prev_t);
-        bool memory_overlay_edge = key_pressed_edge(KEY_NSPIRE_M, &prev_m);
+        bool m_edge=key_pressed_edge(KEY_NSPIRE_M,&prev_m);
+        bool memory_overlay_edge=!ctrl_down && m_edge;
+        bool audio_mute_edge = ctrl_down && m_edge;
         bool debug_logging_edge = key_pressed_edge(KEY_NSPIRE_D, &prev_d);
         bool screenshot_edge = key_pressed_edge(KEY_NSPIRE_S, &prev_s);
         bool playback_mode_edge = key_pressed_edge(KEY_NSPIRE_P, &prev_p);
@@ -777,7 +807,24 @@ int play_movie(
             pointer_click = true;
         }
         pointer_release_edge = pointer.release_edge || (enter_release_edge && pointer.visible);
+        AudioControlInput audio_input = {
+            .now_ms=now_ms, .x=pointer.x, .y=pointer.y, .pointer_visible=pointer.visible,
+            .pressed=pointer_click, .released=pointer_release_edge, .held=pointer.down || enter_down,
+            .keyboard_pressed=enter_edge && !touchpad_click,
+            .up_pressed=audio_up_edge, .down_pressed=audio_down_edge,
+            .up_held=audio_up_held, .down_held=audio_down_held, .mute_pressed=audio_mute_edge,
+            .chrome_visible=show_ui || ui_mixes.chrome,
+            .enabled=!help_menu_open && !cat_edge && !g_display_power_state.off && !g_display_power_state.off_fade_active
+        };
+        bool audio_pointer_captured=audio_controls_update(movie.audio,&audio_input);
+        if (audio_pointer_captured) {
+            pointer_click=pointer_release_edge=enter_edge=enter_release_edge=false;
+            playback_press_target=PLAYBACK_PRESS_NONE;
+        }
+        bool audio_input_activity=audio_pointer_captured || audio_up_edge || audio_down_edge ||
+            audio_up_held || audio_down_held || audio_mute_edge;
         chrome_input_activity =
+            audio_input_activity ||
             pointer_click ||
             pointer_release_edge ||
             pointer.moved ||
@@ -991,7 +1038,7 @@ int play_movie(
                     brightness_repeat_direction = -1;
                     brightness_repeat_next_ms = now_ms + TAB_HOLD_FRAME_REPEAT_DELAY_MS;
                 }
-                reset_playback_timeline(
+                reset_playback_clock(
                     &movie,
                     playback_rate,
                     &playback_anchor_ticks,
@@ -1012,7 +1059,7 @@ int play_movie(
                         prev_on = true;
                         if (!g_display_power_state.off) paused = !resume_playback;
                         render_gate.valid = false;
-                        reset_playback_timeline(&movie, playback_rate, &playback_anchor_ticks,
+                        reset_playback_clock(&movie, playback_rate, &playback_anchor_ticks,
                             &playback_anchor_frame, &next_frame_due_ticks);
                         player_crash_trace_begin(&movie, path, paused, playback_rate);
                         continue;
@@ -1035,7 +1082,7 @@ int play_movie(
             seek_repeat_next_ms = 0;
             brightness_repeat_direction = 0;
             brightness_repeat_next_ms = 0;
-            reset_playback_timeline(
+            reset_playback_clock(
                 &movie,
                 playback_rate,
                 &playback_anchor_ticks,
@@ -1196,7 +1243,7 @@ int play_movie(
             if (!was_paused && paused) {
                 restart_after_pause = true;
             }
-            reset_playback_timeline(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
+            reset_playback_clock(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
             ui_visible_until = now_ms + POINTER_UI_TIMEOUT_MS;
             show_ui = true;
         }
@@ -1210,7 +1257,7 @@ int play_movie(
                     hover_preview_needs_rebuffer = false;
                 }
                 help_resume_playback = false;
-                reset_playback_timeline(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
+                reset_playback_clock(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
                 note_pause_transition(was_paused, paused, now_ms, &paused_ui_quiet_until_ms);
                 ui_visible_until = now_ms + POINTER_UI_TIMEOUT_MS;
                 show_ui = true;
@@ -1331,7 +1378,7 @@ int play_movie(
             status_overlay_show(now_ms, true, &status_overlay_started_ms, &status_overlay_until);
             ui_visible_until = now_ms + POINTER_UI_TIMEOUT_MS;
             if (!paused) {
-                reset_playback_timeline(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
+                reset_playback_clock(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
             }
         }
         if (video_up_left_edge) {
@@ -1449,7 +1496,7 @@ int play_movie(
                 );
                 status_overlay_show(now_ms, !keep_brightness_badge, &status_overlay_started_ms, &status_overlay_until);
                 ui_visible_until = now_ms + POINTER_UI_TIMEOUT_MS;
-                reset_playback_timeline(
+                reset_playback_clock(
                     &movie,
                     playback_rate,
                     &playback_anchor_ticks,
@@ -1503,6 +1550,7 @@ int play_movie(
                     result = -1;
                     break;
                 }
+                movie_audio_reanchor(&movie);
                 hover_preview_needs_rebuffer = false;
                 paused = false;
             } else {
@@ -1515,7 +1563,7 @@ int play_movie(
             if (!was_paused && paused) {
                 restart_after_pause = true;
             }
-            reset_playback_timeline(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
+            reset_playback_clock(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
             /* Keyboard pause owns only its badge, independently of the controls. */
             pause_icon_only = true;
             ui_visible_until = 0;
@@ -1565,7 +1613,7 @@ int play_movie(
             }
             if (speed_changed) {
                 playback_rate = playback_rate_for_index(playback_rate_index);
-                reset_playback_timeline(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
+                reset_playback_clock(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
             }
             ui_visible_until = now_ms + POINTER_UI_TIMEOUT_MS;
         }
@@ -1730,6 +1778,7 @@ int play_movie(
                                 result = -1;
                                 break;
                             }
+                            movie_audio_reanchor(&movie);
                             hover_preview_needs_rebuffer = false;
                             paused = false;
                         } else {
@@ -1742,13 +1791,13 @@ int play_movie(
                         if (!was_paused && paused) {
                             restart_after_pause = true;
                         }
-                        reset_playback_timeline(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
+                        reset_playback_clock(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
                     } else if (released_target == PLAYBACK_PRESS_SCALE) {
                         cycle_scale_mode_with_morph(&movie, &scale_morph, &scale_mode, video_align_x, video_align_y, now_ms);
                     } else if (released_target == PLAYBACK_PRESS_SPEED) {
                         playback_rate_index = playback_rate_step(playback_rate_index, 1, true);
                         playback_rate = playback_rate_for_index(playback_rate_index);
-                        reset_playback_timeline(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
+                        reset_playback_clock(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
                     }
                     ui_visible_until = now_ms + POINTER_UI_TIMEOUT_MS;
                 }
@@ -1780,6 +1829,7 @@ int play_movie(
                         result = -1;
                         break;
                     }
+                    movie_audio_reanchor(&movie);
                     hover_preview_needs_rebuffer = false;
                     paused = false;
                 } else {
@@ -1792,7 +1842,7 @@ int play_movie(
                 if (!was_paused && paused) {
                     restart_after_pause = true;
                 }
-                reset_playback_timeline(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
+                reset_playback_clock(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
                 ui_visible_until = now_ms + POINTER_UI_TIMEOUT_MS;
             }
         }
@@ -1813,6 +1863,18 @@ int play_movie(
                 trigger_playback_badge_press(&ui_transitions, &playback_badge_press_until_ms, now_ms);
             }
         }
+        movie_audio_tick(&movie,paused || help_menu_open || g_display_power_state.off || seek.active || seek_work,
+            playback_rate->numerator,playback_rate->denominator);
+        if (movie_audio_source_lost(&movie) && usb_path(path)) {
+            debug_failf("USB drive disconnected while reading the soundtrack");
+            result=PLAY_MOVIE_RESULT_ERROR;
+            break;
+        }
+        const char *audio_notice=movie_audio_status(&movie);
+        if(audio_notice) {
+            snprintf(status_overlay_text,sizeof(status_overlay_text),"%s",audio_notice);
+            status_overlay_show(monotonic_clock_now_ms(),true,&status_overlay_started_ms,&status_overlay_until);
+        }
         if (playback_capture_active(&movie)) {
             CaptureSettings capture_settings = {0};
             capture_settings.rate_num = playback_rate->numerator;
@@ -1832,16 +1894,24 @@ int play_movie(
         if (!seek_work && !seek.active && !paused && frame_interval_ticks > 0) {
             now_ticks = monotonic_clock_now_ticks();
             uint64_t scaled_interval = movie_frame_time_scaled_ticks(&movie, 1, playback_rate);
+            bool audio_master=movie_audio_master(&movie);
+            uint32_t audio_frame=audio_master?movie_audio_frame(&movie):0;
+            if(audio_master)next_frame_due_ticks=now_ticks+
+                (uint64_t)movie_audio_wait_ms(&movie,playback_rate->numerator,playback_rate->denominator)*monotonic_clock_ticks_per_second()/1000U;
             /* Keep the final frame for its full interval before repeat,
              * auto-next or the end-of-video pause. There is nothing to decode
              * ahead at that boundary. */
             uint64_t decode_due = playback_work_due(&movie, realtime_frame_skip, next_frame_due_ticks,
                 scaled_interval, monotonic_clock_ticks_per_second());
-            if (now_ticks >= decode_due) {
+            if (now_ticks >= decode_due && (!audio_master || movie.current_frame+1<movie.header.frame_count || audio_frame>=movie.header.frame_count)) {
                 uint64_t elapsed_ticks = now_ticks - playback_anchor_ticks;
                 uint32_t frames_to_advance = movie_frames_from_scaled_ticks(&movie, elapsed_ticks, playback_rate);
                 uint32_t target_frame = playback_anchor_frame + frames_to_advance;
                 bool finishing_realtime = video_lookahead_pending_realtime_target(&movie, &target_frame);
+                if(audio_master) {
+                    target_frame=audio_frame>movie.current_frame?audio_frame:movie.current_frame+1;
+                    finishing_realtime=false;
+                }
                 bool lagged = false;
                 uint32_t lag_frames = 0;
                 uint32_t late_ms = 0;
@@ -1853,7 +1923,7 @@ int play_movie(
 
                 if (target_frame > movie.current_frame + 1U) {
                     lag_frames = target_frame - (movie.current_frame + 1U);
-                    if (!realtime_frame_skip && !finishing_realtime) {
+                    if (!realtime_frame_skip && !finishing_realtime && !audio_master) {
                         target_frame = movie.current_frame + 1U;
                     }
                     lagged = true;
@@ -1896,6 +1966,7 @@ int play_movie(
                             bool was_paused = paused;
 
                             paused = true;
+                            movie_audio_pause(&movie);
                             note_pause_transition(was_paused, paused, now_ms, &paused_ui_quiet_until_ms);
                         }
                         if (playback_mode == PLAYBACK_MODE_AUTO_NEXT) {
@@ -2062,8 +2133,10 @@ int play_movie(
             uint32_t render_visibility = (show_ui ? 1U : 0U) |
                 (ui_mixes.chrome ? 2U : 0U) | (ui_mixes.help_menu ? 4U : 0U) |
                 (subtitle_font_overlay_visible ? 8U : 0U) | (render_status_visible ? 16U : 0U) |
-                (night_mode_status_visible(render_now_ms) ? 32U : 0U);
+                (night_mode_status_visible(render_now_ms) ? 32U : 0U) |
+                (audio_controls_open() ? 64U : 0U);
             bool render_effects = playback_ui_mixes_animating(&ui_mixes) ||
+                audio_controls_animating() ||
                 brightness_animation.active ||
                 scale_morph_animating(&scale_morph, render_now_ms) ||
                 ui_theme_transition_active() ||
@@ -2090,6 +2163,7 @@ int play_movie(
                 (render_buffer_width != last_render_buffer_width ||
                  render_decoded_width != last_render_decoded_width);
             bool render_input_changed = render_pointer_changed ||
+                audio_input_activity || audio_controls_revision()!=last_render_audio_revision ||
                 (seek_preview.over_bar && seek_preview.surface_render_pending) ||
                 enter_edge || enter_release_edge || space_edge || tab_edge || cat_edge || esc_edge ||
                 divide_edge || exp_edge || tenx_edge || speed_down_edge || speed_up_edge ||
@@ -2123,6 +2197,7 @@ int play_movie(
                 monotonic_clock_now_ticks(), next_frame_due_ticks, monotonic_clock_ticks_per_second(),
                 !seek_work && !seek.active && !paused && !help_menu_open && !realtime_frame_skip && frame_interval_ticks > 0,
                 scheduled_frame_advanced || take_screenshot || seek_delta_ms || pending_seek_ms ||
+                    (audio_controls_animating() && (uint32_t)(render_now_ms-render_gate.presented_ms)>=16U) ||
                     on_edge || woke_from_idle_off ||
                     g_display_power_state.off || g_display_power_state.off_fade_active);
             /* An overdue picture can span several input turns. Keep
@@ -2137,6 +2212,7 @@ int play_movie(
                 last_render_night_revision = render_night_revision;
                 last_screenshot_revision = screenshot_preview.revision;
                 last_render_visibility = render_visibility;
+                last_render_audio_revision = audio_controls_revision();
                 last_render_pointer_visible = pointer.visible;
                 last_render_pointer_x = pointer.x;
                 last_render_pointer_y = pointer.y;
@@ -2218,7 +2294,7 @@ int play_movie(
                     paused || help_menu_open || frame_interval_ticks == 0,
                     true)) {
                 paused = true;
-                reset_playback_timeline(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
+                reset_playback_clock(&movie, playback_rate, &playback_anchor_ticks, &playback_anchor_frame, &next_frame_due_ticks);
                 player_delay_ms(16);
                 continue;
             }
@@ -2327,9 +2403,12 @@ int play_movie(
         }
     }
 
+    audio_controls_reset();
+    movie_audio_suspend(&movie);
     bool usb_disconnected = result == PLAY_MOVIE_RESULT_ERROR &&
         usb_path(path) && usb_controller_error() == ENODEV;
     playback_capture_stop(&movie);
+    raw_player_before_native();
     sram_survey_checkpoint("playback-exit");
     movie_async_stop(&movie);
     player_crash_trace_end(&movie, result == PLAY_MOVIE_RESULT_ERROR ? PLAYER_CRASH_ERROR : PLAYER_CRASH_EXIT);
@@ -2387,6 +2466,7 @@ int play_movie(
         debug_log_path_for_movie(path, log_path, sizeof(log_path));
         debug_dump_session(log_path, &movie, exit_reason);
     }
+    movie_audio_close(&movie);
     free_subtitle_surface_cache(&subtitle_cache);
     clear_screenshot_preview(&screenshot_preview);
     clear_seek_bar_preview(&seek_preview);

@@ -15,6 +15,8 @@ static void *(*host_memcpy)(void *, const void *, size_t);
 static void *(*host_memmove)(void *, const void *, size_t);
 static void *(*host_memset)(void *, int, size_t);
 static int (*host_memcmp)(const void *, const void *, size_t);
+static void *(*host_memchr)(const void *,int,size_t);
+static void (*host_qsort)(void *,size_t,size_t,int (*)(const void *,const void *));
 static size_t (*host_strlen)(const char *);
 static int (*host_strcmp)(const char *, const char *);
 static int (*host_strncmp)(const char *, const char *, size_t);
@@ -64,6 +66,8 @@ bool module_runtime_bind(const CodecHostApi *host)
     BIND(host_memmove, "memmove");
     BIND(host_memset, "memset");
     BIND(host_memcmp, "memcmp");
+    BIND(host_memchr, "memchr");
+    BIND(host_qsort, "qsort");
     BIND(host_strlen, "strlen");
     BIND(host_strcmp, "strcmp");
     BIND(host_strncmp, "strncmp");
@@ -324,4 +328,7 @@ void module_runtime_shutdown(void)
 {
     _impure_ptr = NULL;
 }
+void *memchr(const void *p,int c,size_t n) {return host_memchr(p,c,n);}
+void qsort(void *p,size_t n,size_t width,int (*compare)(const void *,const void *))
+{host_qsort(p,n,width,compare);}
 #endif

@@ -61,7 +61,9 @@ DWORD get_fattime(void)
 }
 int main(int argc, char **argv)
 {
-    assert(argc == 3);
+    assert(argc == 4);
+    char path[160];
+    assert(!strcmp(argv[3], "nMedia") || !strcmp(argv[3], "ndvideo"));
     unsigned formats[] = {FM_FAT | FM_SFD, FM_FAT32 | FM_SFD, FM_EXFAT | FM_SFD, FM_FAT32};
     unsigned which = atoi(argv[1]);
     assert(which < 4);
@@ -72,13 +74,17 @@ int main(int argc, char **argv)
     assert(f_mkfs("0:", &opts, work, sizeof(work)) == FR_OK);
     FATFS fs;
     assert(f_mount(&fs, "0:", 1) == FR_OK);
-    assert(f_mkdir("0:/ndvideo") == FR_OK);
-    assert(f_mkdir("0:/ndvideo/Rick and Morty") == FR_OK);
-    assert(f_mkdir("0:/ndvideo/Rick and Morty/Season 1") == FR_OK);
+    snprintf(path, sizeof(path), "0:/%s", argv[3]);
+    assert(f_mkdir(path) == FR_OK);
+    snprintf(path, sizeof(path), "0:/%s/Rick and Morty", argv[3]);
+    assert(f_mkdir(path) == FR_OK);
+    snprintf(path, sizeof(path), "0:/%s/Rick and Morty/Season 1", argv[3]);
+    assert(f_mkdir(path) == FR_OK);
     FIL file, fragment;
     UINT bytes;
     assert(f_open(&fragment, "0:/fragment.bin", FA_CREATE_ALWAYS | FA_WRITE) == FR_OK);
-    assert(f_open(&file, "0:/ndvideo/Rick and Morty/Season 1/Episode 1.nvp.tns",
+    snprintf(path, sizeof(path), "0:/%s/Rick and Morty/Season 1/Episode 1.nvp.tns", argv[3]);
+    assert(f_open(&file, path,
                   FA_CREATE_ALWAYS | FA_WRITE) == FR_OK);
     for (unsigned j = 0; j < 128; ++j) {
         for (unsigned i = 0; i < sizeof(work); ++i)

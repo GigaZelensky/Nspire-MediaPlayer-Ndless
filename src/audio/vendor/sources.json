@@ -1,0 +1,1861 @@
+[
+  {
+    "repository": "mackron/dr_libs",
+    "commit": "dfe8377631000664666519fdb83da193fd8037f4",
+    "files": [
+      "dr_wav.h",
+      "dr_flac.h"
+    ]
+  },
+  {
+    "repository": "lieff/minimp3",
+    "commit": "ea99364f61c14656440e8d77e9c233ccf3124633",
+    "files": [
+      "minimp3.h",
+      "minimp3_ex.h",
+      "minimp3-LICENSE"
+    ]
+  },
+  {
+    "repository": "sezero/libmad",
+    "commit": "486f902c6c686eafced3450851849527e29bc7f6",
+    "path": "libmad",
+    "upstream_files": [
+      {
+        "file": "COPYING",
+        "sha256": "da0eca0fb517ac939d167924c9d4b3f8750a6b7191932ef2cb145acfa624ac7e"
+      },
+      {
+        "file": "COPYRIGHT",
+        "sha256": "bcbc106321e684d1b0d2b40b1bef2b632bbcbd1579dd9ef8e57cafeddcc17961"
+      },
+      {
+        "file": "CREDITS",
+        "sha256": "d8c53bf6ee5a7681507799632bb4d3568dffa9f393409fb3e5fe9f53caf28ef8"
+      },
+      {
+        "file": "D.dat",
+        "sha256": "ea6a9fd3635f2bde2ae186d0a6af18346c51f23359ee21beb83628a0e9c5223d"
+      },
+      {
+        "file": "README",
+        "sha256": "408d28885d47fde7ae804463970ca8aa15c52fce8d6cbbf66eb6cc669fd9e0a7"
+      },
+      {
+        "file": "VERSION",
+        "sha256": "38421c50746a7e63c9f8b2a768097af3c0c22f676abc53ec710660397173b480"
+      },
+      {
+        "file": "bit.c",
+        "sha256": "2da6e99fe02d38aa729f6bb263ef5ceef7a4f32a673ff8bb424480171fe121a9"
+      },
+      {
+        "file": "bit.h",
+        "sha256": "82bdd27b232cef3940725246c1c04d96e7e96828f7dcd508987cde25875201d0"
+      },
+      {
+        "file": "decoder.h",
+        "sha256": "c5d880854083b0edad8a773539f8f8767aca197dbbe45b917c2c18f7b668503c"
+      },
+      {
+        "file": "fixed.c",
+        "sha256": "b5e077be87937c3149c3f6a8794280da21824b284e2995147ca1f3a7af37b7d7"
+      },
+      {
+        "file": "fixed.h",
+        "sha256": "c0efbe33a17a80e8c0b4c75475d3cdf3243e818e08d821562549bd81aa8e747c"
+      },
+      {
+        "file": "frame.c",
+        "sha256": "4523c2b93b839dbb73ad18995f8a5a60829e8056919855ece31f1402a2378e4d"
+      },
+      {
+        "file": "frame.h",
+        "sha256": "1647ad140bb6463cf1d668f131d99e38932753ac851148a8c351f8ea9109cbb9"
+      },
+      {
+        "file": "global.h",
+        "sha256": "76f4e82de2444bb7c78ffa7ac813eb679d64915c3964f5e6915b8c0350927388"
+      },
+      {
+        "file": "huffman.c",
+        "sha256": "d65a74a5c30aeef5e0b91f4041b0c3a8e2f406025e6ff5b1114ebc64c2b9e174"
+      },
+      {
+        "file": "huffman.h",
+        "sha256": "f6f6b00e334b3b03bab67187ad47f1978a4ca3e5a41d8b6c483a69244f08517b"
+      },
+      {
+        "file": "imdct_s.dat",
+        "sha256": "31493e6b388aa91e88b084f657dffa4b1c7b5bcc3e5ab95b61b788e734a6145f"
+      },
+      {
+        "file": "layer12.c",
+        "sha256": "e3e0e0b4e8d24c4fc31267ea8c0b79a1021dde950e2813e588db348cb443dc95"
+      },
+      {
+        "file": "layer12.h",
+        "sha256": "136442d9f5311f2246ee3dd7dd8b116598520973d6460431ffd7f4afa9721ea8"
+      },
+      {
+        "file": "layer3.c",
+        "sha256": "6464980b42cce727caff8f19afeac86804debefdd3ed47e9b94c0edf2e42bd80"
+      },
+      {
+        "file": "layer3.h",
+        "sha256": "f1d4cf5203fd5c6720ce6119dcd31351a6acaddad28a7ab9a43b187205a90372"
+      },
+      {
+        "file": "qc_table.dat",
+        "sha256": "4c22d05fe1fb1d6a64d72fabc52537850e35c814118470b84185a455a02cb0ea"
+      },
+      {
+        "file": "rq_table.dat",
+        "sha256": "fec726cb4390aedef0bbd83ce7f8c4b105fbdb96abd16dc752ba060aad00c456"
+      },
+      {
+        "file": "sf_table.dat",
+        "sha256": "20f60fe1e8272cfd4ee1969dba739a45a2f90c84aa7f622432fae55390498c26"
+      },
+      {
+        "file": "stream.c",
+        "sha256": "a2c25ef635df49249640133eac3b810b9a9a4897066f52c0f137db6be12fbd78"
+      },
+      {
+        "file": "stream.h",
+        "sha256": "3e0ba1ab2185f5083d5a3104e47803d044d87314066b9c35bdb4991f27c2d8ca"
+      },
+      {
+        "file": "synth.c",
+        "sha256": "c5229ba01326cd14827c10f4d299db9f669dcbe85ec0b10aacaa4c357177ce53"
+      },
+      {
+        "file": "synth.h",
+        "sha256": "09c610a4972cc93ffae4d849f2ac34c241aeacbeb2108672c8cf9d8e4e8dc4e5"
+      },
+      {
+        "file": "timer.c",
+        "sha256": "39d75b57a215e9e8359de6b4acd559f1e6d3efdbc2b61ae14329ba766bc96075"
+      },
+      {
+        "file": "timer.h",
+        "sha256": "08c9277a6de4fdabe7f51f9ded259dde3b20365a7538cb62f2ba0c7031fa3b77"
+      },
+      {
+        "file": "version.h",
+        "sha256": "5298d9d06102324ce90d27c0c7836bc86ad1664e308b509a81bd72d8ef4ff9f2"
+      }
+    ],
+    "license": "GPL-2.0-or-later"
+  },
+  {
+    "repository": "xiph/ogg",
+    "commit": "06a5e0262cdc28aa4ae6797627a783b5010440f0",
+    "path": "ogg",
+    "upstream_files": [
+      {
+        "file": "COPYING",
+        "sha256": "29460b3b44148114c28cc2480737368428747e68374d16cb8d910949ded03d19"
+      },
+      {
+        "file": "include/ogg/ogg.h",
+        "sha256": "9158491901a1d0a8dda75b9fee3661b269c6ea337a75d1ee3f4d8e1ec62827e8"
+      },
+      {
+        "file": "include/ogg/os_types.h",
+        "sha256": "310a09431492bf49f8d25cd7c492986c8e11a2b28dc3e75102bcdd8c48fc17b5"
+      },
+      {
+        "file": "src/bitwise.c",
+        "sha256": "f2775114bb4a410bb5cd9d68fe56b7490c4e8242e7bbb3777a947beece57bd53"
+      },
+      {
+        "file": "src/crctable.h",
+        "sha256": "16ea1d38ab17f2b57684185057dff785931f2bffd184e4967170fbb8138bfe5b"
+      },
+      {
+        "file": "src/framing.c",
+        "sha256": "248deffffa06ef290290240a74ff8d40a897f443910f09af46010b74ed341ae7"
+      }
+    ]
+  },
+  {
+    "repository": "xiph/tremor",
+    "commit": "820fb3237ea81af44c9cc468c8b4e20128e3e5ad",
+    "path": "tremor",
+    "upstream_files": [
+      {
+        "file": "COPYING",
+        "sha256": "29460b3b44148114c28cc2480737368428747e68374d16cb8d910949ded03d19"
+      },
+      {
+        "file": "asm_arm.h",
+        "sha256": "761c24186086168f189e992cda002aacf082b52ec51838fc70356f112722db25"
+      },
+      {
+        "file": "backends.h",
+        "sha256": "3c80cabedbb4532372e116dd399e3d2eb230683636757cba4d23a31f5269570a"
+      },
+      {
+        "file": "block.c",
+        "sha256": "149e4fcb0a863d3e1b9faae44a016d33dbea86fe6b5186563796b5828750150a"
+      },
+      {
+        "file": "block.h",
+        "sha256": "d3bc6ea0f314e1a869bb5a580a90f101f1cfd7839d3c98724db19d8d86020c87"
+      },
+      {
+        "file": "codebook.c",
+        "sha256": "aead4fa226cf96b4f069207fd430162591811ce9e9f0203508747468cccf8e44"
+      },
+      {
+        "file": "codebook.h",
+        "sha256": "49a58dd56088a1332d954eba606051342ba2d66c9bba8f9d68d94a71879e02b3"
+      },
+      {
+        "file": "codec_internal.h",
+        "sha256": "0feaff6f2d0c5fba04814e5e5974dd1bd680bd9b4136cf5134ba44a645e8901c"
+      },
+      {
+        "file": "config_types.h",
+        "sha256": "7a0777330975e222afd9e51d720ac3a3369bf437a0b745b085969fffa23973e8"
+      },
+      {
+        "file": "floor0.c",
+        "sha256": "26d5e38a30f30f777b4918dbf4b2c8cef0cefffe0d08144299b7f35e6dcd6155"
+      },
+      {
+        "file": "floor1.c",
+        "sha256": "6c5ed6a747d8f501459e415da49f86f28e547bf704a6600eac72fcb2d2bb9f6a"
+      },
+      {
+        "file": "info.c",
+        "sha256": "5b164ec112f591a6297b98f0de5f5e5e61f6d8428fa90cf8b3be2950fd2904e8"
+      },
+      {
+        "file": "ivorbiscodec.h",
+        "sha256": "8b34c1b2cfae68ed900419e1bc0b0488d861124f536d521c23c02d2cb1fff9b9"
+      },
+      {
+        "file": "ivorbisfile.h",
+        "sha256": "17284d32a6b92a2a9bb054af94e555030d7efae40ae073530f60255d1f248d85"
+      },
+      {
+        "file": "lsp_lookup.h",
+        "sha256": "6161b13a99b7ecee007227b1bfc0f1c1f15dc35a2f9f4531e66a507937b7d460"
+      },
+      {
+        "file": "mapping0.c",
+        "sha256": "3f29e3958c9c1d2aa6732982946abeeb08b56e8a6690dc5569e37dd81d09c00a"
+      },
+      {
+        "file": "mdct.c",
+        "sha256": "a84e82fd8ed1652c2b45df24da4938071ea9a4b2d1742695a4748d55d3a9bf34"
+      },
+      {
+        "file": "mdct.h",
+        "sha256": "74420691bd83fb01dca8a9d169b1a9f4d124ef84cedbdaab2873246de16857c4"
+      },
+      {
+        "file": "mdct_lookup.h",
+        "sha256": "aefc0ac3e71ad9b9c292e7b12a551df0785628637596708dcb8919313fe57924"
+      },
+      {
+        "file": "misc.h",
+        "sha256": "542a79e2382da86f48db07424904586ca6b84aa4d7cf0474a32a443a3347807b"
+      },
+      {
+        "file": "os.h",
+        "sha256": "269756cf341d0332fae8d29a24fa7a58cdfa837393a624ef9bab41d9cfb6b7a8"
+      },
+      {
+        "file": "registry.c",
+        "sha256": "8b41abed5b5f8eb17fe9b3762fe727a834504be2c1a58dd3f64323631e6f9cfd"
+      },
+      {
+        "file": "registry.h",
+        "sha256": "0ef12187424eee9678bc0edae86b38d79d387576f729a969681e234094148b41"
+      },
+      {
+        "file": "res012.c",
+        "sha256": "4f19803ca1fff4d91d1122607166c2e302eeddbd19c4fcdf11465ac8d975610b"
+      },
+      {
+        "file": "sharedbook.c",
+        "sha256": "67a46f7e89eac01fec386f90d19e29dcc038f1ba42ab32d02dfa95e39d07652b"
+      },
+      {
+        "file": "synthesis.c",
+        "sha256": "af2cf850bbf55d9be5062fbd85d3024ce66721eb20fc34643b558d0ebca05ef6"
+      },
+      {
+        "file": "vorbisfile.c",
+        "sha256": "e9dcd233dd48fe1849dbd1322e98920e249537eebda9dea1355f07ea843765a7"
+      },
+      {
+        "file": "window.c",
+        "sha256": "a94fc2ffdc96ae0cfd066b52cea2cabc1703ccdbee2560e761610df58385ab4d"
+      },
+      {
+        "file": "window.h",
+        "sha256": "e1e9e680bdb7d0798cd5969f64d6c93c28caf9bc27eadb73618f51e953c0a10c"
+      },
+      {
+        "file": "window_lookup.h",
+        "sha256": "8942639aa4880b8191565148cb18b53c6f33fcedd2eedbb6bce23f83e446d932"
+      }
+    ]
+  },
+  {
+    "repository": "FreewareAdvancedAudio/faad2",
+    "commit": "015e0caec066a28c1b2db77f0e24edddffd5b836",
+    "path": "faad2",
+    "upstream_files": [
+      {
+        "file": "AUTHORS",
+        "sha256": "553026f7a078c0dfecbdef8eaed79ee7ff7656ac5d715a9f336ade9171ce4850"
+      },
+      {
+        "file": "COPYING",
+        "sha256": "c5ec6fe8072d2371385231b9844e61e0dc7466300e17e00eb9a64fff3fdf4aa4"
+      },
+      {
+        "file": "include/neaacdec.h",
+        "sha256": "d6a1e73f9c0ad2a98f91633c0ae480b7d41afd88c149b2675853951abac83604"
+      },
+      {
+        "file": "libfaad/analysis.h",
+        "sha256": "af73c6777d022030b16fdc67a4cbeb69aac0cee2833b433dc1fafccbff7ab154"
+      },
+      {
+        "file": "libfaad/bits.c",
+        "sha256": "03991ee5442807dc2bbff176c49cec7307a4d060487b832815439733d614584a"
+      },
+      {
+        "file": "libfaad/bits.h",
+        "sha256": "fc9722a1ffb2adc1b49c187964a8b83b174fb58b5d3deec011fbaae0ab9d584b"
+      },
+      {
+        "file": "libfaad/cfft.c",
+        "sha256": "343e4e60f9c1a84b881ed0fae9842b7b582adb3fce380245489e62fd4ddf6036"
+      },
+      {
+        "file": "libfaad/cfft.h",
+        "sha256": "01788d844bcddef19c43eba32bbe711496f2fe077c5472b2139bbd0bdf188166"
+      },
+      {
+        "file": "libfaad/cfft_tab.h",
+        "sha256": "3c6e286d7bd02e7d76bd5824b25b741f4d353d4091570dbb0b126a8e9bd60180"
+      },
+      {
+        "file": "libfaad/codebook/hcb.h",
+        "sha256": "3f8ef985deaf919a613e838ab31adbde6934faeb70b8e3437617400fac3483d9"
+      },
+      {
+        "file": "libfaad/codebook/hcb_1.h",
+        "sha256": "4fcb02db9a7250256c3ae33985aeb87575b798f07a1f18bdcf5beb937cf0cc69"
+      },
+      {
+        "file": "libfaad/codebook/hcb_10.h",
+        "sha256": "704bd3b858c57f83f70fadd2498b371161139f154bf36f9e07ad81cf1de46010"
+      },
+      {
+        "file": "libfaad/codebook/hcb_11.h",
+        "sha256": "2e2fe39de75eea1c1cd05c36e9945d7caf4f965fd842146a0f9984b984845d2a"
+      },
+      {
+        "file": "libfaad/codebook/hcb_2.h",
+        "sha256": "8155689a935f61801f307725dd961b313e623c8dc31d4833335f3177f22222ce"
+      },
+      {
+        "file": "libfaad/codebook/hcb_3.h",
+        "sha256": "284e9a7619f0fbab4b25dac98f273394a9ba9bf8929bac9f357b40d0ff73e0cd"
+      },
+      {
+        "file": "libfaad/codebook/hcb_4.h",
+        "sha256": "dbb8e17961ffae8833f1a9f5339ce4191e9b5319dfb5f87eda1ed3cad6b44565"
+      },
+      {
+        "file": "libfaad/codebook/hcb_5.h",
+        "sha256": "7a143f25099795047ac7721daaa21fbb4273e2c667a15a71a721e93217259834"
+      },
+      {
+        "file": "libfaad/codebook/hcb_6.h",
+        "sha256": "d3de78b899408449e7ae2b7eec8cd7849f3d5b092b24d911da0a9527a00df726"
+      },
+      {
+        "file": "libfaad/codebook/hcb_7.h",
+        "sha256": "ba76b9dd0c857f78d886c341b17dec3167481624a40d156937e6970e78efd12d"
+      },
+      {
+        "file": "libfaad/codebook/hcb_8.h",
+        "sha256": "afd334fe78a3606caa9c970ca5c830a5a9beb115dcfe001f9cdc6902be4f4deb"
+      },
+      {
+        "file": "libfaad/codebook/hcb_9.h",
+        "sha256": "3984cec578ccb2f8a4128147d3cae4c57fbce1fbf92ead69b9399e3ddb09eb2a"
+      },
+      {
+        "file": "libfaad/codebook/hcb_sf.h",
+        "sha256": "e4f0eb3cdfd92eb07dcb7f6a65ccd7222896448d52f03780bad60fe6cd472d30"
+      },
+      {
+        "file": "libfaad/common.c",
+        "sha256": "41cc893db064c738a87f0114b30c58c7a9c9ba9bc7c883a6801643d53a21e070"
+      },
+      {
+        "file": "libfaad/common.h",
+        "sha256": "88cfc69b43d42dcd3ede5cfe2306340a26b068d27cdd4479a45ed9e4e5e56606"
+      },
+      {
+        "file": "libfaad/decoder.c",
+        "sha256": "cc52e8f87ddcb22885368521395189c927e93a75717e946e7c9d4092e28a79ef"
+      },
+      {
+        "file": "libfaad/drc.c",
+        "sha256": "a7270e1d2df2f25c110d1bca7c5a1c6b52a9c95045d47cf7ef1224dbaa061d85"
+      },
+      {
+        "file": "libfaad/drc.h",
+        "sha256": "b8276857ba75317d09f94ac0e85d8c0544b1cb529e9dc02773ff0bddc650df5f"
+      },
+      {
+        "file": "libfaad/drm_dec.c",
+        "sha256": "251823e4f4703fce3698eb594eb610ed47c5b86139c64dcfb8b4b3edd6607ff5"
+      },
+      {
+        "file": "libfaad/drm_dec.h",
+        "sha256": "2d1d4813dd460716734e63e4e36d360781e2fc3a1cb22461c9560dedf29dddf0"
+      },
+      {
+        "file": "libfaad/error.c",
+        "sha256": "ece79c8933c44db33d590b43dbc8e485b6f4272ac64fb894ad0fc2553e3f975e"
+      },
+      {
+        "file": "libfaad/error.h",
+        "sha256": "6254d16fd521e748655f0963fb2a7d5e0db8c82d95990f49ced8d8cda684653f"
+      },
+      {
+        "file": "libfaad/filtbank.c",
+        "sha256": "8508f34b6e46db82bfb6ced592a7c11306424bce409b55b3b72f06ee0ad3e078"
+      },
+      {
+        "file": "libfaad/filtbank.h",
+        "sha256": "11592f21774c98d3af7e95789d932e9dae750c5466fbed9955bb6a14f4f68e35"
+      },
+      {
+        "file": "libfaad/fixed.h",
+        "sha256": "3560774879591d350879119424041f8a78dcc0415dea3bbb3f32ed75c07b7c3f"
+      },
+      {
+        "file": "libfaad/hcr.c",
+        "sha256": "08cfb7c0d330f69e8b3034d66d95c1b904300e2b368c3141cb268ba8672ae6ab"
+      },
+      {
+        "file": "libfaad/huffman.c",
+        "sha256": "78db9b36e572a0128b332d17e7dac4e2bac31ccec86c53715cf29c61cfd80571"
+      },
+      {
+        "file": "libfaad/huffman.h",
+        "sha256": "3255a478261e4653619e75ad00e7521b24ae04dbf9bd9797d88f7aa2f363240a"
+      },
+      {
+        "file": "libfaad/ic_predict.c",
+        "sha256": "299c56045f1ff4479f2f3f713de5d582fcc06ca47d88791037f8d17dd97603ad"
+      },
+      {
+        "file": "libfaad/ic_predict.h",
+        "sha256": "66f6d7a07fb8ead2fd198d0865a9997becc7407c6dabf4d30d2ee47998b15367"
+      },
+      {
+        "file": "libfaad/iq_table.h",
+        "sha256": "98ac95c5f1b925d34f0c729ed98120c8e8cfba36ec32500a8c78b0a622c5b226"
+      },
+      {
+        "file": "libfaad/is.c",
+        "sha256": "f518a975e2a538a40122334ff7bdbaab2b7dfd88c05f1099dac49786af943cd2"
+      },
+      {
+        "file": "libfaad/is.h",
+        "sha256": "b5b5fa65dc9c1625acadca4e41954ffcce9f5ea0a07e30f2da00465bd48f2402"
+      },
+      {
+        "file": "libfaad/kbd_win.h",
+        "sha256": "8b122c7ef5a9f60d4b92e178425ab85ece7efdeb7b157a8ed68d4ca46f8fa103"
+      },
+      {
+        "file": "libfaad/lt_predict.c",
+        "sha256": "679547b0b5d2f732271533217879d64abac07ede3dae79ca4433e53a523e2895"
+      },
+      {
+        "file": "libfaad/lt_predict.h",
+        "sha256": "c2bd2b8b4fcfe2ceef6e3c03cecf566906fa8bd6287ae2a462e60eac40fda4a0"
+      },
+      {
+        "file": "libfaad/mdct.c",
+        "sha256": "d3b8d456008d6f3921819bff88c61fcb021660ff9314a9693fd563820982d32f"
+      },
+      {
+        "file": "libfaad/mdct.h",
+        "sha256": "03eeda2a041c16f4426abcf99df21026cf89f30f12f68e9c486aaf16e74b0267"
+      },
+      {
+        "file": "libfaad/mdct_tab.h",
+        "sha256": "521c55e51ae4558de22f835e5bf9eb446837e262e424722f22fffe50d9cfac3e"
+      },
+      {
+        "file": "libfaad/mp4.c",
+        "sha256": "b98ff419f82ea1dee6e506ecc1b187993b12b5f55434468145839d5b40216de8"
+      },
+      {
+        "file": "libfaad/mp4.h",
+        "sha256": "61ef34580d5be4b1d7696c12e26132c2c97b7e40b53da94b1a2f3e8cddee76eb"
+      },
+      {
+        "file": "libfaad/ms.c",
+        "sha256": "d159cebe655afb52f2687260b0ba0771f497539a5e65ef6ccd270a8484f368c2"
+      },
+      {
+        "file": "libfaad/ms.h",
+        "sha256": "a673dea4924a3b902f13f5cd3e1e3018002905087f225c174073730eb6577a9f"
+      },
+      {
+        "file": "libfaad/output.c",
+        "sha256": "ca71be11584c21f1c8f985bae139174b08ae1064390e664cc20394d81a3371b6"
+      },
+      {
+        "file": "libfaad/output.h",
+        "sha256": "71c91166322a444acffd91b9518edb4e0b994dd2d8655fc0fd86a6ec192204ec"
+      },
+      {
+        "file": "libfaad/pns.c",
+        "sha256": "2af79635eb5577493082c7269eef75ed232f6045b54727676404cf2f70bb2fc9"
+      },
+      {
+        "file": "libfaad/pns.h",
+        "sha256": "521fd1ac69677ce12b024726187d16ac4e5f3b9cd59eb15e888fdc0741a486be"
+      },
+      {
+        "file": "libfaad/ps_dec.c",
+        "sha256": "14e5b089048d35e336e05f72a4c0a01e96a8232512bf563655cfb43320589b93"
+      },
+      {
+        "file": "libfaad/ps_dec.h",
+        "sha256": "5111eb67ab9edb381a0e785d478378fb7e425635ca85934b9203ab959e64ffc1"
+      },
+      {
+        "file": "libfaad/ps_syntax.c",
+        "sha256": "7433fdf875dbe28070b21fcca4585f54560b2dd27248feca46245039ab1c5ba2"
+      },
+      {
+        "file": "libfaad/ps_tables.h",
+        "sha256": "d150bd9818e0d4408e2c9ca48697c1fe8fcd3e4f251d873f9640a6049940601f"
+      },
+      {
+        "file": "libfaad/pulse.c",
+        "sha256": "952779da2203c280bfb613a209a424af80764e6a843ca2e0206dce0972968c67"
+      },
+      {
+        "file": "libfaad/pulse.h",
+        "sha256": "c1be1a789e043c78b41b508d5d74dade2a43f2dd66f44fa61846101c36e5bfcc"
+      },
+      {
+        "file": "libfaad/rvlc.c",
+        "sha256": "8006b46156515f793a72010fa498debc94140809feda33b810a58d25a4d6904e"
+      },
+      {
+        "file": "libfaad/rvlc.h",
+        "sha256": "57c0ad197f69963429d9e3fdbaba69cdba265376566fc2687786d2da77eb0d4e"
+      },
+      {
+        "file": "libfaad/sbr_dct.c",
+        "sha256": "b47ed81e3d9bd3d0d5171b8952aec4d57e9710cf5881a88e8cbf57739ae70c1d"
+      },
+      {
+        "file": "libfaad/sbr_dct.h",
+        "sha256": "16fcbff653f7e24a7c18d58b0c896c5f8016f5bf8a1367b3fcb1524dddaa41f8"
+      },
+      {
+        "file": "libfaad/sbr_dec.c",
+        "sha256": "f14cf9fa3990292f0243450b0a3f82dc4fd6f63fd97a140ec3a5bdd99cc5ae97"
+      },
+      {
+        "file": "libfaad/sbr_dec.h",
+        "sha256": "33ec51fd84f8d8886f61918089096804f56205f52c3232f7adf895cad991f5ff"
+      },
+      {
+        "file": "libfaad/sbr_e_nf.c",
+        "sha256": "c2085c5323ca371478c2f141d40d083de91a6f115fb47f1c1017d6b110ffd152"
+      },
+      {
+        "file": "libfaad/sbr_e_nf.h",
+        "sha256": "b198f04d77cfc46c6d41d49a68b9207bbe583313e925fbf7a762d8c11dff9aa3"
+      },
+      {
+        "file": "libfaad/sbr_fbt.c",
+        "sha256": "e761dfa84b4e1189b5e1aab04ed5a827bd088df10bf95c8c888afe028bfb0b00"
+      },
+      {
+        "file": "libfaad/sbr_fbt.h",
+        "sha256": "e2081713a0679a9ea09c8997162e43e0bc7e72cb7c443279edc8d2563b02c58e"
+      },
+      {
+        "file": "libfaad/sbr_hfadj.c",
+        "sha256": "9945115645f74d5e74fa9c209271fe41f4537779918e637e7ee15349a1a5767d"
+      },
+      {
+        "file": "libfaad/sbr_hfadj.h",
+        "sha256": "84d92ebae57454ae89a857fc851f94cfbc292343105fb7b06efdf996e2a95f5e"
+      },
+      {
+        "file": "libfaad/sbr_hfgen.c",
+        "sha256": "5262ab041a1cfde159db4d0ff10a5326f94db073bd0c5ed5c2c45de4317df44d"
+      },
+      {
+        "file": "libfaad/sbr_hfgen.h",
+        "sha256": "abe2902d76dedf1b9993045dc83ee5468e24383c9ee8c86318f00ae8adcfce1a"
+      },
+      {
+        "file": "libfaad/sbr_huff.c",
+        "sha256": "2cebd23eb6057abac521e28600c2301f1e4be2c52e794cdd432058545a91daa8"
+      },
+      {
+        "file": "libfaad/sbr_huff.h",
+        "sha256": "78ce6a6c6c6767fb5d28a33a83988ce45ce119136e0fbcaffb053b5e0b80d8d6"
+      },
+      {
+        "file": "libfaad/sbr_noise.h",
+        "sha256": "c19d4f60a263df1ff2433e354355c2ae66d76d76cd0eeae32450c52cc83dde6c"
+      },
+      {
+        "file": "libfaad/sbr_qmf.c",
+        "sha256": "9d80d7426b45ae3639ec66d02ff1d7936bc7b342333cef74e2243e2b7e51261a"
+      },
+      {
+        "file": "libfaad/sbr_qmf.h",
+        "sha256": "0d967455f3d327cff8e47fc83e08098ec26493597becf023cff7ad21494f3e78"
+      },
+      {
+        "file": "libfaad/sbr_qmf_c.h",
+        "sha256": "0b3a4b475d85a7dd3f80561e64108e24c219473337cad97a8c6326bdb36e8c4a"
+      },
+      {
+        "file": "libfaad/sbr_syntax.c",
+        "sha256": "3aa2bcf8dc56c9713b21ab914ed1ef541e2e66eb06ba2ed790bbd81aaeb80e65"
+      },
+      {
+        "file": "libfaad/sbr_syntax.h",
+        "sha256": "b09ae908b304a27897ed27669d24cee4e95133d2a3c9f31f93fa63a3d216f4df"
+      },
+      {
+        "file": "libfaad/sbr_tf_grid.c",
+        "sha256": "42589ef36c9a18d46ae3be52b7a88b0f3559532c732dd1c3043f7f197ee51970"
+      },
+      {
+        "file": "libfaad/sbr_tf_grid.h",
+        "sha256": "3999d5b1d5879724d0891a1d57306a04ce3516d94b126b28aac9a81585950647"
+      },
+      {
+        "file": "libfaad/sine_win.h",
+        "sha256": "e756622ec44ed145c1dadb87ff75ef1b3343f3cc9742dc255224681591034852"
+      },
+      {
+        "file": "libfaad/specrec.c",
+        "sha256": "6248f92897a19e335561c94fd750e213a9b03272968fd9412e8c8406cac020e4"
+      },
+      {
+        "file": "libfaad/specrec.h",
+        "sha256": "fc5727269f8f9a8c193942de7a048462a6e2b799bce3247ef3ab006f62b4dd01"
+      },
+      {
+        "file": "libfaad/ssr.c",
+        "sha256": "d018d261600ba210d30e6d0a98572635a6414be0eb1b7869c05c7412acfaf6df"
+      },
+      {
+        "file": "libfaad/ssr.h",
+        "sha256": "dcb60cb797f01982470ad36c891749fd155c84c89038254f438cb04f59bdb43c"
+      },
+      {
+        "file": "libfaad/ssr_fb.c",
+        "sha256": "eeb047484834af1f90c00522925eb9534bb7c8661780a7998f87fb64d6867c73"
+      },
+      {
+        "file": "libfaad/ssr_fb.h",
+        "sha256": "18a001f71ef8a2d5ba12bc86d12d86ce285342bbb982f8266020bf9d51875352"
+      },
+      {
+        "file": "libfaad/ssr_ipqf.c",
+        "sha256": "162942c2314395bd6d5751c8bd4ac0a223dd00a53307eab71944bbb2d827f655"
+      },
+      {
+        "file": "libfaad/ssr_ipqf.h",
+        "sha256": "ee4d81e864442821b362e477302c4492bc8cb90ab6570e2d289306afd4c00508"
+      },
+      {
+        "file": "libfaad/ssr_win.h",
+        "sha256": "4f68300d0dd74dbf63ff25895c001e8091f0c4b91edf4db1fa6a60051a49fd0a"
+      },
+      {
+        "file": "libfaad/structs.h",
+        "sha256": "584f3dcf447ee7bd0f0347ad3978a0d106f86326d9d772af4453a6b05d5555b5"
+      },
+      {
+        "file": "libfaad/syntax.c",
+        "sha256": "6b1194df4cdda4b3898852e5f63867352d27c6cfd4c0fc663b94425eeb613b96"
+      },
+      {
+        "file": "libfaad/syntax.h",
+        "sha256": "16e437e58c18f8e017f659052d795960a75612869d581fc970670ce8e560796c"
+      },
+      {
+        "file": "libfaad/tns.c",
+        "sha256": "62107c7a558715c15f399184735ad667f0d18b968859f86690819be3459fceb3"
+      },
+      {
+        "file": "libfaad/tns.h",
+        "sha256": "bb54392463cd1f62c7ccc913bd8ae8de3a355ece77c5e819af712e6cefe6ff05"
+      }
+    ]
+  },
+  {
+    "repository": "xiph/opus",
+    "commit": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6",
+    "path": "opus",
+    "upstream_files": [
+      {
+        "file": "COPYING",
+        "sha256": "cbd8bd07329a234413710c02b19d22c0cf78fc451882593e817130779b5455e3"
+      },
+      {
+        "file": "celt/_kiss_fft_guts.h",
+        "sha256": "43578f37345e81b12b269865c83bde93b0b2a5bccb3a1e2acafb7542b9e0ed9a"
+      },
+      {
+        "file": "celt/arch.h",
+        "sha256": "a11cf08ecc620e8679ece2ae2c79d0f4ebf9710f67addde77d038c39141e1ac8"
+      },
+      {
+        "file": "celt/arm/armcpu.h",
+        "sha256": "c6dac65ed3334537a77fabf464b109a92f0cfc3cd5a908450e05896d0d371fcc"
+      },
+      {
+        "file": "celt/arm/fft_arm.h",
+        "sha256": "d5de4af5db16c244551a81aee16aa2eba90dbe1ee6b34b96a61be2064d33a2f1"
+      },
+      {
+        "file": "celt/arm/fixed_arm64.h",
+        "sha256": "1b31352bbbc4ceb54417e8c8a5338b052f1bf025ede4055bdfe819724f3f4504"
+      },
+      {
+        "file": "celt/arm/fixed_armv4.h",
+        "sha256": "fdaf04e0d49211c55e8c2be0ea1582450288c48384d443c5261f32f1598e2b67"
+      },
+      {
+        "file": "celt/arm/fixed_armv5e.h",
+        "sha256": "95f10bdd79f708445fc9459c5458465657026be7310871860131724c53aa3140"
+      },
+      {
+        "file": "celt/arm/kiss_fft_armv4.h",
+        "sha256": "8c56627373562181703e4fc88155165dafdf31e66b6f474bad23325745d43afa"
+      },
+      {
+        "file": "celt/arm/kiss_fft_armv5e.h",
+        "sha256": "068d4f338ff708192c24e221d71ffc30c761b9f52c7a24eed1eae4014e6a4eab"
+      },
+      {
+        "file": "celt/arm/mdct_arm.h",
+        "sha256": "3d142f5c441c7a4fb7568b5dad762425a02aa5931bbbecc88ac185bfc8ffca18"
+      },
+      {
+        "file": "celt/arm/pitch_arm.h",
+        "sha256": "80b78b007334185e28ce2b73f996bd4698b56f82cdf8b34610862900d36bea48"
+      },
+      {
+        "file": "celt/bands.c",
+        "sha256": "d041ec3f59d96320fe80b1ebcffc68d06190aa387f393c917ca6fbe646915fe7"
+      },
+      {
+        "file": "celt/bands.h",
+        "sha256": "cd4b7712fb20da89f286b9c639cf08ef75be32a3cad1e067fbada5fbccb90a91"
+      },
+      {
+        "file": "celt/celt.c",
+        "sha256": "92c6589111b53737de435fff0371db31cb63676294339b48f203eedfa405d5ff"
+      },
+      {
+        "file": "celt/celt.h",
+        "sha256": "e77e9a62dc4ac716d9eda5263ed1d2674429df5d82365ae8dd55f21aebc8c0b2"
+      },
+      {
+        "file": "celt/celt_decoder.c",
+        "sha256": "f99ea0a88f5107fb09fdce03e5529883df0792c7a78315378add761385eab7fc"
+      },
+      {
+        "file": "celt/celt_encoder.c",
+        "sha256": "cb68b83fed24ba0dc4d29a1eaf7d2651e0f74ecf2a473540646b4cc363234040"
+      },
+      {
+        "file": "celt/celt_lpc.c",
+        "sha256": "9b307f6844b25c9bdf1781b6768d40704976bcc3373845f2471649ac910da2bd"
+      },
+      {
+        "file": "celt/celt_lpc.h",
+        "sha256": "d61b04516d71ca7841e1f87d4c496226d1327b3f73a16e657cab11904a2bb882"
+      },
+      {
+        "file": "celt/cpu_support.h",
+        "sha256": "5b6c5765395ced79b94ba6714a14052e4fcc9a5ab2755a0c2f5d8f7ff50227f9"
+      },
+      {
+        "file": "celt/cwrs.c",
+        "sha256": "5aca0ddaad6a0d9ff70916f1e1b8592d33c431f05458592ccf7a22f378647647"
+      },
+      {
+        "file": "celt/cwrs.h",
+        "sha256": "477c3e2f39d442964b81f2a7472c446809484ff74214014eaf98da41fca35158"
+      },
+      {
+        "file": "celt/dump_modes/dump_modes_arch.h",
+        "sha256": "0c1eda5d1387700e9e3e6f51885ac24c9400e56f1b1014f1ff0442bd4aec1db8"
+      },
+      {
+        "file": "celt/ecintrin.h",
+        "sha256": "7d5993e268f74a9849951c40ce01daaa632a4f7ee9cb2dc2b186809accaac665"
+      },
+      {
+        "file": "celt/entcode.c",
+        "sha256": "c2c92d3cf228b888b895b21c085497f3f1d6b91d6790046d1a5d322a897c2aa3"
+      },
+      {
+        "file": "celt/entcode.h",
+        "sha256": "0ad44477c22348435a6848bd223862779768fec38dbd297b7bafa77a4514b97c"
+      },
+      {
+        "file": "celt/entdec.c",
+        "sha256": "c6049ea7fcc7f6d04c64ce0acbd8e78fb1d462b03572d705b946db4e3a56b772"
+      },
+      {
+        "file": "celt/entdec.h",
+        "sha256": "48f0699ff2a42e934209f2e6bcf9df34304c95cf4f5efebe1a46a219ae741bf2"
+      },
+      {
+        "file": "celt/entenc.c",
+        "sha256": "630146af57a6eff610d1ad6288b7902e5ee07a714555635398bc93d755c5cc00"
+      },
+      {
+        "file": "celt/entenc.h",
+        "sha256": "181b51b4f4fb117baadf8f07f1f3cb6ab5c33626bf014ae2a19430fc24410b25"
+      },
+      {
+        "file": "celt/fixed_c5x.h",
+        "sha256": "d0b9ced74266dad91b15675e0c8c234c274009c514186eb63423a23d9f97eac0"
+      },
+      {
+        "file": "celt/fixed_c6x.h",
+        "sha256": "0119a780dc966221562d53186855e7aa176e7b2f3284eed82b3055b157f7454d"
+      },
+      {
+        "file": "celt/fixed_debug.h",
+        "sha256": "3d2e8df803225fb4da2440ad4417f774f2fc66287112b30c71608d730de7deb5"
+      },
+      {
+        "file": "celt/fixed_generic.h",
+        "sha256": "bcc2c3cd0d8cd691a2b09af92756c3d8d845aa175ea7b6dca6c8ddc2b32b64e3"
+      },
+      {
+        "file": "celt/float_cast.h",
+        "sha256": "c9fc5637177cfa7cd2f886f3a8b4b6712256dec7f075115441ea425ee071c6ae"
+      },
+      {
+        "file": "celt/kiss_fft.c",
+        "sha256": "4bcff72f22faec6a39a980f0066dd4b865dc1e5f6f486816188d15fca5e9a7a8"
+      },
+      {
+        "file": "celt/kiss_fft.h",
+        "sha256": "f7a03ea6b505e319a6ba895b2c83cf62b51168a0a6d7ae7f5ebc2f3d2ce3d1c0"
+      },
+      {
+        "file": "celt/laplace.c",
+        "sha256": "9289fcc05c5572c66d05f5cc63a894eff11fc5cb83a2f757f75496a5329bc306"
+      },
+      {
+        "file": "celt/laplace.h",
+        "sha256": "272da1987c4ac956110089c5515c7de548aeb7115a1d3e623e17333b2a7465f7"
+      },
+      {
+        "file": "celt/mathops.c",
+        "sha256": "c8657e7d58e042556700696ad39a1291577bd0cdee2bd7b3d52d48c5846abe88"
+      },
+      {
+        "file": "celt/mathops.h",
+        "sha256": "6dc3bda5549025e31c20d3d767495c972157809a45a102ea8c05c1dc32c1f602"
+      },
+      {
+        "file": "celt/mdct.c",
+        "sha256": "03d3b6dd212e08c9253206ec57b84d5ee19b6d15a4a51242e12a4ae1846e5776"
+      },
+      {
+        "file": "celt/mdct.h",
+        "sha256": "271ee5a406965e5e59f1f1afcea8b49c0d43ddd1d06676ab70d41cc07c96631f"
+      },
+      {
+        "file": "celt/mfrngcod.h",
+        "sha256": "20825cc6a0827b3961ea23dbf252f8a8dac2122e3546492988175a5b36d84a7b"
+      },
+      {
+        "file": "celt/mips/celt_mipsr1.h",
+        "sha256": "218302a9b5ac155e3bb25d53962595dd29c0fcb27b056aae4dd8b56a80602390"
+      },
+      {
+        "file": "celt/mips/fixed_generic_mipsr1.h",
+        "sha256": "18074f69778b2b8a28f63a7e54da25089115995140bc466165451b271eb17576"
+      },
+      {
+        "file": "celt/mips/kiss_fft_mipsr1.h",
+        "sha256": "796ba7447387e6428300224f14c38c12efd18647af838a68d143f683aad1e246"
+      },
+      {
+        "file": "celt/mips/mdct_mipsr1.h",
+        "sha256": "c2c95f5a0c7330af8e351d4c4d3dff80711ee559f7021ad2160c2ce563230afe"
+      },
+      {
+        "file": "celt/mips/pitch_mipsr1.h",
+        "sha256": "5bd471fdcd7c880f7d6727026f190fb57dd64ee2c8bbadcd63ac67d8bdc78753"
+      },
+      {
+        "file": "celt/mips/vq_mipsr1.h",
+        "sha256": "446d4f415b2e3e2517645d8a163aa869ca3c891a10e102d14064c816c27257ae"
+      },
+      {
+        "file": "celt/modes.c",
+        "sha256": "2412516bbf41622cf4008bd55a5b9230c0cbf25b1063c01fa7f0a9664335757f"
+      },
+      {
+        "file": "celt/modes.h",
+        "sha256": "0af901fc570ec207f5ceecd2b577fadecf1ffb71ce8455ef9055b5c6f2cfeb58"
+      },
+      {
+        "file": "celt/os_support.h",
+        "sha256": "5500be27fef487b263e5e054c3ac4ad9c4538d96fc2620142daa21aeae7a4585"
+      },
+      {
+        "file": "celt/pitch.c",
+        "sha256": "64c556922cb8aad358a9972887c805cd63172511ac713da206afbefbdc3e99ae"
+      },
+      {
+        "file": "celt/pitch.h",
+        "sha256": "bb88e06f6768722add06bb44b4bf2211a0caaed1daf8060ecb1ddbe98d680984"
+      },
+      {
+        "file": "celt/quant_bands.c",
+        "sha256": "3cbb76e4072da136d4ee96bc4cce8fa8f7dee706f6089062fbcab32f09ee7edd"
+      },
+      {
+        "file": "celt/quant_bands.h",
+        "sha256": "2d6b46389486143ab1438ae8b7107610b4dd00c6b1a483ad43371f37eb7e3560"
+      },
+      {
+        "file": "celt/rate.c",
+        "sha256": "65f0993071aad6cf28a839167df39dc9e27c084e50a34dfed5d0402cc26134e1"
+      },
+      {
+        "file": "celt/rate.h",
+        "sha256": "4b2fc6e67e0d540924560e895c2d454da9cf26c9d142b80d51180d2c786c836c"
+      },
+      {
+        "file": "celt/stack_alloc.h",
+        "sha256": "8eb93c08fa7e8cbd3c97e3b63947e3c3500488194b491348e2f96aaecfc165c1"
+      },
+      {
+        "file": "celt/static_modes_fixed.h",
+        "sha256": "ae38e63dba3b33becb1e79b4102505be08e608563c06f9f3258d1a85a459053f"
+      },
+      {
+        "file": "celt/static_modes_fixed_arm_ne10.h",
+        "sha256": "4ba43f28737071847854d6c3e259ece1a3b50c6a345264dee5a3321687140139"
+      },
+      {
+        "file": "celt/static_modes_float.h",
+        "sha256": "bb2a30bf9d78107ce13b3e573baec908bde6eca27cc2ba091dcc98e7a8182a17"
+      },
+      {
+        "file": "celt/static_modes_float_arm_ne10.h",
+        "sha256": "13b49d287a3b581f7a3c6cef4c0f9c0e78bf3edb912dd4265b4b21a004ac95aa"
+      },
+      {
+        "file": "celt/vq.c",
+        "sha256": "f5bbe2da9a8764dacc3d03b619e66ec9781b0b4f85abfbfea22df186a710e00f"
+      },
+      {
+        "file": "celt/vq.h",
+        "sha256": "1270782318965660346ebafb6f5e9ef00291853bdfc5bb97173ba5325b91ef86"
+      },
+      {
+        "file": "celt/x86/celt_lpc_sse.h",
+        "sha256": "63e03cd0a9ca9338f62c71beeece0c5580b6e9608507f04a316bf39b837d6e2c"
+      },
+      {
+        "file": "celt/x86/pitch_sse.h",
+        "sha256": "b2e3c7614bd6c863cb7f67c3c10490207117f8661e86767daec43684bc65a3a8"
+      },
+      {
+        "file": "celt/x86/vq_sse.h",
+        "sha256": "6c9575f49c1e4df54e4bde91da33a4a416e7b77961d03d912320e30dcc798b83"
+      },
+      {
+        "file": "celt/x86/x86_arch_macros.h",
+        "sha256": "b2c526c7364c6aa3aad6318664f85d304588781b6087dc5a783b001c1379cca0"
+      },
+      {
+        "file": "celt/x86/x86cpu.h",
+        "sha256": "383d1e92fdee01de75db2c5dbb5d9e44d53fca4434bb24b548caab6b668b9cfe"
+      },
+      {
+        "file": "dnn/arm/dnn_arm.h",
+        "sha256": "856d19fe87a08a2af957d512a54330f000a87e17d1a06c2458a0cd157a637f9b"
+      },
+      {
+        "file": "dnn/burg.h",
+        "sha256": "3f468ad12aebae961634bd8329cd4931b668d143c925ddb2d405b82595e59bde"
+      },
+      {
+        "file": "dnn/common.h",
+        "sha256": "316ae258eb4b8e10aa936547a718aa008740ec81272ce3458b9e978ffede1b72"
+      },
+      {
+        "file": "dnn/dred_coding.h",
+        "sha256": "5948e5afb6efedc04947f91da62918ad30ab1a6922cc92874a06a55207cc87a2"
+      },
+      {
+        "file": "dnn/dred_config.h",
+        "sha256": "2349d035c7efd7d1f55b0cdb552fdca65f9181700c8200021489b41f88fdd1d4"
+      },
+      {
+        "file": "dnn/dred_decoder.h",
+        "sha256": "4b1c5e1f2371de850627ebfcffa2a35d3740c210b6c05bec5d2b3d945a20298d"
+      },
+      {
+        "file": "dnn/dred_encoder.h",
+        "sha256": "93d271392a7a5c2efe19249c2e57a463d2b6c66ea9b216ac2ce5a99160d62fc2"
+      },
+      {
+        "file": "dnn/dred_rdovae.h",
+        "sha256": "aa986e16b6aa719e15a0c55ebf2aaf9ce2756ec0f35dd25c3be0399a3781d4b4"
+      },
+      {
+        "file": "dnn/dred_rdovae_dec.h",
+        "sha256": "9c10d344b6e803b04e692d885a23a2ddff1ddfd28a805d0dc0cf6624a3eeadea"
+      },
+      {
+        "file": "dnn/dred_rdovae_enc.h",
+        "sha256": "7660129cf7d4d9b4a02f9b4d343e0c264626541e9a0ac220375730181fe51fcd"
+      },
+      {
+        "file": "dnn/fargan.h",
+        "sha256": "4caad602b91ca3519cff1f38f0e75c6b90f9d20daa9b799c7b6697fda432732e"
+      },
+      {
+        "file": "dnn/freq.h",
+        "sha256": "d107737a043384c16d358f4d4705f5dfb530d412557cdcaadca10f1bcaf61ffd"
+      },
+      {
+        "file": "dnn/fwgan.h",
+        "sha256": "c14de3a04fe1ba14db567c27b43675d9dbdf7d059357e0bc83a246caacbcfa94"
+      },
+      {
+        "file": "dnn/kiss99.h",
+        "sha256": "74af10ec2bbe5b0f448c4509dd207ba4c69ca87cfe841ed76d12ba8619d70c70"
+      },
+      {
+        "file": "dnn/lossgen.h",
+        "sha256": "f36574e1f58cbb95cd2c29df9525fe410329a0937b2086dbe4ace9dd104e0595"
+      },
+      {
+        "file": "dnn/lpcnet.h",
+        "sha256": "5d009133c7cc8e83f1cb70c8f956707bf67aaeaf3b4c576c81c131a9b1481a58"
+      },
+      {
+        "file": "dnn/lpcnet_private.h",
+        "sha256": "bc5ed41ea62262b8dd16c0c9f8872c0acd516b99734709af8c3e38e8431321bc"
+      },
+      {
+        "file": "dnn/nndsp.h",
+        "sha256": "f72709a889f0d2bdff0202f7e0b2bd5ffa0cbf94d6ceb5205fac59b889cfb1f0"
+      },
+      {
+        "file": "dnn/nnet.h",
+        "sha256": "5096a64b9d022da1e9e644fccfb49e34615aed9115fc9cc7f720f00d4fa48424"
+      },
+      {
+        "file": "dnn/nnet_arch.h",
+        "sha256": "ed89eecec23fd6bb6aecd828c241a6908d7ca073da1d9a4621d0692532bf7d72"
+      },
+      {
+        "file": "dnn/osce.h",
+        "sha256": "15088b3346ed173cf405ee7e89048dc46424dc8f52f500ca7a801bc752ed0acd"
+      },
+      {
+        "file": "dnn/osce_config.h",
+        "sha256": "6fa25e028f48bc095d184a469b29106b332bb1f2b0e60a97155b104cf24f9bf7"
+      },
+      {
+        "file": "dnn/osce_features.h",
+        "sha256": "81c1cca20979cbe1cb1f01eba78379f487eaf870d02ea9d93982d20eed831495"
+      },
+      {
+        "file": "dnn/osce_structs.h",
+        "sha256": "2a4e0aa099f47e3dac4bb5efdd2f12e067211c18eff8013682f9f18446337acc"
+      },
+      {
+        "file": "dnn/pitchdnn.h",
+        "sha256": "bcf0bc192e5a2e7bdefc8bb86f05680ac097303a1ef548b6f561d55fde25e399"
+      },
+      {
+        "file": "dnn/tansig_table.h",
+        "sha256": "f01f2a286bb04c09ace2468eb77d35e1ced4d891112e7ff939ffd58962d0c51e"
+      },
+      {
+        "file": "dnn/torch/rdovae/packets/fec_packets.h",
+        "sha256": "a89221f4389710a1e5e0348037143ef6c37b8014bc9be649f8ca40a291dc4752"
+      },
+      {
+        "file": "dnn/training_tf2/fec_packets.h",
+        "sha256": "0e090f23f22154dbb19e5dfce902c81a5ef33a2f35753aed4679840e84326a9e"
+      },
+      {
+        "file": "dnn/vec.h",
+        "sha256": "c121f59f771826f6e9a53c4de99afbd462247102f2e124084281a5286e42e5ce"
+      },
+      {
+        "file": "dnn/vec_avx.h",
+        "sha256": "07e6cfe3c20d6cc7df8331faec20313ecfd9d803c957a05187dcaadf3ad7f62a"
+      },
+      {
+        "file": "dnn/vec_neon.h",
+        "sha256": "7475dc7197912e17cee8c0acb150c139be3b1db16d4662e894f9faecc8b7bcbd"
+      },
+      {
+        "file": "dnn/x86/dnn_x86.h",
+        "sha256": "a6c00fff53348e438ed8b97625eb3230040b31ac6ff015ee077399fc16caca22"
+      },
+      {
+        "file": "include/opus.h",
+        "sha256": "eaa5669afd474e6dba6917d52cdad32bea8653f31c94e187d2fc1c3c640610ca"
+      },
+      {
+        "file": "include/opus_custom.h",
+        "sha256": "526bf7770dfd0c82cbbbc2b89b09758e5fe44567de3edad905e7f0f70e681b1c"
+      },
+      {
+        "file": "include/opus_defines.h",
+        "sha256": "927373ef41502eda937e08fcabe17b92a7b1f5aca16f81cd5a03b017bcf69119"
+      },
+      {
+        "file": "include/opus_multistream.h",
+        "sha256": "0279c7626ea259c7f52035ec73d60ae2af6e02393991a9dcdcaffe11e0755782"
+      },
+      {
+        "file": "include/opus_projection.h",
+        "sha256": "ec600ceb8fa655d0dcbe44bc5c6eb62d12612c7c24831e73aee26daa84501bd2"
+      },
+      {
+        "file": "include/opus_types.h",
+        "sha256": "e7c71855cee349876cae8bc6c755542e90302614ebfc339f21f32beab07adb11"
+      },
+      {
+        "file": "silk/A2NLSF.c",
+        "sha256": "facaae33f493f7c3d6bfa930f34d7c97b3e4ebcd7e7e6654af7f36174d3712d8"
+      },
+      {
+        "file": "silk/API.h",
+        "sha256": "b23f8305c7888b0ad4b0e5d6b0819d3732a89fac3eb88b989e0116c4112bc07d"
+      },
+      {
+        "file": "silk/CNG.c",
+        "sha256": "a3938ba0cab4214fb6070f523fef048834ef77d87ca249af9b505178bef01793"
+      },
+      {
+        "file": "silk/HP_variable_cutoff.c",
+        "sha256": "eb749c230b5830932014edd57017f09aaedc3f486c221fe7ea543b04cd88b2d5"
+      },
+      {
+        "file": "silk/Inlines.h",
+        "sha256": "4964bc1ec32e5b9a7ad36a02f592e81617e2459f5a553e9a1928acdf6b5c9c21"
+      },
+      {
+        "file": "silk/LPC_analysis_filter.c",
+        "sha256": "31893cbdc4de017af52b00e5e5fb6bee4c71055b851cbde4edaab142fa99160f"
+      },
+      {
+        "file": "silk/LPC_fit.c",
+        "sha256": "c13a149e71063543743b5e7ad451566acbf2a7b67f9da75f363d9e1e07c8a6f7"
+      },
+      {
+        "file": "silk/LPC_inv_pred_gain.c",
+        "sha256": "16542b173377e6782ba63a29699f2a674ed191de1bcef0d00b94cf81772f120a"
+      },
+      {
+        "file": "silk/LP_variable_cutoff.c",
+        "sha256": "6ef8053a77422e23e2048959db7d02e14e64aa01fd72720275602a870cf3f015"
+      },
+      {
+        "file": "silk/MacroCount.h",
+        "sha256": "bf3ccef3950e0834adabe56a90dd58f2ab4be0cd639009645a52e8ffb92eaf85"
+      },
+      {
+        "file": "silk/MacroDebug.h",
+        "sha256": "d9b2762ad8ac152438de41708f8736f7477936af0b2ee8a85ade968288eab744"
+      },
+      {
+        "file": "silk/NLSF2A.c",
+        "sha256": "4a3ace06b100ac0d4dd002340926adfdda05abd81c4854a89ff824a10cf3860f"
+      },
+      {
+        "file": "silk/NLSF_VQ.c",
+        "sha256": "167f7fea994e542fbedfccf158686fb5059bb0bdd0d49759fe84ed66528ce3ed"
+      },
+      {
+        "file": "silk/NLSF_VQ_weights_laroia.c",
+        "sha256": "52a9f4e650d0e53946bee4b4b2dde4172d64ef8ed39e36839b0071f2e8f44464"
+      },
+      {
+        "file": "silk/NLSF_decode.c",
+        "sha256": "62e6d72aee29ef45ef4f5b8b3e6cc17b5acc6dacefa1a95d947f6dae094707ab"
+      },
+      {
+        "file": "silk/NLSF_del_dec_quant.c",
+        "sha256": "bac5227b55d51b3eefa2d3287a538968bc300acd024ec054541dd443f6637790"
+      },
+      {
+        "file": "silk/NLSF_encode.c",
+        "sha256": "70ecf51b54774db3c2d40ad36328a54bd6253f4adacb752651d3f28c432f6149"
+      },
+      {
+        "file": "silk/NLSF_stabilize.c",
+        "sha256": "3ebb5504e65f270383da12cd12a53e2245db5a0dc0d9bfdcf378fb4313344677"
+      },
+      {
+        "file": "silk/NLSF_unpack.c",
+        "sha256": "ed80108681928457393b34848b2946eeb3cb43b3b9d3560c5f934b183f81f5cb"
+      },
+      {
+        "file": "silk/NSQ.c",
+        "sha256": "721726f783dfc5a81f8362268887e3d4e90d0de3175c9c14e7cb18155eb832c8"
+      },
+      {
+        "file": "silk/NSQ.h",
+        "sha256": "4232ebd8f493bc36b4e45a906f802326de0859092c58f689068b724cc3eeee08"
+      },
+      {
+        "file": "silk/NSQ_del_dec.c",
+        "sha256": "cb7f30e773d141f7b0fcaff1aa45ca7ed36a052a0b39b3c1e6c2da6fcf6d8f75"
+      },
+      {
+        "file": "silk/PLC.c",
+        "sha256": "a4a8d2b2256a9b1edcbb4c528af9ae3168425a12c166ae59ec23d7a323ceb5cb"
+      },
+      {
+        "file": "silk/PLC.h",
+        "sha256": "6d1c1cf42ab7a1a704a10782163d2cfaf616a1cee1378605238c9fb4c4532c9c"
+      },
+      {
+        "file": "silk/SigProc_FIX.h",
+        "sha256": "09b00afb73e4ee7181601a1b5f5f549f17a2ccf333a5f14761e5a87d0c68efb7"
+      },
+      {
+        "file": "silk/VAD.c",
+        "sha256": "47bfa112076ba4124d248c88cfbcd3df732268eefb97330e1fd7c1652f8f9d9a"
+      },
+      {
+        "file": "silk/VQ_WMat_EC.c",
+        "sha256": "ceae7000e09f0e2acc4850dea8150abb5baa1aa7452fe0b1a7abf46178519cfe"
+      },
+      {
+        "file": "silk/ana_filt_bank_1.c",
+        "sha256": "887f3e3df76ef1a195caeafaef10e6df1fd6f9fcd6c75cb8a3b38fdd27d2909d"
+      },
+      {
+        "file": "silk/arm/LPC_inv_pred_gain_arm.h",
+        "sha256": "310171fb126af85352f9234718f1ba1eb32856107680c91459c7429d703012f5"
+      },
+      {
+        "file": "silk/arm/NSQ_del_dec_arm.h",
+        "sha256": "b9b040bf3395e62ab11f8b846549fb6c2f9ff2b96067544312e96953a11bfde1"
+      },
+      {
+        "file": "silk/arm/NSQ_neon.h",
+        "sha256": "4d4f91c3515fb080f7abed1979d2167f23f6ccd9a90867f731895f9d03065d2a"
+      },
+      {
+        "file": "silk/arm/SigProc_FIX_armv4.h",
+        "sha256": "27d918ea14db21332265d369b8d2891a926de3cf1f0b5b48fcc16f1d9701654a"
+      },
+      {
+        "file": "silk/arm/SigProc_FIX_armv5e.h",
+        "sha256": "ca09a5d0986069bb382a671566b1f3e259099815c7dd61aa034efb8ade2a9934"
+      },
+      {
+        "file": "silk/arm/biquad_alt_arm.h",
+        "sha256": "6e7d3193b2e15c29447047d7e95f5757e9d5b15d3344c105141cb909f4c05216"
+      },
+      {
+        "file": "silk/arm/macros_arm64.h",
+        "sha256": "e0465a2f0a051afcf4ab72a2583b3721844ca827ab98880865416aa6802dc839"
+      },
+      {
+        "file": "silk/arm/macros_armv4.h",
+        "sha256": "b96bcd2351fbe72d6dcf7772d9fa23885554f931a6a35ef693017789a143a7d5"
+      },
+      {
+        "file": "silk/arm/macros_armv5e.h",
+        "sha256": "dd0432301a3c08bc5123470a38d75f012c34e1112c58213c22a56f8b7dbea659"
+      },
+      {
+        "file": "silk/biquad_alt.c",
+        "sha256": "7ecbc633c0b6011da057684e9062bb167fa79b2fe6a6343c81b44f5afe4b1aae"
+      },
+      {
+        "file": "silk/bwexpander.c",
+        "sha256": "c09bc94a5add19b09e3550ac613262ce00a565b8dfda22f082e199be4a39fe09"
+      },
+      {
+        "file": "silk/bwexpander_32.c",
+        "sha256": "a33a6e25a25ea6c7c32cc61893d53c5e9d2c2b8851dd59ec5ecd364798c7bbdb"
+      },
+      {
+        "file": "silk/check_control_input.c",
+        "sha256": "1b4b08374b88b27a8fab9c4d6c8eab9bbeac115526e4bafcffa92275b9bfe452"
+      },
+      {
+        "file": "silk/code_signs.c",
+        "sha256": "e18d3e6439abe8061edae3cf586ab2f7c310616c6f661ac49eefdc229776b7c8"
+      },
+      {
+        "file": "silk/control.h",
+        "sha256": "2e79e6cc80f1da5104888216b510b951f109b8e1c4891114b1e9ba7167d394b4"
+      },
+      {
+        "file": "silk/control_SNR.c",
+        "sha256": "e7e8dc39f1e520621fb8c2331b7f2de30657bf9e739ec6c0e0fca33e7f09a616"
+      },
+      {
+        "file": "silk/control_audio_bandwidth.c",
+        "sha256": "df9a140ed06746a382c61a05c865dde1a4dfae4bbedd82084072e848f27a3a94"
+      },
+      {
+        "file": "silk/control_codec.c",
+        "sha256": "77f50fcb34ebb2ca5923e514e8f91db1437b2f00f588827321f8a64edf68af89"
+      },
+      {
+        "file": "silk/debug.c",
+        "sha256": "2f9b82c29df1332473643ccb0b8aca92004c40fdb126e1efc28a6a7e16e3348f"
+      },
+      {
+        "file": "silk/debug.h",
+        "sha256": "7fb52f625df3be031774e9c994770d28d139ba7d650fd8d24307b3b466b59fe5"
+      },
+      {
+        "file": "silk/dec_API.c",
+        "sha256": "fbb52ced535c492193942a2bc70276f1aa37e8af60d5bc27a814ad11ca29826a"
+      },
+      {
+        "file": "silk/decode_core.c",
+        "sha256": "4064b540139e80e9ac285d7a17bd2a963a5d520ed258fbb38bd346a91e1967e1"
+      },
+      {
+        "file": "silk/decode_frame.c",
+        "sha256": "9dc784078088bfd6cf394134d8ee92bb33c9830d117410f1f699d8123831c123"
+      },
+      {
+        "file": "silk/decode_indices.c",
+        "sha256": "81edb764d89d8f005477d0fef6cdb73a201dbd21f5678620851ed3286f5dee11"
+      },
+      {
+        "file": "silk/decode_parameters.c",
+        "sha256": "58d837b5ba57d907f430e4a99f4d76a159a75c84924ff2eaf5270c4019fe864f"
+      },
+      {
+        "file": "silk/decode_pitch.c",
+        "sha256": "bf0d66f0ea8ab2d272be9b6b6c21a92d4dcd30470b1d875d90da2a873a9f3ab6"
+      },
+      {
+        "file": "silk/decode_pulses.c",
+        "sha256": "ea9c762a68ddc6aae1395ec9961d360ae94347f1b30752edcf025cf2273b9918"
+      },
+      {
+        "file": "silk/decoder_set_fs.c",
+        "sha256": "4ccaac08cf1759a746e8f6c9eaac0fc9c505760b9cbcff182d1c7429d3a69b7f"
+      },
+      {
+        "file": "silk/define.h",
+        "sha256": "fe9248abd9e24bcdd0c225631a8ea94bcad90fad0248385eb10941a0d642ccb3"
+      },
+      {
+        "file": "silk/enc_API.c",
+        "sha256": "20f717b45bee3d0ac652be74ad8d3c2b0788ea1c2b17465ee06903cfee748ebf"
+      },
+      {
+        "file": "silk/encode_indices.c",
+        "sha256": "606bad2e35e735b74b43c9029ab2a16e1e63434bfd39a6fdb30879e0758379fc"
+      },
+      {
+        "file": "silk/encode_pulses.c",
+        "sha256": "3199f10ea514165c1ce4f55662f26a0e33cc34fadec398ca3b1efe86429fcbc4"
+      },
+      {
+        "file": "silk/errors.h",
+        "sha256": "c79a6c0f886588ecfd07cfa908a714b57e26848830ab2a368a539f043ffcc3b2"
+      },
+      {
+        "file": "silk/fixed/LTP_analysis_filter_FIX.c",
+        "sha256": "e184e35e9174f512813ba8b3cc5f575bd9a5a90be6f8a45300171099500eb297"
+      },
+      {
+        "file": "silk/fixed/LTP_scale_ctrl_FIX.c",
+        "sha256": "eb01bdba646dee69ed231b26e40808be64649c1716c00009b2a67d372f42cb89"
+      },
+      {
+        "file": "silk/fixed/apply_sine_window_FIX.c",
+        "sha256": "6d8b83b254b965ad0c93d92aba4b8c03eeb4d23946fdbc8a51d6119b639c93d2"
+      },
+      {
+        "file": "silk/fixed/arm/warped_autocorrelation_FIX_arm.h",
+        "sha256": "5a2d4309058617e28611e8cd58b99b690bf011b59d64b6d52a7ad203794d7869"
+      },
+      {
+        "file": "silk/fixed/autocorr_FIX.c",
+        "sha256": "27d870d4433a4d5ef89dd03a6649195e3d18573b85e81747289b7467a658761b"
+      },
+      {
+        "file": "silk/fixed/burg_modified_FIX.c",
+        "sha256": "9e7f1197b27f8401420ceda6ced066f39043c79d9da1714c37df56e629e56af2"
+      },
+      {
+        "file": "silk/fixed/corrMatrix_FIX.c",
+        "sha256": "a21a75dbc587ec22e4ac9707f1f3edb6cae1b5d498ecf46e4b705b1106caa5d3"
+      },
+      {
+        "file": "silk/fixed/encode_frame_FIX.c",
+        "sha256": "409e17f0637a21c65e1ece9fff6211d479f60fa5528837aadc0b694e56f69fc4"
+      },
+      {
+        "file": "silk/fixed/find_LPC_FIX.c",
+        "sha256": "ad65ee9b0a2dbdb859a6ac441006d05a70702203625920c152681f3b04ad1c97"
+      },
+      {
+        "file": "silk/fixed/find_LTP_FIX.c",
+        "sha256": "deb7894960531379945d1e474906d4eb2847de227a037708e4bdb25cb84f50e0"
+      },
+      {
+        "file": "silk/fixed/find_pitch_lags_FIX.c",
+        "sha256": "e19f5f021ab17f2855b6b88629b1e9503ddda6b62b268a5bd8a619149df71a47"
+      },
+      {
+        "file": "silk/fixed/find_pred_coefs_FIX.c",
+        "sha256": "9fc786948eb38053b78ce615758421f6f25bb9eb04431c873a8d3c76587711d9"
+      },
+      {
+        "file": "silk/fixed/k2a_FIX.c",
+        "sha256": "ec63b130b6cc8e0b9fc1e934e9ea324f55a9bd7effddea20907cedd9fe09905a"
+      },
+      {
+        "file": "silk/fixed/k2a_Q16_FIX.c",
+        "sha256": "5455268dea03e8a2ab9505e9eed276f4504492cb82b2e3cb3f94a51b4920f028"
+      },
+      {
+        "file": "silk/fixed/main_FIX.h",
+        "sha256": "7627d537f1a7df7b6312d2f6d29bd217f05a20f0d78618716a5ee59daf588826"
+      },
+      {
+        "file": "silk/fixed/mips/noise_shape_analysis_FIX_mipsr1.h",
+        "sha256": "e3259f4b0e75e9301b7a71495ee3753d5ffb0044dbfbb39878222b435388ecb9"
+      },
+      {
+        "file": "silk/fixed/mips/prefilter_FIX_mipsr1.h",
+        "sha256": "b3f2421de236cb6fa9f588f023ce7abe5c45b3347953b2f78194f7ed15596549"
+      },
+      {
+        "file": "silk/fixed/mips/warped_autocorrelation_FIX_mipsr1.h",
+        "sha256": "1d079a09352a45d02ea4bbd9286728524e0b7ab599f819af12c7b053d6548362"
+      },
+      {
+        "file": "silk/fixed/noise_shape_analysis_FIX.c",
+        "sha256": "e81c1d2e7c90ac8ccee3968d4ac359cdbd47e16174049fe6621d4a7c579a5ed0"
+      },
+      {
+        "file": "silk/fixed/pitch_analysis_core_FIX.c",
+        "sha256": "ba6e58f02e15f1c69ff3251ad09e1de75cf722100024d93014454d9c00184705"
+      },
+      {
+        "file": "silk/fixed/process_gains_FIX.c",
+        "sha256": "356847bf74ebef92f87fe29465465a052a66f2bcd58088d60e48d90042444054"
+      },
+      {
+        "file": "silk/fixed/regularize_correlations_FIX.c",
+        "sha256": "c6e446efe06de6ba26006f9442690087d394263589116e404f2029ff5161a987"
+      },
+      {
+        "file": "silk/fixed/residual_energy16_FIX.c",
+        "sha256": "c34ef5a55a95cbf1706f43773a9b411249883cb03a6b72198c7e93ba1218ce1f"
+      },
+      {
+        "file": "silk/fixed/residual_energy_FIX.c",
+        "sha256": "5a2e3ff369daf69e5b880f7dbbb6403feb890a890ba83d7f4a56752265c4f9e6"
+      },
+      {
+        "file": "silk/fixed/schur64_FIX.c",
+        "sha256": "250eb89a4fe1bb0b6573c37834b076575276d5233b4e979f6c4f8ee12420454f"
+      },
+      {
+        "file": "silk/fixed/schur_FIX.c",
+        "sha256": "848a3ff99d8b9ac7b3579cae21e0260d6264f3c92dee01bb69353a5fd888ec72"
+      },
+      {
+        "file": "silk/fixed/structs_FIX.h",
+        "sha256": "4363c6f33bd8bc3b1a15a813e2df54de66e9a8f3edf92d8011ae6dca8f29ab84"
+      },
+      {
+        "file": "silk/fixed/vector_ops_FIX.c",
+        "sha256": "d4a78ced38844fdbf61e12eb2f1dac8bca0054d4b0248c5f6045097ea5c5887b"
+      },
+      {
+        "file": "silk/fixed/warped_autocorrelation_FIX.c",
+        "sha256": "2cc2a6688dccf2de081998eca5ba276aad31cda32aa19c5520bd299cf66c84da"
+      },
+      {
+        "file": "silk/float/SigProc_FLP.h",
+        "sha256": "47ab492aec2ff2032daf8497a6f442678ed4c048bfa24f518f831dbba16b0a2b"
+      },
+      {
+        "file": "silk/float/main_FLP.h",
+        "sha256": "9c84a88c502182ea6918d2b0ba002ffae7397820e1b883cdf7139e368cc02907"
+      },
+      {
+        "file": "silk/float/structs_FLP.h",
+        "sha256": "46439d35d6dd12513828c71ec83147690f5c38ba3d9459bba7c56baf56993df8"
+      },
+      {
+        "file": "silk/gain_quant.c",
+        "sha256": "c15437b1969e2da57addd75e6a1d19c922d693a25b41e3f173bb2f5f92802303"
+      },
+      {
+        "file": "silk/init_decoder.c",
+        "sha256": "09b0338bc8591e32e88bb36dd4a65173b833daa94769c5a81dc60e643144a7d2"
+      },
+      {
+        "file": "silk/init_encoder.c",
+        "sha256": "2ec987e7872d43004ba4b3cc8253689e72a91fc6bbf5ad9fec74667a8b564680"
+      },
+      {
+        "file": "silk/inner_prod_aligned.c",
+        "sha256": "ab1cb47e1aaad3e5226a785edf00e91139f829af21a26af5c79aa351807a05a0"
+      },
+      {
+        "file": "silk/interpolate.c",
+        "sha256": "73938486cc2d80f7a0f977c385cbb77e543f6a53edcb515e67a44ee8f204a4e5"
+      },
+      {
+        "file": "silk/lin2log.c",
+        "sha256": "0c6258436a5189dc93adcb0ac2b44731b289e12d7117ba6ef4e921b03cf8edac"
+      },
+      {
+        "file": "silk/log2lin.c",
+        "sha256": "afabc664dc6a98f26bf2710a93c1e9762ad37f8636555239b4ef9404a23e9df4"
+      },
+      {
+        "file": "silk/macros.h",
+        "sha256": "710dccf87b3c22349f788e8224a4442c2878fe4bc2f8e2ce853d6ea51a6d83f9"
+      },
+      {
+        "file": "silk/main.h",
+        "sha256": "553a24aa5eaee60550de62f3c69a595b5b50817f671fd4093f069570063f7bb0"
+      },
+      {
+        "file": "silk/mips/NSQ_del_dec_mipsr1.h",
+        "sha256": "3fec5b1d5727dcbf3f28dc04084bb99fa301c533b54c89c5d8db4b11359d1113"
+      },
+      {
+        "file": "silk/mips/macros_mipsr1.h",
+        "sha256": "707d078e484ebf5225e378e7a01e4129bfa039d52445e2f8e439b24122973d9b"
+      },
+      {
+        "file": "silk/mips/sigproc_fix_mipsr1.h",
+        "sha256": "b0e0035476588ba27951b7385d711750092f02ba19626120494ba992e08aba9d"
+      },
+      {
+        "file": "silk/pitch_est_defines.h",
+        "sha256": "64a134f64c4a40fdc2f4f669267731d193fd2daabb157062b5ac471ee0296cfb"
+      },
+      {
+        "file": "silk/pitch_est_tables.c",
+        "sha256": "710cdcdca44be5e5826d25463150a7ede89d23f9c9790cd8e9f3802a91c59f8d"
+      },
+      {
+        "file": "silk/process_NLSFs.c",
+        "sha256": "9c92c3fb061ae3f5b33cd81e1b65350c2eee33ee12e5e452e33becf04603aaf4"
+      },
+      {
+        "file": "silk/quant_LTP_gains.c",
+        "sha256": "b65b6172cac08299bd0f0e52b327e72e9da6c4ace15e4260bb7498b2329d6a26"
+      },
+      {
+        "file": "silk/resampler.c",
+        "sha256": "302ee54195641399d5b5ebbe5eaf64bd0dad37299ba97925858d8e8f11604543"
+      },
+      {
+        "file": "silk/resampler_down2.c",
+        "sha256": "7dbaa6064bf6541be7d37223dca1de53dcbcd2e90bf9bc95d5169b62476242dd"
+      },
+      {
+        "file": "silk/resampler_down2_3.c",
+        "sha256": "c57944578a2b59f119c2a074b8c179c3e68e12e089552eefd63588116dfac12f"
+      },
+      {
+        "file": "silk/resampler_private.h",
+        "sha256": "27636d5dc05d29d9b8d387dbd31589501408b945a9981367ae41da98ceafadb3"
+      },
+      {
+        "file": "silk/resampler_private_AR2.c",
+        "sha256": "2a4465534a8a5b2abaa0560fb61df59c295d99361fdc6fb2020161e7c3283ff8"
+      },
+      {
+        "file": "silk/resampler_private_IIR_FIR.c",
+        "sha256": "27be28e23c2264fda4e485041505b40f0d25189070367ea0394769d59eff853a"
+      },
+      {
+        "file": "silk/resampler_private_down_FIR.c",
+        "sha256": "e8d6b559b0dc39163a6f2b88dcd6a4782bc9e52a55a353299017f271d0743375"
+      },
+      {
+        "file": "silk/resampler_private_up2_HQ.c",
+        "sha256": "38556a66173f593761e380ff4b60851142703cd64d02bac538392ecf499d00bb"
+      },
+      {
+        "file": "silk/resampler_rom.c",
+        "sha256": "ebf646c9687c9303c5ccae46a4832da9e6a965146b6c0c55376dfc8241dd7e16"
+      },
+      {
+        "file": "silk/resampler_rom.h",
+        "sha256": "3d0bd44de6f331f730d2cc72710edbe95d4dfeeec8c1e08aae85b9dd36b1d4b1"
+      },
+      {
+        "file": "silk/resampler_structs.h",
+        "sha256": "7fc59318d11891d6e3849c65d2df3481431f581242e675cbdf94a13a242ba540"
+      },
+      {
+        "file": "silk/shell_coder.c",
+        "sha256": "7baf2a37108ebae7b308111576a52ccf616293110412058634a67c99f70e665c"
+      },
+      {
+        "file": "silk/sigm_Q15.c",
+        "sha256": "bd9945e85c4cd07ffeab0550d6eae9660e35d26ea4fd886a6a57a96ab114b38c"
+      },
+      {
+        "file": "silk/sort.c",
+        "sha256": "7fb53b443676b4dc4751d33b0bdb43bc5a2b0bef59da16cd8496a361308074e8"
+      },
+      {
+        "file": "silk/stereo_LR_to_MS.c",
+        "sha256": "d609044bca00cf3d8f8834522a7e41c4886e789c658a7783cda892b14da55191"
+      },
+      {
+        "file": "silk/stereo_MS_to_LR.c",
+        "sha256": "f6110cd38b67e7f584281b1692d99b70cc140fe1940d6397c7b5de35082dc6d6"
+      },
+      {
+        "file": "silk/stereo_decode_pred.c",
+        "sha256": "245da9e8033ae8698558b64e9b6d55b816aeaa256cce6a437f501a365dec71ad"
+      },
+      {
+        "file": "silk/stereo_encode_pred.c",
+        "sha256": "bbf9c5dd5c8d730fce9809f3f414fd2f0c11c884ef545d9698edd49375078a7a"
+      },
+      {
+        "file": "silk/stereo_find_predictor.c",
+        "sha256": "a29973264d8f01421407383479318c9bf9f67b540b9ad152806c69549d9decd1"
+      },
+      {
+        "file": "silk/stereo_quant_pred.c",
+        "sha256": "2d73415a5a3969ddd9c628e29af8b67648484802a81e1ef036ae46dfced5ccba"
+      },
+      {
+        "file": "silk/structs.h",
+        "sha256": "7e8dec7b534f3c964bec957693e38d56331524960831ea266a7b7a47ca6c7bba"
+      },
+      {
+        "file": "silk/sum_sqr_shift.c",
+        "sha256": "14a2e021ac35be7baf39161f26d268fbfa5bba9cfe0c17954acbb0df7b664716"
+      },
+      {
+        "file": "silk/table_LSF_cos.c",
+        "sha256": "7e72fc7ea26011c2075d446eec967b521b3161384a35b15a61e8204d894ae13a"
+      },
+      {
+        "file": "silk/tables.h",
+        "sha256": "d629fe3ed8aa2e3ac7615abf07c26fc9adf647c6fcdf57641e3068bb9a5dcc0a"
+      },
+      {
+        "file": "silk/tables_LTP.c",
+        "sha256": "c2cc3f8e3801238fc557bc89cec29d11c315f4c03c67160797c8bcb361fdb147"
+      },
+      {
+        "file": "silk/tables_NLSF_CB_NB_MB.c",
+        "sha256": "376093f69361de3990caf98c574d93383ad222de201e631933cc03d5a678c52d"
+      },
+      {
+        "file": "silk/tables_NLSF_CB_WB.c",
+        "sha256": "926786d6654063120b9e966589faf0f1fcd0c90006483b32ef5b91c8e09dbe3e"
+      },
+      {
+        "file": "silk/tables_gain.c",
+        "sha256": "698a4edadbe7119c1ae07108b75475eac7d2d077b18416959354aac3439d86e9"
+      },
+      {
+        "file": "silk/tables_other.c",
+        "sha256": "348b40fdd63a32616dea36e2c451f9b48cb7b7e3961ee63ee309f94e0d23b46d"
+      },
+      {
+        "file": "silk/tables_pitch_lag.c",
+        "sha256": "ee09b6d8acc28fe4348386d6bf4bec88bdc5e776b8dba5ebd9659747fb71bdfe"
+      },
+      {
+        "file": "silk/tables_pulses_per_block.c",
+        "sha256": "337916e4f315f88db51724a7f604ad200f3981d79f9687e42f27f54a1a391ea0"
+      },
+      {
+        "file": "silk/tuning_parameters.h",
+        "sha256": "63b526acfb8b539d9a8de13e8f0320cd07d5728501c8427baa59464bf4fb9046"
+      },
+      {
+        "file": "silk/typedef.h",
+        "sha256": "13fb7eea10db08e1ea4c6e99d9396ba653346ce266836898ff4164c1d76e99c4"
+      },
+      {
+        "file": "silk/x86/SigProc_FIX_sse.h",
+        "sha256": "2bb44df3ea1ed77f4f97f00d4b667948092b964dc4b9b65bc42ead60d98ecb87"
+      },
+      {
+        "file": "silk/x86/main_sse.h",
+        "sha256": "6fadea397c988effd73b7c0e5cde0915a9cdf32c3d7dcfc80cbd87d3102b0f58"
+      },
+      {
+        "file": "src/analysis.h",
+        "sha256": "8173b985c99ab4fbe51af8189f0a943ca36bf1635f22108d2efce7b7a57f5ecd"
+      },
+      {
+        "file": "src/extensions.c",
+        "sha256": "f5fab52b123a1d5486ffa33aacb4676b9b208ff327c7b85a4a715384d2eb5855"
+      },
+      {
+        "file": "src/mapping_matrix.c",
+        "sha256": "77bb41d5930e0deca52809c7f26d665af3adfcbd4b182766e426135458ce1cd1"
+      },
+      {
+        "file": "src/mapping_matrix.h",
+        "sha256": "020628d898d59ca98eae494b6579359918b8efd867b05272f8ed7b30acda20ab"
+      },
+      {
+        "file": "src/mlp.h",
+        "sha256": "644fe6b6079b597be0b3671c5826dc353a14258752e7a748294a16597c70f382"
+      },
+      {
+        "file": "src/opus.c",
+        "sha256": "dd16a615c6c27df4a58c007fbf3c04a219aac268d9051cd5e69ea1ed952ca4e5"
+      },
+      {
+        "file": "src/opus_decoder.c",
+        "sha256": "563aa6a4602f05c39893822d02b17432591b912d1ae32d862d037073054ddfc7"
+      },
+      {
+        "file": "src/opus_encoder.c",
+        "sha256": "58c886b7c3676ebe0c834874a6e92efbaefb2d8a6e29ab9d4a040b0426ba9ccc"
+      },
+      {
+        "file": "src/opus_multistream.c",
+        "sha256": "7a793025f508c7d6a4c007f3c5ab4fc44b21735c39ad2640734a758f050292ba"
+      },
+      {
+        "file": "src/opus_multistream_decoder.c",
+        "sha256": "03f09a411cca1effb4c60780b77cb4d2fcbc6c8141302d8527d8acb2df20f8d0"
+      },
+      {
+        "file": "src/opus_multistream_encoder.c",
+        "sha256": "9cde20bd6d7b28e7e37658142aa40b27cd273a85e39f0e689f4bc259d87c1d42"
+      },
+      {
+        "file": "src/opus_private.h",
+        "sha256": "92c970738ee472749d0728cc1155a452cc1730d7ddbff5a64dff48d9f3019639"
+      },
+      {
+        "file": "src/opus_projection_decoder.c",
+        "sha256": "b7352f68e5f8a4babe509c85554fc34a47a9bb8f1dc536b8056120533b849ec5"
+      },
+      {
+        "file": "src/opus_projection_encoder.c",
+        "sha256": "e766368559fff4234bef1660a70dd5bdc347b48a00145ba4f3787c6eb9bc0e2f"
+      },
+      {
+        "file": "src/repacketizer.c",
+        "sha256": "93d44a1af8970c0498f1c80e30b9e1c9a684f2102ff051c3838ac0297a2d3f8d"
+      },
+      {
+        "file": "src/tansig_table.h",
+        "sha256": "f469ef2388605ed0b687b1e69ec1b19a0ed59d3abd6e4c70612014ad78642873"
+      },
+      {
+        "file": "tests/test_opus_common.h",
+        "sha256": "8669065824f6736b6c357e68de94139e162dadf3ac3417414c1b451a8d4f1c7e"
+      }
+    ]
+  },
+  {
+    "repository": "xiph/opusfile",
+    "commit": "6dfd29e7adb87f2e193575fc3fa88cbf1a0b27df",
+    "path": "opusfile",
+    "upstream_files": [
+      {
+        "file": "COPYING",
+        "sha256": "54e125c8250361407b34322e0f328f6bdf7fd30cd4f2941a321e47b41f9c159d"
+      },
+      {
+        "file": "include/opusfile.h",
+        "sha256": "e5ccd31a616ab8f0685dc983fd795bd44dfb42dc5aa523da984fbc05e91c85cd"
+      },
+      {
+        "file": "src/info.c",
+        "sha256": "9c48754c29078845bd7cd320cf11d6cb8b9f4fb5b2076815ee1c2ac32d773d76"
+      },
+      {
+        "file": "src/internal.c",
+        "sha256": "1017c3c9c4fca70dac1437ec1067ca5a74c2abcdbad5a53e50472c1cd872cd34"
+      },
+      {
+        "file": "src/internal.h",
+        "sha256": "2f49502ac1156c569e100765f5812717c98785650a0ebedfbb03f10c07dcf9af"
+      },
+      {
+        "file": "src/opusfile.c",
+        "sha256": "21689a156d84d37184925cf73d97365f64675b09776488ccf72d8d7ff98740eb"
+      },
+      {
+        "file": "src/stream.c",
+        "sha256": "46022818c90b6502db813a11010d9ac977469e2f62af94cf96046759b33fa7e5"
+      }
+    ]
+  },
+  {
+    "repository": "lieff/minimp4",
+    "commit": "2a3014a7753cfcba4442adeb469431967238fe6a",
+    "path": "minimp4",
+    "upstream_files": [
+      {
+        "file": "LICENSE",
+        "sha256": "a9550e8930791fb49ce003b5090211fa272bc6f062a71639de9fa766bb061031"
+      },
+      {
+        "file": "minimp4.h",
+        "sha256": "9d122076cc23e5f4a7560ce4056c7d84484a8b8bf094d27c8f652f11fc725ce7"
+      }
+    ]
+  }
+]

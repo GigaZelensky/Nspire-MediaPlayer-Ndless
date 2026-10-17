@@ -2,10 +2,34 @@
 """Production USB worker, timer and native handoff regressions."""
 from pathlib import Path
 import subprocess, shutil, tempfile
+import re
+from check_usb_lifecycle import function
 root=Path(__file__).resolve().parents[1]
 src=root/'src/storage/usb'
 gcc=shutil.which('gcc') or shutil.which('clang')
 if not gcc: raise SystemExit('A host C compiler is required.')
+with tempfile.TemporaryDirectory(prefix='ndvideo-usb-host-') as temporary:
+    work=Path(temporary)
+    source=(src/'usb_host_session.c').read_text()
+    source=re.sub(r'^#include.*\n','',source,flags=re.M)
+    original='#define WORD(address) (*(volatile uint32_t *)(uintptr_t)(address))'
+    assert original in source
+    source=source.replace(original,
+                          '#define WORD(address) (*test_register(address))')
+    source=source.replace(function(source,'barrier'),'static void barrier(void) {}')
+    fixture=(root/'tools/tests/usb/host_session.c').read_text().replace('/* PRODUCTION_HOST_SESSION */',source)
+    (work/'host.c').write_text(fixture)
+    subprocess.run([gcc,'-std=c99','-O2','-Wall','-Wextra','-Werror','-I'+str(src),str(work/'host.c'),'-o',str(work/'host.exe')],check=True)
+    subprocess.run([str(work/'host.exe')],check=True,timeout=10)
+with tempfile.TemporaryDirectory(prefix='ndvideo-usb-attach-') as temporary:
+    work=Path(temporary)
+    source=(src/'usb_controller.c').read_text()
+    fixture=(root/'tools/tests/usb/attachments.c').read_text().replace(
+        '/* PRODUCTION_ATTACHMENTS */', '\n'.join(function(source,name) for name in (
+            'select_attachment','remember_attachment','detach')))
+    (work/'attachments.c').write_text(fixture)
+    subprocess.run([gcc,'-std=c99','-O2','-Wall','-Wextra','-Werror',str(work/'attachments.c'),'-o',str(work/'attachments.exe')],check=True)
+    subprocess.run([str(work/'attachments.exe')],check=True)
 with tempfile.TemporaryDirectory(prefix='ndvideo-usb-worker-') as temporary:
     executable=Path(temporary)/'worker.exe'
     subprocess.run([gcc,'-std=c99','-O2','-Wall','-Wextra','-Werror','-I'+str(src),str(root/'tools/tests/usb/worker_clock.c'),str(root/'tools/tests/usb/fibers.c'),str(src/'usb_fs_worker.c'),'-o',str(executable)],check=True)
@@ -17,15 +41,19 @@ fixture='''#include <assert.h>
 #include <stdint.h>
 #include <errno.h>
 #include <stddef.h>
-typedef struct { bool cancelled,preconnected,timed_out,connected; int guard_error;const char *status,*line1,*line2;} UsbConnectWindow;
+typedef struct { bool cancelled,preconnected,timed_out,connected,audio_only; int guard_error;const char *status,*line1,*line2;} UsbConnectWindow;
 static unsigned kernel_policy=7,now_ms,resume_attempts;static int resume_result;
-static bool standby_was_outer,native_clock,player_timer=true;
+static bool standby_was_outer,native_clock,player_timer=true,audio_mode,tree_busy,lease,host_running=true;
+static unsigned native_waits;
+static unsigned candidate,candidate_total=1,candidate_available=1;
+static bool accepting,late_child;
+static unsigned late_attachments;
 static uint32_t os_counter;
 enum {USB_AUTO_UNKNOWN=255,USB_AUTO_ADAPTER=1};
 static void prepare_progress(void) {}
 static bool native_usb_ui_clock(const volatile uint32_t **p,uint32_t *hz,void (*f)(void),void *c) {*p=&os_counter;*hz=50;return true;}
 static bool monotonic_clock_enter_native(const volatile uint32_t *p,uint32_t hz) {assert(player_timer);assert(!native_clock);native_clock=true;return true;}
-static void monotonic_clock_leave_native(void) {native_clock=false;}
+static void monotonic_clock_leave_native(void) {if(candidate && !lease)host_running=false;native_clock=false;}
 static bool monotonic_clock_restore_player_timer(void) {assert(!native_clock);player_timer=true;return true;}
 static unsigned native_critical_enter(void) {return 0xc0;}
 static void native_critical_leave(unsigned x) {}
@@ -38,37 +66,64 @@ static const char *native_usb_ui_stage(void) {return "fixture";}
 static void debug_tracef(const char *f,...) {}
 static void connection_checkpoint(UsbConnectWindow *w,const char *s,bool force) {if(!native_clock) player_timer=false;}
 static void render_window(UsbConnectWindow *w,bool force) {}
-static bool usb_storage_prepare_connection(void) {return true;}
+static bool usb_storage_prepare_connection(void) {accepting=true;return true;}
 static bool usb_fs_prepare(void) {return true;}
 static uint32_t monotonic_clock_now_ms(void) {now_ms+=100;return now_ms;}
 static uint32_t connection_seconds(void) {return now_ms/1000;}
 static bool host_device_present(void) {return true;}
 static unsigned connection_presence(void) {return USB_AUTO_ADAPTER;}
-static uint32_t host_connection_state(void) {return 1;}
+static uint32_t host_connection_state(void) {return tree_busy?4:1;}
 static bool usb_storage_driver_registered(void) {return true;}
 static void usb_controller_set_error(const char *s,int e) {}
-static bool usb_storage_attachment_ready(void) {return true;}
-static bool usb_storage_finish_connection(void) {player_timer=false;return true;}
+static bool usb_storage_attachment_ready(void) {return !audio_mode && !tree_busy && candidate<candidate_available;}
+static bool usb_controller_audio_only(void) {return audio_mode;}
+static bool usb_storage_next_candidate(void) {assert(native_clock && kernel_policy==0 && !lease);if(candidate>=candidate_available)return false;++candidate;return true;}
+static bool usb_storage_prepare_endpoints(void) {assert(native_clock && kernel_policy==0 && accepting);player_timer=false;return true;}
+static bool nspire_is_cx2(void) {return true;}
+static bool usb_host_session_active(void) {return lease;}
+static bool usb_host_session_prepare(uint32_t (*now)(void),void (*progress)(void),void *context,char *message,size_t capacity) {
+ assert(native_clock && kernel_policy==0);lease=true;host_running=true;return true;}
+static void usb_host_session_release(void) {if(lease)assert(native_clock && kernel_policy==0);lease=false;}
+static bool usb_storage_finish_connection(void) {assert(!native_clock && kernel_policy==7 && player_timer && lease && host_running);return candidate==candidate_total;}
 static void progress(void *p) {}
 static void usb_fs_set_progress(void (*f)(void *),void *p) {}
-static bool usb_volume_mount(int *e) {assert(kernel_policy==7 && !native_clock && player_timer);return true;}
-static int native_usb_ui_resume_host(void) {return 0;}
+static bool usb_volume_mount(int *e) {assert(kernel_policy==7 && !native_clock && player_timer && lease && host_running);return true;}
+static int native_usb_ui_resume_host(void) {return tree_busy?-51:0;}
 static int native_usb_ui_reassert(void) {return 0;}
-static int native_usb_ui_poll(void) {return 0;}
-static int native_usb_ui_wait(void) {return 0;}
-static void usb_storage_stop_accepting(void) {}
+static int native_usb_ui_wait(void) {
+ assert(native_clock && kernel_policy==0 && !lease);++native_waits;tree_busy=false;
+ if(late_child && candidate==1 && candidate_available==1 && accepting) {
+  candidate_available=2;++late_attachments;
+ }
+ return 0;}
+static void usb_storage_stop_accepting(void) {accepting=false;}
 static bool usb_storage_park(void) {return true;}
 static bool performance_clock_start(void) {return true;}
 static int performance_clock_status(void) {return 0;}
 static void usb_storage_unpark(void) {}
 '''+body+'''
-int main(void) {UsbConnectWindow w={.preconnected=true};connect_native(&w);assert(w.connected && !w.guard_error && kernel_policy==7 && !native_clock && player_timer);return 0;}
+int main(void) {
+ UsbConnectWindow w={.preconnected=true};connect_native(&w);assert(w.connected && !w.guard_error && kernel_policy==7 && !native_clock && player_timer);
+ candidate=0;audio_mode=true;w=(UsbConnectWindow){.preconnected=true};connect_native(&w);
+ assert(w.audio_only && !w.connected && !w.timed_out && !w.guard_error && kernel_policy==7 && !native_clock && player_timer);
+ candidate=0;audio_mode=false;tree_busy=true;native_waits=0;w=(UsbConnectWindow){.preconnected=true};connect_native(&w);
+ assert(w.connected && native_waits && !tree_busy && !w.timed_out && !w.guard_error && kernel_policy==7 && !native_clock && player_timer);
+ candidate=0;candidate_total=candidate_available=2;w=(UsbConnectWindow){.preconnected=true};connect_native(&w);
+ assert(w.connected && candidate==2 && !w.guard_error && kernel_policy==7 && !native_clock && player_timer);
+ candidate=0;candidate_total=2;candidate_available=1;late_child=true;late_attachments=0;
+ w=(UsbConnectWindow){.preconnected=true};connect_native(&w);
+ assert(w.connected && candidate==2 && late_attachments==1 && !accepting && !w.timed_out && !w.guard_error);
+ candidate=0;candidate_available=1;late_child=false;
+ w=(UsbConnectWindow){.preconnected=true};connect_native(&w);
+ assert(!w.connected && w.timed_out && candidate==1 && !accepting && !w.guard_error);
+ return 0;}
 '''
 with tempfile.TemporaryDirectory() as tmp:
  c=Path(tmp)/'handoff.c';exe=Path(tmp)/'handoff.exe';c.write_text(fixture)
  subprocess.run([gcc,'-std=c99','-O2','-Wall','-Wextra','-Werror','-Wno-unused-parameter',str(c),'-o',str(exe)],check=True)
  subprocess.run([str(exe)],check=True,timeout=10)
 print('PASS production connection retires native policy and reclaims disturbed app timer before filesystem mount')
+print('PASS hub discovery: empty reader first, flash attached on a later scheduler tick, and bounded no-media timeout')
 clock=(root/'src/player/platform_debug.c').read_text().split('bool monotonic_clock_restore_player_timer(void)',1)[1].split('bool monotonic_clock_try_init_hw_timer(void)',1)[0]
 clock='bool monotonic_clock_restore_player_timer(void)'+clock
 fixture='''#include <assert.h>

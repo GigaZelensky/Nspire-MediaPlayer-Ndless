@@ -7,7 +7,7 @@ import hashlib
 from pathlib import Path
 import struct
 
-CODECS = {"h264": 0, "mpeg4": 1, "hevc": 2, "av1": 3}
+CODECS = {"h264": 0, "mpeg4": 1, "hevc": 2, "av1": 3, "vorbis": 4, "aac": 5, "opus": 6}
 MAGIC = b"NDVCMOD1"
 MAX_MODULE_BYTES = 16 * 1024 * 1024
 HEADER = struct.Struct("<8I")
@@ -101,7 +101,7 @@ def main() -> None:
                     "#ifndef NDVIDEO_GENERATED_CODEC_MODULE_MANIFEST_H\n"
                     "#define NDVIDEO_GENERATED_CODEC_MODULE_MANIFEST_H\n#include <stdint.h>\n"
                     f"#define CODEC_MODULE_EXPECTED_MASK {mask}U\n"
-                    "static const uint8_t CODEC_MODULE_EXPECTED_HASHES[4][32] = {\n" +
+                    f"static const uint8_t CODEC_MODULE_EXPECTED_HASHES[{len(CODECS)}][32] = {{\n" +
                     ",\n".join(rows) + "\n};\n#endif\n")
             args.manifest.parent.mkdir(parents=True, exist_ok=True)
             if not args.manifest.exists() or args.manifest.read_text() != text:

@@ -22,6 +22,14 @@ typedef char QueueHeadSize[(sizeof(UsbQueueHead) == 64) ? 1 : -1];
 typedef char DescriptorSize[(sizeof(UsbQtd) == 32) ? 1 : -1];
 typedef struct UsbController UsbController;
 typedef struct {
+    device_t owner;
+    usbd_device_handle device;
+    usbd_interface_handle interface;
+    uint8_t address,speed;
+    uint8_t sense_key,asc,ascq;
+    bool present,tried;
+} UsbAttachment;
+typedef struct {
     int (*callbacks[4])(device_t, UsbController *);
     UsbController *host;
     void (*native_free)(void *);
@@ -55,22 +63,40 @@ struct UsbController {
     uint32_t max_step_ticks, cpu_ticks;
     /* Last four enumeration decisions, never sampled in the playback path. */
     uint32_t match_trace[4][6];
+    uint32_t interface_classes;
+    UsbAttachment attachments[16];
+    unsigned attachment_count,selected_attachment;
     uint8_t address, speed, endpoint_in, endpoint_out;
     bool registered, accepting, attached, online, parked, init_failed, reused_driver;
     int error;
 };
 unsigned usb_controller_max_read_bytes(void){return hardware_acceleration_enabled(HW_ACCEL_USB_LARGE)?USB_READ_BYTES:4096U;}
 static UsbController *controller;
+static void (*periodic_service)(void *);
+static void *periodic_context;
+void usb_controller_set_periodic_service(void (*service)(void *),void *context)
+{periodic_service=service;periodic_context=context;}
 
 unsigned usb_controller_link_speed(void)
 {
     return controller && controller->online ? controller->speed : 0U;
+}
+bool usb_controller_audio_only(void)
+{
+    UsbController *c=controller;
+    if(!c || c->attached || !(c->interface_classes&(1U<<1)) ||
+       (c->interface_classes&(1U<<8)))return false;
+    uint32_t tree[8];native_usb_ui_bus_snapshot(tree);
+    /* A headset behind a hub does not rule out a storage child which is still
+     * enumerating. Only the witnessed one-device tree ends storage discovery. */
+    return tree[0] && tree[7]==1;
 }
 typedef char StubOwnerOffset[(offsetof(UsbController, stub) == 0) ? 1 : -1];
 static uint32_t next_generation;
 static char error_text[128];
 static int last_error = ENODEV;
 static const char *operation = "idle";
+static unsigned reuse_stage;
 extern const uint8_t usb_callback_start[], usb_callback_end[], usb_callback_context[];
 extern const uint8_t usb_callback_match[], usb_callback_attach[], usb_callback_detach[],
     usb_callback_cleanup[];
@@ -173,7 +199,7 @@ static int match(device_t d, UsbController *c)
     ++c->matches;
     unsigned reason = 1;
     int result = UMATCH_NONE;
-    if (!c->accepting || c->attached) goto done;
+    if (!c->accepting) goto done;
     reason = 2;
     if (((uintptr_t)d & 3U) || !ram(d, c->ivars_offset + 4)) goto done;
     trace[1] = *(uint32_t *)((uint8_t *)d + c->ivars_offset);
@@ -192,6 +218,8 @@ static int match(device_t d, UsbController *c)
     if (!descriptor || !ram(descriptor, sizeof(*descriptor))) goto done;
     trace[5] = (uint32_t)descriptor->bInterfaceClass << 16 |
                (uint32_t)descriptor->bInterfaceSubClass << 8 | descriptor->bInterfaceProtocol;
+    if(descriptor->bInterfaceClass<32)
+        c->interface_classes|=1U<<descriptor->bInterfaceClass;
     reason = 7;
     if (mass_storage(c, a)) { result = UMATCH_IFACECLASS; reason = 0; }
 done:
@@ -199,28 +227,39 @@ done:
     native_critical_leave(mask);
     return result;
 }
+static void select_attachment(UsbController *c,unsigned index)
+{
+    UsbAttachment *a=c->attachments+index;
+    c->selected_attachment=index;c->native_owner=a->owner;c->device=a->device;c->interface=a->interface;
+    c->address=a->address;c->speed=a->speed;c->attached=a->present;
+    c->online=false;c->error=0;c->generation=++next_generation;
+    error_text[0]=0;
+    c->sector_size=0;c->last_sector=0;c->endpoint_in=c->endpoint_out=0;
+    c->init_failed=false;
+}
+static bool remember_attachment(UsbController *c,device_t owner,usbd_device_handle device,usbd_interface_handle interface)
+{
+    if(!ram(device,12))return false;
+    const uint8_t *bytes=(const uint8_t *)device;
+    if(!bytes[8] || bytes[8]>127 || !usb_registers_storage_speed(&c->registers,bytes[11]))return false;
+    unsigned index=c->attachment_count;
+    for(unsigned i=0;i<c->attachment_count;++i){
+        if(c->attachments[i].owner==owner && c->attachments[i].present)return true;
+        if(!c->attachments[i].present)index=i;
+    }
+    if(index==c->attachment_count){if(index==16)return false;++c->attachment_count;}
+    c->attachments[index]=(UsbAttachment){.owner=owner,.device=device,.interface=interface,
+        .address=bytes[8],.speed=bytes[11],.present=true};
+    if(!c->attached)select_attachment(c,index);
+    c->init_failed=false;return true;
+}
 static int attach(device_t d, UsbController *c)
 {
     unsigned mask = native_critical_enter();
     ++c->attaches;
     int result = ENXIO;
     struct usb_attach_arg *a = arguments(c, d);
-    if (c->accepting && !c->attached && mass_storage(c, a) && ram(a->device, 12)) {
-        c->device = a->device;
-        c->interface = a->iface;
-        c->address = ((const uint8_t *)a->device)[8];
-        c->speed = ((const uint8_t *)a->device)[11];
-        c->native_owner = d;
-        c->attached = true;
-        c->online = false;
-        c->error = 0;
-        c->generation = ++next_generation;
-        c->sector_size = c->last_sector = 0;
-        c->endpoint_in = c->endpoint_out = 0;
-        c->init_failed = false;
-        c->transport.toggle_in = c->transport.toggle_out = 0;
-        result = 0;
-    }
+    if (c->accepting && mass_storage(c,a) && remember_attachment(c,d,a->device,a->iface))result=0;
     native_critical_leave(mask);
     return result;
 }
@@ -244,6 +283,8 @@ static int detach(device_t d, UsbController *c)
 {
     unsigned mask = native_critical_enter();
     ++c->detaches;
+    for(unsigned i=0;i<c->attachment_count;++i)
+        if(c->attachments[i].owner==d)c->attachments[i].present=false;
     if (d == c->native_owner) {
         c->attached = c->online = false;
         c->error = ENODEV;
@@ -357,8 +398,15 @@ uint64_t usb_controller_last_sector(void)
 }
 bool usb_storage_attachment_ready(void)
 {
-    return controller && controller->attached && !controller->init_failed;
+    UsbController *c = controller;
+    if (!c) return false;
+    for (unsigned i = 0; i < c->attachment_count; ++i)
+        if (c->attachments[i].present && !c->attachments[i].tried)
+            return true;
+    return false;
 }
+void usb_storage_watch_attachments(void)
+{ if(controller && controller->registered && !controller->online)controller->accepting=true; }
 bool usb_storage_driver_registered(void)
 {
     return controller && controller->registered;
@@ -371,27 +419,33 @@ void usb_storage_stop_accepting(void)
 
 bool usb_storage_supported(void)
 {
+    if(!NDMEDIA_USB_STORAGE)return false;
     UsbRegisters registers;
     return usb_registers_current(&registers);
 }
 
 static bool reuse_storage_binding(UsbController *c, uint32_t native_free)
 {
+    reuse_stage = 1;
     uint32_t owner, device, interface;
     if (!native_usb_ui_storage_binding(&owner, &device, &interface)) return false;
+    reuse_stage = 2;
     uint32_t driver = REG(owner);
     if (!ram((void *)(uintptr_t)driver, 36) || REG(driver + 4) != 2U || REG(driver + 12))
         return false;
     uint32_t methods = REG(driver);
+    reuse_stage = 3;
     size_t code_offset = (sizeof(UsbCallbackStub) + 31U) & ~(size_t)31U;
     size_t code_bytes = (size_t)(usb_callback_end - usb_callback_start);
     if (methods < offsetof(UsbCallbackStub, methods)) return false;
     UsbCallbackStub *stub = (UsbCallbackStub *)(uintptr_t)(methods - offsetof(UsbCallbackStub, methods));
+    reuse_stage = 4;
     if (!ram(stub, (unsigned)(code_offset + code_bytes)) || stub->host ||
         stub->active_callbacks || stub->retired || stub->allocation != stub ||
         (uint32_t)(uintptr_t)stub->native_free != native_free ||
         memcmp(stub->name, "ndvideo-usb", sizeof("ndvideo-usb"))) return false;
     const uint8_t *code = (const uint8_t *)stub + code_offset;
+    reuse_stage = 5;
     size_t context_offset = (size_t)(usb_callback_context - usb_callback_start);
     if (stub->methods[0] != code + (usb_callback_match - usb_callback_start) ||
         stub->methods[1] != code + (usb_callback_attach - usb_callback_start) ||
@@ -404,6 +458,7 @@ static bool reuse_storage_binding(UsbController *c, uint32_t native_free)
     /* No native call or yield between authentication and publishing the new
      * callbacks. The OS still owns the device and its resident driver; reuse
      * that binding rather than adding another driver which cannot attach. */
+    reuse_stage = 6;
     if (!ram((void *)(uintptr_t)interface, c->descriptor_offset + 4)) return false;
     struct usb_attach_arg args = {0};
     args.iface = (usbd_interface_handle)(uintptr_t)interface;
@@ -422,12 +477,23 @@ static bool reuse_storage_binding(UsbController *c, uint32_t native_free)
     stub->callbacks[3] = cleanup;
     drain(NULL);
     stub->host = c;
+    remember_attachment(c,(device_t)(uintptr_t)owner,c->device,c->interface);
+    unsigned after=c->address;
+    uint32_t more_owner,more_device,more_interface;
+    while(native_usb_ui_storage_binding_after(after,&more_owner,&more_device,&more_interface)) {
+        after=*(const volatile uint8_t *)(uintptr_t)(more_device+8);
+        if(REG(more_owner)!=driver)continue;
+        remember_attachment(c,(device_t)(uintptr_t)more_owner,(usbd_device_handle)(uintptr_t)more_device,
+            (usbd_interface_handle)(uintptr_t)more_interface);
+    }
     operation = "reuse storage binding";
+    reuse_stage = 0;
     return true;
 }
 
 bool usb_storage_prepare_connection(void)
 {
+    if(!NDMEDIA_USB_STORAGE)return false;
     UsbRegisters registers;
     operation = "register";
     error_text[0] = 0;
@@ -438,6 +504,8 @@ bool usb_storage_prepare_connection(void)
     }
     if (controller) {
         if (controller->registered) {
+            for(unsigned i=0;i<controller->attachment_count;++i)controller->attachments[i].tried=false;
+            controller->init_failed=false;
             controller->accepting = true;
             return true;
         }
@@ -463,7 +531,13 @@ bool usb_storage_prepare_connection(void)
     c->abort_pipe = (usbd_status (*)(usbd_pipe_handle))(uintptr_t)a;
     c->close_pipe = (usbd_status (*)(usbd_pipe_handle))(uintptr_t)b;
     native_critical_enter();
-    if (reuse_storage_binding(c, f)) return true;
+    if (reuse_storage_binding(c, f)) {
+        c->accepting=true;
+        /* Reoffer any still-unclaimed storage siblings to this authenticated
+         * resident driver. Already-bound devices and native pipes stay intact. */
+        native_usb_ui_resume_host();native_critical_enter();
+        return true;
+    }
     size_t code_offset = (sizeof(UsbCallbackStub) + 31U) & ~(size_t)31U;
     size_t code_bytes = (size_t)(usb_callback_end - usb_callback_start);
     /* SDK calloc/malloc add an alignment prefix. Resident cleanup calls OS
@@ -539,7 +613,7 @@ static uint32_t be32(const uint8_t *p)
 {
     return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
 }
-bool usb_storage_finish_connection(void)
+bool usb_storage_prepare_endpoints(void)
 {
     UsbController *c = controller;
     operation = "open endpoints";
@@ -547,7 +621,9 @@ bool usb_storage_finish_connection(void)
         usb_controller_set_error("No USB storage device was detected.", ENODEV);
         return false;
     }
-    c->accepting = false;
+    /* Siblings can finish native enumeration while this candidate is being
+     * opened. The shared host lease excludes callbacks during polled I/O;
+     * discovery closes only after the browser has selected a usable volume. */
     if (c->online)
         return true;
     if (c->transport.poisoned) {
@@ -616,6 +692,15 @@ bool usb_storage_finish_connection(void)
     c->transport.endpoint_in = c->endpoint_in;
     c->transport.endpoint_out = c->endpoint_out;
     usb_scsi_init(&c->scsi, &c->transport);
+    return true;
+failed:
+    if(!error_text[0])usb_controller_set_error("Could not open USB storage endpoints.",EIO);
+    c->online=false;c->init_failed=true;return false;
+}
+bool usb_storage_finish_connection(void)
+{
+    UsbController *c=controller;
+    if(!c || !c->attached || !c->input || !c->output || !c->arena)return false;
     operation = "identify";
     uint8_t data[36], inquiry[6] = {0x12, 0, 0, 0, 36, 0};
     if (command_sync(inquiry, 6, data, 36) || (data[0] & 31) != 0)
@@ -632,6 +717,9 @@ bool usb_storage_finish_connection(void)
         uint8_t sense[6] = {3, 0, 0, 0, 18, 0};
         if (command_sync(sense, 6, data, 18))
             break;
+        UsbAttachment *attachment=c->attachments+c->selected_attachment;
+        attachment->sense_key=data[2]&15U;attachment->asc=data[12];attachment->ascq=data[13];
+        if(attachment->sense_key==2 && attachment->asc==0x3a)break;
     }
     if (!ready_ok)
         goto failed;
@@ -660,6 +748,22 @@ failed:
         usb_controller_set_error("Could not initialize the USB drive.", EIO);
     c->online = false;
     c->init_failed = true;
+    return false;
+}
+bool usb_storage_next_candidate(void)
+{
+    UsbController *c=controller;
+    if(!c)return false;
+    for(unsigned i=0;i<c->attachment_count;++i) {
+        UsbAttachment *a=c->attachments+i;
+        if(!a->present || a->tried)continue;
+        if(c->transport.poisoned || !usb_transport_quiescent(&c->transport))break;
+        close_pipes(c);select_attachment(c,i);a->tried=true;
+        return true;
+    }
+    if (!c->transport.poisoned && usb_transport_quiescent(&c->transport))
+        close_pipes(c);
+    c->init_failed=true;
     return false;
 }
 void usb_storage_poll_connection(void)
@@ -710,6 +814,9 @@ int usb_controller_step(UsbCommand *request)
     UsbController *c = controller;
     if (!c || c->owner != request)
         return -1;
+    /* Bulk changes only the asynchronous schedule. Keep the separately owned
+     * isochronous ring fed during each bounded step, including long reads. */
+    if(periodic_service)periodic_service(periodic_context);
     uint32_t start = ticks(NULL);
     int result = usb_scsi_step(&c->scsi);
     uint32_t elapsed = ticks(NULL) - start;
@@ -840,6 +947,7 @@ bool usb_storage_shutdown(void)
 void usb_controller_debug(FILE *file)
 {
     UsbController *c = controller;
+    fprintf(file, "usb_storage_reuse stage=%u\n", reuse_stage);
     if (!file)
         return;
     if (c) fprintf(file, "usb_read_path max_command_bytes=%u link_speed=%u packet_in=%u packet_out=%u bytes=%lu argument_aliases=%lu\n", usb_controller_max_read_bytes(), c->speed, c->transport.packet_in, c->transport.packet_out, (unsigned long)c->read_bytes, (unsigned long)c->argument_aliases);
@@ -853,6 +961,13 @@ void usb_controller_debug(FILE *file)
             (unsigned long)REG(registers.otg), (unsigned long)REG(registers.command + 8),
             (unsigned long)REG(registers.otg_mask));
     if (!c) return;
+    fprintf(file,"usb_storage_candidates count=%u selected=%u address=%u classes=%08lx\n",
+        c->attachment_count,c->selected_attachment,c->address,(unsigned long)c->interface_classes);
+    for(unsigned i=0;i<c->attachment_count;++i) {
+        const UsbAttachment *a=c->attachments+i;
+        fprintf(file,"usb_storage_candidate index=%u address=%u speed=%u present=%u tried=%u sense=%02x/%02x/%02x\n",
+            i,a->address,a->speed,a->present,a->tried,a->sense_key,a->asc,a->ascq);
+    }
     fprintf(file,
             "usb_reader online=%u generation=%lu match=%lu attach=%lu detach=%lu cleanup=%lu "
             "commands=%lu max_step_ticks=%lu cpu_ticks=%lu error=%d stage=%s token=%08lx "

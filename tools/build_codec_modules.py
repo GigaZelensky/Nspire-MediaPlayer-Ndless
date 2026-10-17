@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 
-CODECS = ("h264", "mpeg4", "hevc", "av1")
+CODECS = ("h264", "mpeg4", "hevc", "av1", "vorbis", "aac", "opus")
 ENTRIES = {
     "h264": ["h264_module_entry.c"],
     "mpeg4": ["mpeg4_module_entry.c"],
@@ -74,6 +74,13 @@ def build_lock(path: Path):
 
 
 def sources_for(root: Path, codec: str) -> list[str]:
+    if codec in ("vorbis","aac","opus"):
+        families={"vorbis":("ogg","tremor"),"aac":("faad2",),"opus":("ogg","opus","opusfile")}[codec]
+        sources=["src/audio/extra_audio.c","src/audio/extra_aac.c" if codec=="aac" else "src/audio/extra_ogg.c",
+                 "src/audio/modules/audio_module_entry.c","src/codecs/modules/module_runtime.c"]
+        for family in families:
+            sources += sorted(p.relative_to(root).as_posix() for p in (root/"src/audio/vendor"/family).rglob("*.c"))
+        return sources
     folder = {"h264": "h264bsd", "mpeg4": "xvid", "hevc": "hevc", "av1": "av1"}[codec]
     if codec == "mpeg4":
         make = (root / "Makefile").read_text()
@@ -108,6 +115,9 @@ def build(root: Path, args, codec: str, header_hash: str) -> None:
         flags = [f for f in flags if not f.startswith("-std=")]
         flags += ["-DNDVIDEO_BUILD_MODULE=1", f"-DNDVIDEO_BUILD_{codec.upper()}_MODULE=1"]
         flags += [f"-DNDVIDEO_WITH_{c.upper()}={int(c == codec)}" for c in CODECS]
+        if codec in ("vorbis","aac","opus"):
+            flags += ["-DNDVIDEO_BUILD_AUDIO_MODULE=1",
+                      "-DNDVIDEO_AUDIO_MODULE_CODEC="+str({"vorbis":4,"aac":5,"opus":6}[codec])]
         if args.sdk:
             flags += ["-isystem", str(args.sdk.resolve() / "include")]
         if codec == "av1":
@@ -122,6 +132,9 @@ def build(root: Path, args, codec: str, header_hash: str) -> None:
             cpp = source.endswith(".cpp")
             compiler = args.cxx if cpp else args.cc
             selected = flags + (["-std=c++11", "-fno-exceptions", "-fno-rtti"] if cpp else ["-std=c11"])
+            if codec in ("vorbis","aac","opus"):
+                from audio_build import audio_flags
+                selected += audio_flags(root,root/source)
             if source.endswith(".S"):
                 selected = ["-marm", "-mcpu=arm926ej-s"]
             if source.endswith("_tmpl.c") and codec == "av1":
@@ -180,7 +193,7 @@ def main() -> None:
         parser.error("--jobs must be positive")
     root = Path(__file__).resolve().parent.parent
     headers = hashlib.sha256()
-    for p in sorted((root / "src").rglob("*.h")):
+    for p in sorted(p for p in (root / "src").rglob("*") if p.suffix in (".h",".inc",".dat")):
         headers.update(p.relative_to(root).as_posix().encode())
         headers.update(p.read_bytes())
     try:

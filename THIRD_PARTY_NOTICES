@@ -1,12 +1,52 @@
 THIRD-PARTY NOTICES
 ===================
 
-Credits and license texts for code bundled with Nspire-VideoPlayer-Ndless.
+Credits and license texts for code bundled with nMedia Player.
 Per-file copyright notices remain in the source. The project's GPL version 3
 license and its full text are in LICENSE at the repository root.
 
 COMPONENTS
 ----------
+
+PCM/IMA WAV and FLAC: src/audio/vendor/dr_wav.h and dr_flac.h
+Copyright David Reid. Dual public-domain / MIT licensing; complete terms are
+preserved at the end of each header and included in nMedia-licenses.zip.
+https://github.com/mackron/dr_libs
+
+MP3 stream/index layer: src/audio/vendor/minimp3.h and minimp3_ex.h
+Public domain / CC0; terms are in src/audio/vendor/minimp3-LICENSE.
+Integer MP3 synthesis uses libmad, listed below.
+https://github.com/lieff/minimp3
+
+JPEG/PNG album covers: src/player/vendor/stb_image.h (stb_image 2.30)
+Copyright (c) 2017 Sean Barrett. Dual public-domain / MIT license; both
+license options are preserved at the end of the header. A local optional row-output hook is
+described alongside the pinned revision in that directory.
+https://github.com/nothings/stb
+Pinned revision and SHA-256: src/player/vendor/README.md.
+
+Ogg, Vorbis and Opus: src/audio/vendor/ogg, tremor, opus and opusfile
+Copyright (C) the Xiph.Org Foundation and contributors; Opus also includes
+copyrights of Skype, Octasic, Jean-Marc Valin, CSIRO and other contributors.
+BSD-style licenses are preserved in each component's COPYING file.
+https://gitlab.xiph.org/xiph/
+
+AAC: src/audio/vendor/faad2
+Code from FAAD2 is copyright (c) Nero AG, www.nero.com
+GNU GPL version 2 or any later version; full terms are in faad2/COPYING.
+https://github.com/FreewareAdvancedAudio/faad2
+
+MP4 demuxing: src/audio/vendor/minimp4
+Public domain / CC0; the original license is in minimp4/LICENSE.
+https://github.com/lieff/minimp4
+
+MP3 integer synthesis: src/audio/vendor/libmad
+Copyright (C) 2000-2004 Underbit Technologies, Inc.
+GNU GPL version 2 or, at your option, any later version.
+https://github.com/sezero/libmad
+Upstream commit: 486f902c6c686eafced3450851849527e29bc7f6
+The complete license and copyright are in that directory's COPYING and COPYRIGHT.
+src/audio/vendor/LOCAL_CHANGES.md describes the embedded build configuration.
 
 H.264: src/codecs/h264bsd
 Original decoder code comes from the Android Open Source Project, under

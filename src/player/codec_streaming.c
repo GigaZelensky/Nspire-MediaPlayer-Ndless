@@ -2284,6 +2284,7 @@ void prefetch_do_work(
 )
 {
     while (!prefetch_deadline_reached(deadline_ms)) {
+        movie_audio_pump(movie);
         PrefetchedChunk *slot = find_prefetch_work_chunk(movie, current_chunk, max_work_distance);
         size_t previous_read_offset;
         if (!slot) {

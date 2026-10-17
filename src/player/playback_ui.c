@@ -1758,9 +1758,9 @@ static void draw_help_menu_contents(SDL_Surface *screen, const Fonts *fonts, con
         {"R", "Realtime frame skip"},
         {"/", "Scale mode"},
         {"CTRL+NUM", "Align video / center"},
-        {"U/D 8/2", "Screen brightness"},
-        {"N", "Toggle night mode"},
-        {"CTRL+U/D", "Night intensity"},
+        {"U/D 8/2", "Volume; Ctrl+M mute"},
+        {"SHIFT+U/D", "Brightness (or 8/2)"},
+        {"N CTRL+U/D", "Night / intensity"},
         {"{ / }", "Playback speed"},
         {"^", "Subtitle position"},
         {"+ / -", "Subtitle size"},
@@ -2644,6 +2644,9 @@ void render_movie(
                 status_overlay_text, status_overlay_started_ms, status_overlay_until_ms,
                 now_ms, top_chrome_mix);
         }
+    }
+    if (!help_menu_visible) {
+        audio_controls_draw(screen,fonts,movie->audio,chrome_visible && (!ui_mixes || !ui_mixes->title_strip),now_ms);
     }
     if (cursor_visible) {
         draw_cursor(screen, pointer->x, pointer->y);

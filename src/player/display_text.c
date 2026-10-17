@@ -1,0 +1,639 @@
+#include "display_text.h"
+#include <stdint.h>
+static const uint16_t cp437[128] = {
+    0x00c7, 0x00fc, 0x00e9, 0x00e2, 0x00e4, 0x00e0, 0x00e5, 0x00e7, 0x00ea, 0x00eb, 0x00e8, 0x00ef,
+    0x00ee, 0x00ec, 0x00c4, 0x00c5, 0x00c9, 0x00e6, 0x00c6, 0x00f4, 0x00f6, 0x00f2, 0x00fb, 0x00f9,
+    0x00ff, 0x00d6, 0x00dc, 0x00a2, 0x00a3, 0x00a5, 0x20a7, 0x0192, 0x00e1, 0x00ed, 0x00f3, 0x00fa,
+    0x00f1, 0x00d1, 0x00aa, 0x00ba, 0x00bf, 0x2310, 0x00ac, 0x00bd, 0x00bc, 0x00a1, 0x00ab, 0x00bb,
+    0x2591, 0x2592, 0x2593, 0x2502, 0x2524, 0x2561, 0x2562, 0x2556, 0x2555, 0x2563, 0x2551, 0x2557,
+    0x255d, 0x255c, 0x255b, 0x2510, 0x2514, 0x2534, 0x252c, 0x251c, 0x2500, 0x253c, 0x255e, 0x255f,
+    0x255a, 0x2554, 0x2569, 0x2566, 0x2560, 0x2550, 0x256c, 0x2567, 0x2568, 0x2564, 0x2565, 0x2559,
+    0x2558, 0x2552, 0x2553, 0x256b, 0x256a, 0x2518, 0x250c, 0x2588, 0x2584, 0x258c, 0x2590, 0x2580,
+    0x03b1, 0x00df, 0x0393, 0x03c0, 0x03a3, 0x03c3, 0x00b5, 0x03c4, 0x03a6, 0x0398, 0x03a9, 0x03b4,
+    0x221e, 0x03c6, 0x03b5, 0x2229, 0x2261, 0x00b1, 0x2265, 0x2264, 0x2320, 0x2321, 0x00f7, 0x2248,
+    0x00b0, 0x2219, 0x00b7, 0x221a, 0x207f, 0x00b2, 0x25a0, 0x00a0};
+static const char *fold(unsigned c)
+{
+    switch (c)
+    {
+    case 0xa0:
+        return " ";
+    case 0xaa:
+        return "a";
+    case 0xba:
+        return "o";
+    case 0xc0:
+        return "A";
+    case 0xc1:
+        return "A";
+    case 0xc2:
+        return "A";
+    case 0xc3:
+        return "A";
+    case 0xc4:
+        return "A";
+    case 0xc5:
+        return "A";
+    case 0xc6:
+        return "AE";
+    case 0xc7:
+        return "C";
+    case 0xc8:
+        return "E";
+    case 0xc9:
+        return "E";
+    case 0xca:
+        return "E";
+    case 0xcb:
+        return "E";
+    case 0xcc:
+        return "I";
+    case 0xcd:
+        return "I";
+    case 0xce:
+        return "I";
+    case 0xcf:
+        return "I";
+    case 0xd0:
+        return "D";
+    case 0xd1:
+        return "N";
+    case 0xd2:
+        return "O";
+    case 0xd3:
+        return "O";
+    case 0xd4:
+        return "O";
+    case 0xd5:
+        return "O";
+    case 0xd6:
+        return "O";
+    case 0xd8:
+        return "O";
+    case 0xd9:
+        return "U";
+    case 0xda:
+        return "U";
+    case 0xdb:
+        return "U";
+    case 0xdc:
+        return "U";
+    case 0xdd:
+        return "Y";
+    case 0xde:
+        return "Th";
+    case 0xdf:
+        return "ss";
+    case 0xe0:
+        return "a";
+    case 0xe1:
+        return "a";
+    case 0xe2:
+        return "a";
+    case 0xe3:
+        return "a";
+    case 0xe4:
+        return "a";
+    case 0xe5:
+        return "a";
+    case 0xe6:
+        return "ae";
+    case 0xe7:
+        return "c";
+    case 0xe8:
+        return "e";
+    case 0xe9:
+        return "e";
+    case 0xea:
+        return "e";
+    case 0xeb:
+        return "e";
+    case 0xec:
+        return "i";
+    case 0xed:
+        return "i";
+    case 0xee:
+        return "i";
+    case 0xef:
+        return "i";
+    case 0xf0:
+        return "d";
+    case 0xf1:
+        return "n";
+    case 0xf2:
+        return "o";
+    case 0xf3:
+        return "o";
+    case 0xf4:
+        return "o";
+    case 0xf5:
+        return "o";
+    case 0xf6:
+        return "o";
+    case 0xf8:
+        return "o";
+    case 0xf9:
+        return "u";
+    case 0xfa:
+        return "u";
+    case 0xfb:
+        return "u";
+    case 0xfc:
+        return "u";
+    case 0xfd:
+        return "y";
+    case 0xfe:
+        return "th";
+    case 0xff:
+        return "y";
+    case 0x100:
+        return "A";
+    case 0x101:
+        return "a";
+    case 0x102:
+        return "A";
+    case 0x103:
+        return "a";
+    case 0x104:
+        return "A";
+    case 0x105:
+        return "a";
+    case 0x106:
+        return "C";
+    case 0x107:
+        return "c";
+    case 0x108:
+        return "C";
+    case 0x109:
+        return "c";
+    case 0x10a:
+        return "C";
+    case 0x10b:
+        return "c";
+    case 0x10c:
+        return "C";
+    case 0x10d:
+        return "c";
+    case 0x10e:
+        return "D";
+    case 0x10f:
+        return "d";
+    case 0x112:
+        return "E";
+    case 0x113:
+        return "e";
+    case 0x114:
+        return "E";
+    case 0x115:
+        return "e";
+    case 0x116:
+        return "E";
+    case 0x117:
+        return "e";
+    case 0x118:
+        return "E";
+    case 0x119:
+        return "e";
+    case 0x11a:
+        return "E";
+    case 0x11b:
+        return "e";
+    case 0x11c:
+        return "G";
+    case 0x11d:
+        return "g";
+    case 0x11e:
+        return "G";
+    case 0x11f:
+        return "g";
+    case 0x120:
+        return "G";
+    case 0x121:
+        return "g";
+    case 0x122:
+        return "G";
+    case 0x123:
+        return "g";
+    case 0x124:
+        return "H";
+    case 0x125:
+        return "h";
+    case 0x128:
+        return "I";
+    case 0x129:
+        return "i";
+    case 0x12a:
+        return "I";
+    case 0x12b:
+        return "i";
+    case 0x12c:
+        return "I";
+    case 0x12d:
+        return "i";
+    case 0x12e:
+        return "I";
+    case 0x12f:
+        return "i";
+    case 0x130:
+        return "I";
+    case 0x132:
+        return "IJ";
+    case 0x133:
+        return "ij";
+    case 0x134:
+        return "J";
+    case 0x135:
+        return "j";
+    case 0x136:
+        return "K";
+    case 0x137:
+        return "k";
+    case 0x139:
+        return "L";
+    case 0x13a:
+        return "l";
+    case 0x13b:
+        return "L";
+    case 0x13c:
+        return "l";
+    case 0x13d:
+        return "L";
+    case 0x13e:
+        return "l";
+    case 0x13f:
+        return "L";
+    case 0x140:
+        return "l";
+    case 0x141:
+        return "L";
+    case 0x142:
+        return "l";
+    case 0x143:
+        return "N";
+    case 0x144:
+        return "n";
+    case 0x145:
+        return "N";
+    case 0x146:
+        return "n";
+    case 0x147:
+        return "N";
+    case 0x148:
+        return "n";
+    case 0x149:
+        return "n";
+    case 0x14c:
+        return "O";
+    case 0x14d:
+        return "o";
+    case 0x14e:
+        return "O";
+    case 0x14f:
+        return "o";
+    case 0x150:
+        return "O";
+    case 0x151:
+        return "o";
+    case 0x152:
+        return "OE";
+    case 0x153:
+        return "oe";
+    case 0x154:
+        return "R";
+    case 0x155:
+        return "r";
+    case 0x156:
+        return "R";
+    case 0x157:
+        return "r";
+    case 0x158:
+        return "R";
+    case 0x159:
+        return "r";
+    case 0x15a:
+        return "S";
+    case 0x15b:
+        return "s";
+    case 0x15c:
+        return "S";
+    case 0x15d:
+        return "s";
+    case 0x15e:
+        return "S";
+    case 0x15f:
+        return "s";
+    case 0x160:
+        return "S";
+    case 0x161:
+        return "s";
+    case 0x162:
+        return "T";
+    case 0x163:
+        return "t";
+    case 0x164:
+        return "T";
+    case 0x165:
+        return "t";
+    case 0x168:
+        return "U";
+    case 0x169:
+        return "u";
+    case 0x16a:
+        return "U";
+    case 0x16b:
+        return "u";
+    case 0x16c:
+        return "U";
+    case 0x16d:
+        return "u";
+    case 0x16e:
+        return "U";
+    case 0x16f:
+        return "u";
+    case 0x170:
+        return "U";
+    case 0x171:
+        return "u";
+    case 0x172:
+        return "U";
+    case 0x173:
+        return "u";
+    case 0x174:
+        return "W";
+    case 0x175:
+        return "w";
+    case 0x176:
+        return "Y";
+    case 0x177:
+        return "y";
+    case 0x178:
+        return "Y";
+    case 0x179:
+        return "Z";
+    case 0x17a:
+        return "z";
+    case 0x17b:
+        return "Z";
+    case 0x17c:
+        return "z";
+    case 0x17d:
+        return "Z";
+    case 0x17e:
+        return "z";
+    case 0x17f:
+        return "s";
+    case 0x1a0:
+        return "O";
+    case 0x1a1:
+        return "o";
+    case 0x1af:
+        return "U";
+    case 0x1b0:
+        return "u";
+    case 0x1c4:
+        return "DZ";
+    case 0x1c5:
+        return "Dz";
+    case 0x1c6:
+        return "dz";
+    case 0x1c7:
+        return "LJ";
+    case 0x1c8:
+        return "Lj";
+    case 0x1c9:
+        return "lj";
+    case 0x1ca:
+        return "NJ";
+    case 0x1cb:
+        return "Nj";
+    case 0x1cc:
+        return "nj";
+    case 0x1cd:
+        return "A";
+    case 0x1ce:
+        return "a";
+    case 0x1cf:
+        return "I";
+    case 0x1d0:
+        return "i";
+    case 0x1d1:
+        return "O";
+    case 0x1d2:
+        return "o";
+    case 0x1d3:
+        return "U";
+    case 0x1d4:
+        return "u";
+    case 0x1d5:
+        return "U";
+    case 0x1d6:
+        return "u";
+    case 0x1d7:
+        return "U";
+    case 0x1d8:
+        return "u";
+    case 0x1d9:
+        return "U";
+    case 0x1da:
+        return "u";
+    case 0x1db:
+        return "U";
+    case 0x1dc:
+        return "u";
+    case 0x1de:
+        return "A";
+    case 0x1df:
+        return "a";
+    case 0x1e0:
+        return "A";
+    case 0x1e1:
+        return "a";
+    case 0x1e6:
+        return "G";
+    case 0x1e7:
+        return "g";
+    case 0x1e8:
+        return "K";
+    case 0x1e9:
+        return "k";
+    case 0x1ea:
+        return "O";
+    case 0x1eb:
+        return "o";
+    case 0x1ec:
+        return "O";
+    case 0x1ed:
+        return "o";
+    case 0x1f0:
+        return "j";
+    case 0x1f1:
+        return "DZ";
+    case 0x1f2:
+        return "Dz";
+    case 0x1f3:
+        return "dz";
+    case 0x1f4:
+        return "G";
+    case 0x1f5:
+        return "g";
+    case 0x1f8:
+        return "N";
+    case 0x1f9:
+        return "n";
+    case 0x1fa:
+        return "A";
+    case 0x1fb:
+        return "a";
+    case 0x200:
+        return "A";
+    case 0x201:
+        return "a";
+    case 0x202:
+        return "A";
+    case 0x203:
+        return "a";
+    case 0x204:
+        return "E";
+    case 0x205:
+        return "e";
+    case 0x206:
+        return "E";
+    case 0x207:
+        return "e";
+    case 0x208:
+        return "I";
+    case 0x209:
+        return "i";
+    case 0x20a:
+        return "I";
+    case 0x20b:
+        return "i";
+    case 0x20c:
+        return "O";
+    case 0x20d:
+        return "o";
+    case 0x20e:
+        return "O";
+    case 0x20f:
+        return "o";
+    case 0x210:
+        return "R";
+    case 0x211:
+        return "r";
+    case 0x212:
+        return "R";
+    case 0x213:
+        return "r";
+    case 0x214:
+        return "U";
+    case 0x215:
+        return "u";
+    case 0x216:
+        return "U";
+    case 0x217:
+        return "u";
+    case 0x218:
+        return "S";
+    case 0x219:
+        return "s";
+    case 0x21a:
+        return "T";
+    case 0x21b:
+        return "t";
+    case 0x21e:
+        return "H";
+    case 0x21f:
+        return "h";
+    case 0x226:
+        return "A";
+    case 0x227:
+        return "a";
+    case 0x228:
+        return "E";
+    case 0x229:
+        return "e";
+    case 0x22a:
+        return "O";
+    case 0x22b:
+        return "o";
+    case 0x22c:
+        return "O";
+    case 0x22d:
+        return "o";
+    case 0x22e:
+        return "O";
+    case 0x22f:
+        return "o";
+    case 0x230:
+        return "O";
+    case 0x231:
+        return "o";
+    case 0x232:
+        return "Y";
+    case 0x233:
+        return "y";
+    case 0x2013:
+        return "-";
+    case 0x2014:
+        return "-";
+    case 0x2018:
+        return "'";
+    case 0x2019:
+        return "'";
+    case 0x201c:
+        return "\"";
+    case 0x201d:
+        return "\"";
+    case 0x2026:
+        return "...";
+    default:
+        return NULL;
+    }
+}
+void display_text_ascii(const char *in, char *out, size_t bytes, bool dos_names)
+{
+    if (!bytes)
+        return;
+    size_t n = 0;
+    while (*in && n + 1 < bytes)
+    {
+        unsigned c = (unsigned char)*in++;
+        if (c >= 128 && dos_names)
+            c = cp437[c - 128];
+        else if (c >= 192 && c < 245)
+        {
+            unsigned count = c < 224 ? 1 : c < 240 ? 2 : 3, code = c & ((1U << (6 - count)) - 1);
+            bool valid = true;
+            for (unsigned i = 0; i < count; ++i)
+            {
+                if (!in[i] || ((unsigned char)in[i] & 192) != 128)
+                {
+                    valid = false;
+                    break;
+                }
+                code = (code << 6) | ((unsigned char)in[i] & 63);
+            }
+            if (valid)
+            {
+                in += count;
+                c = code;
+            }
+        }
+        if (c >= 0x300 && c <= 0x36f)
+            continue;
+        if (c >= 32 && c < 127)
+            out[n++] = (char)c;
+        else
+        {
+            const char *s = fold(c);
+            if (s)
+                while (*s && n + 1 < bytes)
+                    out[n++] = *s++;
+            else if (c < 32)
+                out[n++] = ' ';
+            else
+                out[n++] = '?';
+        }
+    }
+    out[n] = 0;
+}

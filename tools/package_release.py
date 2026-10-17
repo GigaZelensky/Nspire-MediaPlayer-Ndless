@@ -1,19 +1,14 @@
 #!/usr/bin/env python3
-"""Package every codec combination and its matching debug symbols."""
+"""Package Full and Video Lite, with matching symbols and build manifests."""
 import argparse
 import hashlib
-from itertools import combinations
 from pathlib import Path
 import shutil
 import zipfile
 
 
-CODECS = (("h264", "H.264"), ("mpeg4", "MPEG-4 Part 2"),
-          ("hevc", "H.265 / HEVC"), ("av1", "AV1"))
-VARIANTS = (("", ", ".join(label for _, label in CODECS)),) + tuple(
-    ("-" + "-".join(name for name, _ in group), ", ".join(label for _, label in group))
-    for count in range(1, len(CODECS)) for group in combinations(CODECS, count)
-)
+VARIANTS = (("", "Full: all video/audio codecs, USB storage/audio, covers and visualizations"),
+            ("-lite", "Video Lite: local H.264, subtitles and encryption; no audio/USB"))
 
 
 def module_symbols(players: list[Path], dist: Path) -> list[Path]:
@@ -57,13 +52,14 @@ def module_symbols(players: list[Path], dist: Path) -> list[Path]:
 
 def package(dist: Path, output: Path, notes: Path | None = None) -> None:
     root = Path(__file__).resolve().parent.parent
-    players = [dist / f"_ndvideo{suffix}.tns" for suffix, _ in VARIANTS]
-    symbols = [dist / f"ndvideo{suffix}.{ext}"
+    players = [dist / f"_nMedia{suffix}.tns" for suffix, _ in VARIANTS]
+    manifests = [dist / f"nMedia{suffix}-build.json" for suffix,_ in VARIANTS]
+    symbols = [dist / f"nMedia{suffix}.{ext}"
                for suffix, _ in VARIANTS for ext in ("elf", "zehn")]
     licenses = [root / "LICENSE", root / "THIRD_PARTY_NOTICES"]
     if dist.resolve() == output.resolve():
         raise ValueError("The release output must be separate from the build directory.")
-    for path in players + symbols + licenses:
+    for path in players + symbols + licenses + manifests:
         if not path.is_file() or not path.stat().st_size:
             raise ValueError(f"Missing or empty release input: {path}")
     modules = module_symbols(players, dist)
@@ -72,9 +68,9 @@ def package(dist: Path, output: Path, notes: Path | None = None) -> None:
             raise ValueError(f"Missing or empty codec symbol input: {path}")
 
     output.mkdir(parents=True, exist_ok=True)
-    for path in players + licenses:
+    for path in players + licenses + manifests:
         shutil.copy2(path, output / path.name)
-    archive = output / "ndvideo-symbols.zip"
+    archive = output / "nMedia-symbols.zip"
     temporary = archive.with_suffix(".zip.tmp")
     with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         for path in symbols:
@@ -83,7 +79,14 @@ def package(dist: Path, output: Path, notes: Path | None = None) -> None:
             zf.write(path, "modules/" + path.name)
     temporary.replace(archive)
 
-    assets = [output / path.name for path in players + licenses] + [archive]
+    notices = output / "nMedia-licenses.zip"
+    vendor = root / "src/audio/vendor"
+    license_sources = [*licenses,root/'src/player/vendor/stb_image.h',vendor/'dr_flac.h',vendor/'dr_wav.h',
+        vendor/'minimp3-LICENSE',vendor/'minimp4/LICENSE',vendor/'libmad/COPYRIGHT',
+        *sorted(vendor.rglob('COPYING'))]
+    with zipfile.ZipFile(notices,'w',zipfile.ZIP_DEFLATED,compresslevel=9) as zf:
+        for path in license_sources:zf.write(path,path.relative_to(root).as_posix())
+    assets = [output / path.name for path in players + licenses + manifests] + [archive,notices]
     checksums = [f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n"
                  for path in sorted(assets, key=lambda path: path.name)]
     (output / "SHA256SUMS.txt").write_text("".join(checksums), encoding="utf-8")
@@ -92,12 +95,13 @@ def package(dist: Path, output: Path, notes: Path | None = None) -> None:
     if notes:
         notes.parent.mkdir(parents=True, exist_ok=True)
         notes.write_text(
-            "Choose `_ndvideo.tns` for all codecs, or a smaller build for the formats needed.\n\n" +
-            ("Each player is a single file. Multi-codec builds load the required decoder on demand, "
-             "leaving more RAM for buffered frames.\n\n" if modules else "") +
+            "Choose `_nMedia.tns` for the Full player, or `_nMedia-lite.tns` for local H.264 video without audio/USB.\n\n" +
+            ("Each player is a single file. Full loads video and extra audio decoders on demand.\n\n" if modules else "") +
+            "Normal playback writes no diagnostic logs. D explicitly enables recording; errors retain bounded reports.\n\n" +
             "| Player | Codecs | Size |\n| --- | --- | ---: |\n" + "\n".join(rows) +
-            "\n\n`ndvideo-symbols.zip` contains the matching player and decoder ELF and Zehn files.\n"
-            "`SHA256SUMS.txt` verifies the downloads. Shared license texts are included once.\n",
+            "\n\n`nMedia-symbols.zip` contains matching player/decoder ELF and Zehn files.\n"
+            "Build JSON files list the exact features. `SHA256SUMS.txt` verifies downloads.\n"
+            "`nMedia-licenses.zip` contains third-party license texts.\n",
             encoding="utf-8",
         )
     print("\n".join(rows))

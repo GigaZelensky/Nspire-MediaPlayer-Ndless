@@ -7,6 +7,7 @@
 #include "player_reader.h"
 #include "movie_crypto_session.h"
 #include "media_browser.h"
+#include "media_files.h"
 #include "../storage/usb/usb_storage.h"
 
 bool load_subtitles(
@@ -61,7 +62,7 @@ bool load_subtitles(
     if (movie) {
         movie->current_file_pos = -1;
     }
-    if ((file_size = movie_file_size(file)) < header->subtitle_offset ||
+    if ((file_size = movie && movie->video_bytes?movie->video_bytes:movie_file_size(file)) < header->subtitle_offset ||
         file_size - header->subtitle_offset > SIZE_MAX ||
         header->subtitle_count > SIZE_MAX / sizeof(SubtitleCue)) {
         debug_failf("subtitle section bounds invalid");
@@ -270,6 +271,16 @@ bool load_movie(const char *path, Movie *movie, LoadingProgress *loading_progres
         debug_failf("open failed: invalid header or file bounds"); goto fail;
     }
     movie->current_file_pos = -1;
+    movie->video_bytes=file_size;
+    if(movie->header.version==MOVIE_VERSION_MEDIA) {
+        uint8_t footer[NVP_AUDIO_FOOTER_BYTES];
+        if(file_size<sizeof(footer) || movie_file_seek(movie->file,file_size-sizeof(footer)) ||
+           movie_file_read(footer,1,sizeof(footer),movie->file)!=sizeof(footer) ||
+           !nvp_audio_parse(&movie->audio_track,footer,sizeof(footer),file_size,&movie->header)) {
+            debug_failf("open failed: invalid audio section");goto fail;
+        }
+        movie->video_bytes=movie->audio_track.video_bytes;
+    }
     movie->timing_fps_num = movie->header.fps_num;
     movie->timing_fps_den = movie->header.fps_den;
     player_reduce_fps(&movie->timing_fps_num, &movie->timing_fps_den);
@@ -466,7 +477,7 @@ int compare_movie_files(const void *lhs, const void *rhs)
 {
     const MovieFile *a = (const MovieFile *) lhs;
     const MovieFile *b = (const MovieFile *) rhs;
-    if (a->kind != b->kind)
+    if ((a->kind==PICKER_FOLDER) != (b->kind==PICKER_FOLDER))
         return a->kind == PICKER_FOLDER ? -1 : 1;
     int result = strcmp(a->name ? a->name : "", b->name ? b->name : "");
     if (result != 0) {
@@ -545,6 +556,7 @@ void movie_picker_timing_tick(MovieFile *files, size_t count, size_t preferred)
         return;
 
     MovieFile *file = picker_timing_file;
+    free(file->encrypted_header);file->encrypted_header=NULL;
     file->timing_checked = true;
     file->metadata_ready_ms = monotonic_clock_now_ms();
     if (result > 0) {
@@ -588,20 +600,21 @@ typedef struct {
     const char *directory;
     const HistoryStore *history;
     bool failed;
+    char *cover;size_t cover_bytes;unsigned cover_rank;
 } MovieScan;
 static bool scan_entry(void *context, const char *name, bool directory, uint64_t bytes)
 {
-    (void)bytes;
     MovieScan *scan = context;
-    if (name[0] == '.' ||
-        (!directory && !has_suffix(name, ".nvp") && !has_suffix(name, ".nvp.tns")))
-        return true;
-    if (scan->count >= PICKER_MAX_FILES)
-        return false;
+    if(name[0]=='.')return true;
     char path[MAX_PATH_LEN];
-    int length = snprintf(path, sizeof(path), "%s/%s", scan->directory, name);
-    if (length < 0 || (size_t)length >= sizeof(path))
-        return true;
+    int length=snprintf(path,sizeof(path),"%s/%s",scan->directory,name);
+    if(length<0 || (size_t)length>=sizeof(path))return true;
+    unsigned rank=directory?0:media_cover_rank(name);
+    if(scan->cover && rank>scan->cover_rank && bytes<=512*1024){
+        snprintf(scan->cover,scan->cover_bytes,"%s",path);scan->cover_rank=rank;
+    }
+    if(!directory && !media_is_playable(name))return true;
+    if(scan->count>=PICKER_MAX_FILES)return false;
     if (directory && !strcmp(path, player_data_directory()))
         return true;
     if (scan->count == scan->capacity) {
@@ -616,20 +629,33 @@ static bool scan_entry(void *context, const char *name, bool directory, uint64_t
     }
     MovieFile *file = &scan->files[scan->count];
     memset(file, 0, sizeof(*file));
-    file->kind = directory ? PICKER_FOLDER : PICKER_MOVIE;
+    file->kind = directory ? PICKER_FOLDER : media_is_audio(name) ? PICKER_AUDIO : PICKER_MOVIE;
     file->metadata_codec = MOVIE_CODEC_UNKNOWN;
+    file->row_new=true;
+    file->file_bytes = bytes;
     file->path = dup_string(path);
     if (directory) {
         file->name = dup_string(name);
         file->timing_checked = true;
+    } else if (file->kind==PICKER_AUDIO) {
+        char title[MAX_PATH_LEN];media_audio_title(name,title,sizeof(title));
+        file->name=dup_string(title);file->timing_checked=true;
     } else
         movie_display_fields_for_filename(name, &file->name, &file->detail);
+    if(file->name){
+        char clean[MAX_PATH_LEN];display_text_ascii(file->name,clean,sizeof(clean),usb_path(scan->directory));
+        free(file->name);file->name=dup_string(clean);
+    }
+    if(file->detail){
+        char clean[MAX_PATH_LEN];display_text_ascii(file->detail,clean,sizeof(clean),usb_path(scan->directory));
+        free(file->detail);file->detail=dup_string(clean);
+    }
     ++scan->count;
     if (!file->name || !file->path) {
         scan->failed = true;
         return false;
     }
-    if (!directory && scan->history) {
+    if (file->kind==PICKER_MOVIE && scan->history) {
         for (size_t i = 0; i < scan->history->count; ++i) {
             if (strcmp(scan->history->entries[i].path, path))
                 continue;
@@ -640,14 +666,17 @@ static bool scan_entry(void *context, const char *name, bool directory, uint64_t
     }
     return true;
 }
-MovieFile *scan_movies(const char *directory, size_t *out_count)
+static MovieFile *scan_directory(const char *directory,size_t *out_count,char *cover,size_t cover_bytes,bool *ok)
 {
     *out_count = 0;
+    if(ok)*ok=true;
+    if(cover && cover_bytes)*cover=0;
     char history_path[MAX_PATH_LEN];
     HistoryStore history;
     history_path_for_directory(directory, history_path, sizeof(history_path));
     bool have_history = load_history_store_from_path(history_path, &history);
-    MovieScan scan = {.directory = directory, .history = have_history ? &history : NULL};
+    MovieScan scan = {.directory = directory, .history = have_history ? &history : NULL,
+        .cover=cover,.cover_bytes=cover_bytes};
     if (usb_path(directory)) {
         int error = 0;
         if (!usb_directory_list(directory, scan_entry, &scan, &error))
@@ -677,6 +706,7 @@ MovieFile *scan_movies(const char *directory, size_t *out_count)
     if (have_history)
         free_history_store(&history);
     if (scan.failed) {
+        if(ok)*ok=false;
         free_movie_files(scan.files, scan.count);
         return NULL;
     }
@@ -686,37 +716,55 @@ MovieFile *scan_movies(const char *directory, size_t *out_count)
     return scan.files;
 }
 
+MovieFile *scan_movies(const char *directory,size_t *count)
+{ return scan_directory(directory,count,NULL,0,NULL); }
+bool movie_picker_cover_path(const char *path,char *out,size_t bytes)
+{
+    char directory[MAX_PATH_LEN];snprintf(directory,sizeof(directory),"%s",path);strip_filename(directory);
+    if(!g_picker_cache.valid || strcmp(directory,g_picker_cache.directory) || !*g_picker_cache.cover_path)return false;
+    return snprintf(out,bytes,"%s",g_picker_cache.cover_path)>0;
+}
+
 void ensure_movie_picker_cache(MoviePickerCache *cache, const char *directory)
 {
     if (!cache || !directory) {
         return;
     }
     if (cache->valid && strcmp(cache->directory, directory) == 0) {
-        return;
+        cache->load_failed=false;cache->content_changed=false;return;
     }
 
-    clear_movie_picker_cache(cache);
-    snprintf(cache->directory, sizeof(cache->directory), "%s", directory);
-    cache->files = scan_movies(directory, &cache->count);
-    if (!strcmp(directory, media_browser_root()) && usb_storage_mounted()) {
-        size_t usb_count = 0;
-        MovieFile *usb_files = scan_movies(usb_storage_root(), &usb_count);
-        if (usb_files && usb_count) {
-            size_t combined = cache->count + 1 + usb_count;
-            MovieFile *all = realloc(cache->files, combined * sizeof(*all));
-            if (all) {
-                cache->files = all;
-                MovieFile separator = {.kind = PICKER_SEPARATOR, .timing_checked = true};
-                all[cache->count] = separator;
-                memcpy(all + cache->count + 1, usb_files, usb_count * sizeof(*all));
-                cache->count = combined;
-                free(usb_files);
-                usb_files = NULL;
-            }
-        }
-        free_movie_files(usb_files, usb_count);
+    movie_picker_timing_stop();
+    if(cache==&g_picker_cache && strcmp(cache->directory,directory) && g_previous_picker_cache.valid &&
+       !strcmp(g_previous_picker_cache.directory,directory)){
+        MoviePickerCache old=*cache;*cache=g_previous_picker_cache;g_previous_picker_cache=old;
+        cache->load_failed=false;return;
     }
-    cache->valid = true;
+    MoviePickerCache next={0};bool ok=false;
+    snprintf(next.directory,sizeof(next.directory),"%s",directory);
+    next.files=scan_directory(directory,&next.count,next.cover_path,sizeof(next.cover_path),&ok);
+    if(!ok){cache->load_failed=true;return;}
+    if(!strcmp(directory,media_browser_root()) && usb_storage_mounted()){
+        size_t usb_count=0;MovieFile *usb_files=scan_movies(usb_storage_root(),&usb_count);
+        if(usb_files && usb_count){
+            MovieFile *all=realloc(next.files,(next.count+1+usb_count)*sizeof(*all));
+            if(all){next.files=all;all[next.count]=(MovieFile){.kind=PICKER_SEPARATOR,.timing_checked=true,.row_new=true};
+                memcpy(all+next.count+1,usb_files,usb_count*sizeof(*all));next.count+=1+usb_count;
+                free(usb_files);usb_files=NULL;}
+        }
+        free_movie_files(usb_files,usb_count);
+    }
+    next.valid=true;
+    next.content_changed=true;
+    if(!strcmp(cache->directory,directory)) {
+        movie_picker_merge_refresh(cache,&next);
+        return;
+    }
+    if(cache==&g_picker_cache){
+        clear_movie_picker_cache(&g_previous_picker_cache);
+        g_previous_picker_cache=*cache;
+    }else clear_movie_picker_cache(cache);
+    *cache=next;
 }
 
 static bool find_adjacent_movie_path(const char *current_path, char *target_path, size_t target_path_size, int direction)
@@ -746,11 +794,11 @@ static bool find_adjacent_movie_path(const char *current_path, char *target_path
     }
 
     for (index = 0; index < count; ++index) {
-        if (files[index].kind == PICKER_MOVIE &&
+        if ((files[index].kind == PICKER_MOVIE || files[index].kind == PICKER_AUDIO) &&
             strings_equal_ignore_case(files[index].path, current_path)) {
             for (int next = (int)index + direction; next >= 0 && (size_t)next < count;
                  next += direction) {
-                if (files[next].kind != PICKER_MOVIE)
+                if (files[next].kind != files[index].kind)
                     continue;
                 /* The mixed root list must not autoplay onto another drive. */
                 char parent[MAX_PATH_LEN];

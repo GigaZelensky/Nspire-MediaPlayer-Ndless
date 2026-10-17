@@ -13,7 +13,7 @@ bool g_h264_color_tables_in_sram = false;
 uint8_t *g_sram_movie_chunk_buffer = NULL;
 size_t g_sram_movie_chunk_buffer_size = 0;
 Movie *g_deferred_playback_movie = NULL;
-MoviePickerCache g_picker_cache;
+MoviePickerCache g_picker_cache, g_previous_picker_cache;
 DeferredHistorySave g_pending_history_save;
 DisplayPowerState g_display_power_state;
 bool g_pending_theme_save = false;

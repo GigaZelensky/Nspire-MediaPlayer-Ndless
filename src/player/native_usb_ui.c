@@ -4,6 +4,7 @@
 #include "native_interrupts.h"
 #include "../platform/portable_reader_platform.h"
 #include <limits.h>
+#include <string.h>
 
 /* Player-owned monotonic timer; preparation never hands it to the OS. */
 uint64_t monotonic_clock_now_ticks(void);
@@ -20,6 +21,9 @@ static unsigned interface_reprobe_count;
 static int interface_reprobe_result;
 static uint32_t interface_reprobe_handle, interface_reprobe_descriptor;
 static unsigned interface_reprobe_config, interface_reprobe_expected, interface_reprobe_interfaces;
+/* Bounded attachment decisions, retained only for an explicit/error report. */
+static uint32_t binding_trace[16][8];
+static unsigned binding_trace_count;
 /* The callback validates identity-mapped DRAM. The caller's native stack is
  * not guaranteed to meet that requirement. Both BSD locks serialize this
  * temporary argument block, including across the native attach call's waits. */
@@ -30,6 +34,7 @@ static int start_cleanup_result;
 static unsigned enumeration_count;
 static int enumeration_result;
 static bool memory(uint32_t at, unsigned bytes);
+static bool route_layout_valid(void);
 static uint32_t original_input, original_tracking, original_display, original_busy, original_cursor;
 static uint32_t original_apd_blocks = UINT32_MAX;
 static const char *stage = "idle";
@@ -216,7 +221,24 @@ static int configured_storage_interface(uint32_t device, uint32_t *interface,
     return -46;
 }
 
-bool native_usb_ui_storage_binding(uint32_t *owner, uint32_t *device, uint32_t *interface)
+static uint32_t storage_parent_owner(const UsbHostTree *tree,uint32_t candidate)
+{
+    const volatile uint8_t *bytes=(const volatile uint8_t *)(uintptr_t)candidate;
+    if(bytes[10]==1)return tree->hub_owner;
+    /* The authenticated constructor used by audio routing proves these
+     * parent/port fields before we follow a non-root attachment. */
+    if(!bytes[10] || api.classic_cx || !route_layout_valid())return 0;
+    uint32_t parent=WORD(candidate+24),port=WORD(candidate+20);
+    if(!memory(parent,112) || WORD(parent)!=tree->bus || !memory(port,16) ||
+       WORD(port+8)!=candidate || WORD(port+12)!=parent)return 0;
+    const volatile uint8_t *p=(const volatile uint8_t *)(uintptr_t)parent;
+    if(!p[8] || p[8]>127 || WORD(tree->bus+52+p[8]*4)!=parent ||
+       !bytes[28] || bytes[28]>127 || p[64]!=18 || p[65]!=1 ||
+       p[68]!=9 || p[10]+1!=bytes[10])return 0;
+    uint32_t owner=WORD(parent+100);
+    return memory(owner,44) && WORD(owner+16)==parent?owner:0;
+}
+bool native_usb_ui_storage_binding_after(unsigned after,uint32_t *owner,uint32_t *device,uint32_t *interface)
 {
     UsbHostTree tree;
     UsbRegisters registers;
@@ -224,19 +246,34 @@ bool native_usb_ui_storage_binding(uint32_t *owner, uint32_t *device, uint32_t *
         !portable_reader_platform_refresh(&mapping) || !host_tree(&tree) ||
         !usb_registers_for_asic(api.classic_cx ? 0x101U : 0x202U, &registers))
         return false;
-    for (unsigned slot = 1; slot < 128; ++slot) {
+    if (!after) binding_trace_count = 0;
+    for (unsigned slot = after<127?after+1:128; slot < 128; ++slot) {
         uint32_t candidate = WORD(tree.bus + 52 + slot * 4);
         if (!candidate || candidate == tree.hub || !memory(candidate, 112) ||
             WORD(candidate) != tree.bus) continue;
         const volatile uint8_t *bytes = (const volatile uint8_t *)(uintptr_t)candidate;
-        if (bytes[8] != slot || bytes[10] != 1 || bytes[108] ||
+        if (bytes[8] != slot || !bytes[10] || bytes[108] ||
             !usb_registers_storage_speed(&registers, bytes[11])) continue;
+        uint32_t *trace = binding_trace[binding_trace_count < 16 ? binding_trace_count++ : 15];
+        memset(trace, 0, sizeof(binding_trace[0]));
+        trace[0] = slot;
+        trace[1] = candidate;
+        trace[2] = 1;
+        uint32_t parent_owner=storage_parent_owner(&tree,candidate);
+        trace[3] = parent_owner;
+        if(!parent_owner)continue;
         uint32_t binding = WORD(candidate + 100);
+        trace[4] = binding;
+        trace[2] = 2;
         unsigned configuration = 0, number = 0;
         uint32_t iface = 0;
         if (!memory(binding, 44) || !WORD(binding) || WORD(binding + 12) != 2U ||
-            WORD(binding + 4) != tree.hub_owner || WORD(binding + 20) ||
-            configured_storage_interface(candidate, &iface, &configuration, &number)) continue;
+            WORD(binding + 4) != parent_owner || WORD(binding + 20)) continue;
+        trace[2] = 3;
+        trace[5] = (uint32_t)configured_storage_interface(candidate, &iface, &configuration, &number);
+        trace[6] = WORD(candidate + 60);
+        if ((int32_t)trace[5]) continue;
+        trace[2] = 4;
         uint32_t driver = WORD(binding);
         if (!memory(driver, 36)) continue;
         uint32_t methods = WORD(driver);
@@ -263,10 +300,14 @@ bool native_usb_ui_storage_binding(uint32_t *owner, uint32_t *device, uint32_t *
         *owner = binding;
         *device = candidate;
         *interface = iface;
+        trace[2] = 0;
+        trace[7] = binding;
         return true;
     }
     return false;
 }
+bool native_usb_ui_storage_binding(uint32_t *owner,uint32_t *device,uint32_t *interface)
+{return native_usb_ui_storage_binding_after(0,owner,device,interface);}
 
 static int enumerate_empty_root(const UsbHostTree *tree, const UsbRegisters *registers)
 {
@@ -325,16 +366,17 @@ static void reprobe_storage(const UsbHostTree *tree)
         !api.function[UI_NEW_DEVICE]) return;
     UsbRegisters registers;
     if (!usb_registers_for_asic(api.classic_cx ? 0x101U : 0x202U, &registers)) return;
-    /* Match only an unclaimed direct-root supported bulk storage device. Never
+    /* Match only an unclaimed supported bulk storage device. Never
      * replace another driver's binding or manufacture USB endpoint state. */
     for (unsigned slot = 1; slot < 128; ++slot) {
         uint32_t device = WORD(tree->bus + 52 + slot * 4);
         if (!device || !memory(device, 112) || WORD(device) != tree->bus) continue;
         volatile uint8_t *bytes = (volatile uint8_t *)(uintptr_t)device;
-        if (bytes[8] != slot || bytes[10] != 1 || !usb_registers_storage_speed(&registers, bytes[11]) ||
+        if (bytes[8] != slot || !bytes[10] || !usb_registers_storage_speed(&registers, bytes[11]) ||
             bytes[64] != 18 || bytes[65] != 1 || bytes[108] != 2) continue;
         uint32_t owner = WORD(device + 100);
-        if (!memory(owner, 44) || WORD(owner) || WORD(owner + 4) != tree->hub_owner ||
+        uint32_t parent_owner=storage_parent_owner(tree,device);
+        if (!parent_owner || !memory(owner, 44) || WORD(owner) || WORD(owner + 4) != parent_owner ||
             WORD(owner + 20) || !storage_configuration(device)) continue;
         /* The witnessed native new-device routine supplies twelve words;
          * the older SDK attach-argument struct omits the final word. */
@@ -342,11 +384,11 @@ static void reprobe_storage(const UsbHostTree *tree)
             reprobe_result = -39;
             break;
         }
-        const uint32_t args[12] = {1, UINT32_MAX, UINT32_MAX,
+        const uint32_t args[12] = {bytes[10]==1?1:bytes[28], UINT32_MAX, UINT32_MAX,
             bytes[72] | (uint32_t)bytes[73] << 8,
             bytes[74] | (uint32_t)bytes[75] << 8,
             bytes[76] | (uint32_t)bytes[77] << 8,
-            device, 0, 0, 0, tree->hub_owner, UINT32_MAX};
+            device, 0, 0, 0, parent_owner, UINT32_MAX};
         for (unsigned i = 0; i < 12; ++i) reprobe_args[i] = args[i];
         WORD(owner + 20) = (uint32_t)(uintptr_t)reprobe_args;
         stage = "match existing USB storage";
@@ -359,7 +401,7 @@ static void reprobe_storage(const UsbHostTree *tree)
         if (reprobe_result == 4 && portable_reader_platform_refresh(&mapping) &&
             memory(device, 112) && WORD(device + 100) == owner &&
             memory(owner, 44) && !WORD(owner) && !WORD(owner + 8) &&
-            WORD(owner + 4) == tree->hub_owner && bytes[108] == 2) {
+            WORD(owner + 4) == parent_owner && bytes[108] == 2) {
             /* Some OS states reject the generic whole-device driver before
              * it offers our driver an interface match. Use the already
              * configured native BOT interface; do not change configuration,
@@ -386,7 +428,8 @@ static void reprobe_storage(const UsbHostTree *tree)
             }
         }
         if (!reprobe_result) bytes[108] = 0;
-        break;
+        UsbHostTree current;
+        if(!portable_reader_platform_refresh(&mapping) || !host_tree(&current) || current.bus!=tree->bus)break;
     }
 }
 
@@ -545,6 +588,13 @@ void native_usb_ui_debug(FILE *file)
     fprintf(file, "usb_ui_start attempts=%u result=%d cleanup=%d\n",
             start_count, start_result, start_cleanup_result);
     fprintf(file, "usb_ui_enumerate attempts=%u result=%d\n", enumeration_count, enumeration_result);
+    for (unsigned i = 0; i < binding_trace_count && i < 16; ++i) {
+        const uint32_t *b = binding_trace[i];
+        fprintf(file, "usb_binding slot=%lu device=%08lx reject=%lu parent=%08lx owner=%08lx interface_result=%ld interface=%08lx child=%08lx\n",
+            (unsigned long)b[0], (unsigned long)b[1], (unsigned long)b[2],
+            (unsigned long)b[3], (unsigned long)b[4], (long)(int32_t)b[5],
+            (unsigned long)b[6], (unsigned long)b[7]);
+    }
     fprintf(file, "usb_ui_root_port cached_status_change=%08lx child=%08lx flags=%02lx\n",
             (unsigned long)root_port[0], (unsigned long)root_port[1], (unsigned long)root_port[2]);
     if (bus && !hcd_irq) fprintf(file,
@@ -561,6 +611,34 @@ void native_usb_ui_debug(FILE *file)
         fprintf(file, "usb_ui_device slot=%lu device=%08lx speed=%lu depth=%lu hub=%08lx owner=%08lx state=%lu\n",
             (unsigned long)entry[0], (unsigned long)entry[1], (unsigned long)entry[2],
             (unsigned long)entry[3], (unsigned long)entry[4], (unsigned long)entry[5], (unsigned long)entry[6]);
+        uint32_t device = entry[1];
+        if (!memory(device, 112)) continue;
+        uint32_t config = WORD(device + 84), array = WORD(device + 60);
+        unsigned selected = *(const volatile uint8_t *)(uintptr_t)(device + 9);
+        fprintf(file,"usb_ui_device_config slot=%lu selected=%u descriptor=%08lx array=%08lx\n",
+            (unsigned long)entry[0],selected,(unsigned long)config,(unsigned long)array);
+        if (!memory(config,9)) continue;
+        const volatile uint8_t *c = (const volatile uint8_t *)(uintptr_t)config;
+        unsigned size = c[2] | (unsigned)c[3] << 8;
+        if(c[0]!=9 || c[1]!=2 || size<9 || size>4096 || !memory(config,size) ||
+           !memory(array,(unsigned)c[4]*32)) continue;
+        for(unsigned n=0;n<c[4];++n) {
+            uint32_t iface=array+n*32,descriptor=WORD(iface+8);
+            fprintf(file,"usb_ui_cached_interface slot=%lu index=%u owner=%08lx private=%08lx "
+                "descriptor=%08lx pipes=%08lx",
+                (unsigned long)entry[0],n,(unsigned long)WORD(iface),(unsigned long)WORD(iface+4),
+                (unsigned long)descriptor,(unsigned long)WORD(iface+28));
+            for(unsigned at=9;at<size;) {
+                if(size-at<2 || c[at]<2 || c[at]>size-at)break;
+                if(config+at==descriptor && c[at+1]==4 && c[at]>=9) {
+                    fprintf(file," number=%u alternate=%u class=%u subclass=%u",
+                        c[at+2],c[at+3],c[at+5],c[at+6]);
+                    break;
+                }
+                at+=c[at];
+            }
+            fputc('\n',file);
+        }
     }
     fprintf(file,
             "usb_ui_scheduler waits=%u task_global=%08lx timer1=%08lx timer2=%08lx "
@@ -724,8 +802,11 @@ int native_usb_ui_reassert(void)
     WORD(0xc0000c00U) &= ~1U;
     return 0;
 }
-int native_usb_ui_resume_host(void)
+static unsigned borrow_lock_stage;
+static bool retain_bus_lease(uint32_t,uint32_t);
+static int resume_host(bool retain_bus)
 {
+    if(retain_bus)borrow_lock_stage=0;
     unsigned mask = native_critical_enter();
     int result = -26;
     uint32_t lock = 0, tree_lock = 0;
@@ -743,10 +824,12 @@ int native_usb_ui_resume_host(void)
     if (WORD(lock + 24) > 1 || WORD(tree_lock + 24) > 1) goto done;
     /* Try both native locks without sleeping. Holding the tree lock across
      * the driver's timed waits prevents its objects being freed underneath us. */
+    if(retain_bus)borrow_lock_stage=1;
     result = ((int (*)(uint32_t, unsigned))(uintptr_t)api.function[UI_SEM_TAKE])(lock, 0);
     native_critical_enter();
     if (result) goto done;
     locked = true;
+    if(retain_bus)borrow_lock_stage=2;
     result = ((int (*)(uint32_t, unsigned))(uintptr_t)api.function[UI_SEM_TAKE])(tree_lock, 0);
     native_critical_enter();
     if (result) goto done;
@@ -821,6 +904,8 @@ int native_usb_ui_resume_host(void)
         }
     }
 done:
+    if(retain_bus && !result && locked && tree_locked && retain_bus_lease(lock,tree_lock))
+        locked=tree_locked=false;
     if (tree_locked) {
         ((int (*)(uint32_t))(uintptr_t)api.function[UI_SEM_GIVE])(tree_lock);
         native_critical_enter();
@@ -832,6 +917,9 @@ done:
     native_critical_leave(mask);
     return result;
 }
+
+int native_usb_ui_resume_host(void) {return resume_host(false);}
+int native_usb_ui_resume_host_lease(void) {return resume_host(true);}
 
 int native_usb_ui_poll(void)
 {
@@ -975,3 +1063,5 @@ int native_usb_ui_release(void)
     stage = "idle";
     return 0;
 }
+
+#include "native_usb_bus.inc"

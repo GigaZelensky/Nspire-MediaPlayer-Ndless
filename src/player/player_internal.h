@@ -2,6 +2,7 @@
 #define NDVIDEO_PLAYER_INTERNAL_H
 
 #include <stdbool.h>
+#include "media_config.h"
 #include "platform/nspire_hardware.h"
 #include <dirent.h>
 #include <libndls.h>
@@ -19,7 +20,10 @@
 #include "codecs/h264bsd/h264bsd_util.h"
 #include "codecs/mpeg4_xvid.h"
 #include "movie/movie.h"
+#include "audio/movie_audio.h"
+#include "audio_controls.h"
 #include "movie_file.h"
+#include "display_text.h"
 #include "sram.h"
 #include "playback_capture_core.h"
 #include "movie_async_io.h"
@@ -65,7 +69,7 @@ static inline void player_prefetch_data(const void *ptr)
 #define PICKER_SELECTION_ANIM_MS 155U
 #define PICKER_DESELECTION_ANIM_MS 90U
 #define PICKER_INTRO_ANIM_MS 260U
-#define PICKER_INTRO_ROW_STAGGER_MS 12U
+#define PICKER_INTRO_ROW_STAGGER_MS 32U
 #define PICKER_INTRO_LAST_ROW_DELAY_MS (115U + ((uint32_t) (PICKER_VISIBLE_ROWS - 1U) * PICKER_INTRO_ROW_STAGGER_MS))
 #define PICKER_INTRO_TOTAL_ANIM_MS (PICKER_INTRO_LAST_ROW_DELAY_MS + (PICKER_INTRO_ANIM_MS - 120U))
 #define PICKER_EXIT_START_DELAY_DIVISOR 8U
@@ -198,6 +202,7 @@ typedef struct {
     char *name;
     char *detail;
     char *path;
+    uint64_t file_bytes;
     uint32_t resume_frame;
     uint32_t resume_ms;
     uint32_t duration_ms;
@@ -210,8 +215,12 @@ typedef struct {
     bool encrypted;
     uint32_t metadata_ready_ms;
     struct NveHeader *encrypted_header;
-    enum { PICKER_MOVIE, PICKER_FOLDER, PICKER_SEPARATOR } kind;
+    uint32_t reveal_ms;
+    bool reveal_active, row_new;
+    enum { PICKER_MOVIE, PICKER_FOLDER, PICKER_SEPARATOR, PICKER_AUDIO } kind;
 } MovieFile;
+bool picker_codec_unavailable(const MovieFile *file);
+#define UI_COLOR_UNSUPPORTED ((Uint16)0xfa8aU)
 
 typedef struct {
     MovieFile *files;
@@ -219,8 +228,9 @@ typedef struct {
     size_t selected_index;
     size_t scroll_start;
     char directory[MAX_PATH_LEN];
+    char cover_path[MAX_PATH_LEN];
     bool has_position;
-    bool valid;
+    bool valid, load_failed, content_changed;
 } MoviePickerCache;
 
 typedef struct {
@@ -240,7 +250,7 @@ typedef struct {
 } HistoryEntry;
 
 typedef enum {
-    UI_THEME_DORFIC = 0,
+    UI_THEME_AMBER = 0,
     UI_THEME_BLUE,
     UI_THEME_GREEN,
     UI_THEME_RED,
@@ -292,13 +302,14 @@ bool night_mode_is_enabled(void);
 unsigned night_mode_percent(void);
 void night_mode_hide_status(void);
 void night_mode_draw_status(SDL_Surface *screen, const Fonts *fonts, const SDL_Rect *video_rect, uint32_t now_ms);
+void night_mode_draw_status_at(SDL_Surface *,const Fonts *,int x,int y,uint32_t now_ms);
 bool night_mode_status_animating(uint32_t now_ms);
 bool night_mode_status_visible(uint32_t now_ms);
 uint32_t night_mode_revision(void);
 void *night_mode_present_pixels(SDL_Surface *screen);
 void night_mode_shutdown(void);
 
-typedef struct {
+typedef struct LoadingProgress {
     SDL_Surface *screen;
     SDL_Surface *snapshot;
     const Fonts *fonts;
@@ -306,6 +317,9 @@ typedef struct {
     uint32_t started_ms;
     uint32_t last_draw_ms;
     bool dim_background;
+    void (*render)(void *context, uint32_t now_ms);
+    bool (*cancelled)(void *context);
+    void *context;
 } LoadingProgress;
 
 typedef enum {
@@ -731,7 +745,7 @@ extern bool g_h264_color_tables_in_sram;
 extern uint8_t *g_sram_movie_chunk_buffer;
 extern size_t g_sram_movie_chunk_buffer_size;
 extern Movie *g_deferred_playback_movie;
-extern MoviePickerCache g_picker_cache;
+extern MoviePickerCache g_picker_cache, g_previous_picker_cache;
 extern DeferredHistorySave g_pending_history_save;
 extern DisplayPowerState g_display_power_state;
 extern bool g_pending_theme_save;
@@ -761,6 +775,10 @@ bool on_key_pressed_edge(bool *previous_state);
 bool load_movie(const char *path, Movie *movie, LoadingProgress *loading_progress,
     MovieCodec *missing_codec);
 void ensure_movie_picker_cache(MoviePickerCache *cache, const char *directory);
+void movie_picker_merge_refresh(MoviePickerCache *,MoviePickerCache *);
+void picker_reveal_rows(MovieFile *,size_t count,size_t start,uint32_t now,bool all);
+uint8_t picker_row_reveal_mix(MovieFile *,uint32_t now);
+bool movie_picker_cover_path(const char *,char *,size_t);
 bool find_next_movie_path(const char *current_path, char *next_path, size_t next_path_size);
 bool find_previous_movie_path(const char *current_path, char *previous_path, size_t previous_path_size);
 const SubtitleCue *active_subtitle_cue(Movie *movie, uint32_t now_ms);
@@ -922,6 +940,8 @@ uint32_t movie_frames_from_ms(const Movie *movie, uint32_t total_ms);
 uint32_t movie_frames_from_scaled_ticks(const Movie *movie, uint64_t total_ticks, const PlaybackRate *rate);
 uint32_t movie_duration_ms(const Movie *movie);
 void reset_playback_timeline(Movie *movie, const PlaybackRate *playback_rate, uint64_t *anchor_ticks, uint32_t *anchor_frame, uint64_t *next_frame_due_ticks);
+/* Pause/menu/rate changes preserve the audio decoder and its queued samples. */
+void reset_playback_clock(Movie *movie, const PlaybackRate *playback_rate, uint64_t *anchor_ticks, uint32_t *anchor_frame, uint64_t *next_frame_due_ticks);
 bool step_movie_forward_one_frame(Movie *movie, bool *hover_preview_needs_rebuffer);
 uint16_t rolling_u16_average(uint16_t current, uint32_t sample_ms);
 void record_foreground_decode_time(Movie *movie, uint32_t elapsed_ms);
@@ -1049,6 +1069,7 @@ SDL_Rect movie_vertical_morph_dst(const SDL_Rect *base_dst, uint8_t visible_mix)
 void animate_movie_collapse_to_black( SDL_Surface *screen, Movie *movie, ScaleMode scale_mode, VideoAlign video_align_x, VideoAlign video_align_y, SDL_Surface **overlay_surface );
 void copy_fitted_text(nSDL_Font *font, const char *text, char *buffer, size_t buffer_size, int max_width);
 void draw_movie_hover_tooltip( SDL_Surface *screen, const Fonts *fonts, const MovieFile *file, const PointerState *pointer, uint8_t tooltip_mix );
+void format_file_size(uint64_t bytes, char *out, size_t size);
 void draw_resume_badge( SDL_Surface *screen, const Fonts *fonts, const SDL_Rect *badge, uint8_t hover_mix, uint8_t press_mix, uint8_t visible_mix, Uint16 background_color );
 void draw_resume_hover_tooltip( SDL_Surface *screen, const Fonts *fonts, const MovieFile *file, const PointerState *pointer, uint8_t tooltip_mix );
 uint8_t picker_selection_ease(uint32_t elapsed_ms, uint32_t duration_ms);
@@ -1275,6 +1296,8 @@ int movie_buffered_bar_width(const Movie *movie, int width);
 int movie_decoded_bar_width(const Movie *movie, int width);
 Uint16 progress_overlay_fill_color_at_y(const SDL_Rect *overlay, int y);
 void draw_progress_track(SDL_Surface *screen, const SDL_Rect *bar_back, const SDL_Rect *overlay);
+void audio_controls_draw(SDL_Surface *, const Fonts *, const struct AudioPlayback *, bool, uint32_t);
+int play_audio_file(SDL_Surface *,const Fonts *,const char *,char *,size_t);
 void draw_progress_overlay(SDL_Surface *screen, const SDL_Rect *overlay);
 void draw_progress( SDL_Surface *screen, const Fonts *fonts, Movie *movie, uint32_t current_ms, bool paused, const PlaybackRate *playback_rate, uint32_t now_ms, const PointerState *pointer, int32_t pending_seek_ms, int32_t seek_badge_ms, uint32_t seek_badge_started_ms, uint32_t seek_badge_hide_elapsed_ms, SeekBarPreviewState *seek_preview, uint8_t preview_mix, uint8_t chrome_mix );
 void render_movie( SDL_Surface *screen, const Fonts *fonts, Movie *movie, bool paused, bool show_ui, bool help_menu_open, ScaleMode scale_mode, ScaleMorphState *scale_morph, VideoAlign video_align_x, VideoAlign video_align_y, const PlaybackRate *playback_rate, MemoryOverlayMode memory_overlay_mode, SubtitleSurfaceCache *subtitle_cache, size_t subtitle_font_index, bool subtitle_font_overlay_visible, int subtitle_size, SubtitlePlacement subtitle_placement, const char *movie_title_text, const char *movie_detail_text, const char *status_overlay_text, uint32_t status_overlay_started_ms, uint32_t status_overlay_until_ms, const ScreenshotPreviewState *screenshot_preview, SeekBarPreviewState *seek_preview, uint32_t now_ms, const PointerState *pointer, int32_t pending_seek_ms, int32_t seek_badge_ms, uint32_t seek_badge_started_ms, uint32_t seek_badge_hide_elapsed_ms, const PlaybackUiMixes *ui_mixes );

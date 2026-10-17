@@ -14,6 +14,12 @@ bool performance_clock_startup_complete(void);
 bool performance_clock_restore(void);
 bool performance_clock_finish(bool normal_exit);
 void performance_clock_debug(FILE *file);
+typedef struct {
+    uint32_t target_hz, actual_hz, pll, control, timing74, timing1c, emi_control;
+    bool matches;
+} PerformanceClockSample;
+/* Read-only evidence at a native boundary; does not change PLL or timings. */
+void performance_clock_sample(PerformanceClockSample *sample);
 void performance_clock_load(unsigned mhz, bool keep_after_exit);
 unsigned performance_clock_selection(void);
 bool performance_clock_keep_after_exit(void);

@@ -23,6 +23,8 @@ static int native_usb_ui_acquire(bool (*progress)(void *), void *context)
 static int native_usb_ui_wait(void)
 { ++waits; assert(native_time && policy == 0 && mask == 0xc0); return test_case == 4 ? -4 : 0; }
 static int native_usb_ui_reassert(void) { return test_case == 5 ? -5 : 0; }
+static void usb_storage_watch_attachments(void) { assert(native_time && policy==0); }
+static bool performance_clock_start(void) { assert(native_time && policy==7);return true; }
 static void monotonic_clock_leave_native(void) { assert(native_time); native_time = false; }
 static bool monotonic_clock_restore_player_timer(void)
 { assert(!native_time && policy == 7); ++restores; return true; }

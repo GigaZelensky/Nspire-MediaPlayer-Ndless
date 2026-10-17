@@ -16,6 +16,14 @@ Licensing note:
 
 ## Screenshots
 
+| Music and album cover | Vortex | Prism |
+| --- | --- | --- |
+| ![Music player](screenshots/music-player.png) | ![Vortex visualization](screenshots/music-vortex.png) | ![Prism visualization](screenshots/music-prism.png) |
+
+The music images use the current music UI with representative tags/artwork.
+Visualizations are rendered by the production visualization code from decoded
+PCM samples. Album artwork retains its original rights.
+
 | Playback controls | Animation without overlays |
 | --- | --- |
 | ![Playback controls](screenshots/playback-controls.png) | ![Rick and Morty](screenshots/dialogue.png) |

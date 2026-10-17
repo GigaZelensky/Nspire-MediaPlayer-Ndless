@@ -1,7 +1,21 @@
 #include "player_internal.h"
 
+void format_file_size(uint64_t bytes, char *out, size_t size)
+{
+    static const char *units[] = {"B", "KiB", "MiB", "GiB", "TiB"};
+    unsigned unit = 0;
+    uint64_t divisor = 1;
+    while (unit < 4 && bytes / divisor >= 1024) { ++unit; divisor *= 1024; }
+    if (!unit) snprintf(out, size, "%lu B", (unsigned long)bytes);
+    else {
+        uint64_t whole = bytes / divisor;
+        unsigned tenth = (unsigned)((bytes % divisor) * 10 / divisor);
+        snprintf(out, size, "%lu.%u %s", (unsigned long)whole, tenth, units[unit]);
+    }
+}
+
 enum {
-    TOOLTIP_LINES = 6,
+    TOOLTIP_LINES = 7,
     TOOLTIP_LINE_BYTES = 96,
     TOOLTIP_TEXT_WIDTH = 170,
     TOOLTIP_PAD_X = 7,
@@ -11,7 +25,7 @@ enum {
 
 typedef struct {
     char lines[TOOLTIP_LINES][TOOLTIP_LINE_BYTES];
-    unsigned count, title_lines;
+    unsigned count, title_lines, limit;
 } TooltipText;
 
 static bool tooltip_space(char ch)
@@ -30,7 +44,7 @@ static bool tooltip_append(TooltipText *wrapped, nSDL_Font *font, const char *te
             ++text;
         if (!*text)
             break;
-        if (wrapped->count == TOOLTIP_LINES)
+        if (wrapped->count == wrapped->limit)
             return false;
         size_t length = 0, word_end = 0;
         int width = 0;
@@ -75,9 +89,15 @@ static void draw_tooltip(SDL_Surface *screen, const Fonts *fonts, const MovieFil
 {
     if (!screen || !fonts || !file || !pointer || !pointer->visible || !mix)
         return;
-    TooltipText text = {0};
+    TooltipText text = {.limit = TOOLTIP_LINES - 1};
     bool complete = tooltip_append(&text, fonts->white, file->name);
     text.title_lines = text.count;
+    bool unavailable=picker_codec_unavailable(file);
+    unsigned warning_begin=text.count,warning_end=text.count;
+    if(unavailable && complete) {
+        complete=tooltip_append(&text,fonts->white,"Codec not included in this build");
+        warning_end=text.count;
+    }
     if (complete && text.count < TOOLTIP_LINES)
         complete = tooltip_append(&text, fonts->white, file->detail);
     char time_line[64] = {0}, duration[24], position[24];
@@ -94,6 +114,11 @@ static void draw_tooltip(SDL_Surface *screen, const Fonts *fonts, const MovieFil
         complete = tooltip_append(&text, fonts->white, time_line);
     if (!complete)
         tooltip_truncate(&text, fonts->white);
+    if (file->kind != PICKER_FOLDER && file->kind != PICKER_SEPARATOR) {
+        char size[32]; format_file_size(file->file_bytes, size, sizeof(size));
+        text.limit = TOOLTIP_LINES;
+        tooltip_append(&text, fonts->white, size);
+    }
     if (!text.count)
         return;
     int width = 72;
@@ -120,7 +145,9 @@ static void draw_tooltip(SDL_Surface *screen, const Fonts *fonts, const MovieFil
     for (unsigned index = 0; index < text.count; ++index)
         draw_ui_label_tint(target, fonts, box.x + TOOLTIP_PAD_X,
                            box.y + TOOLTIP_PAD_Y + index * TOOLTIP_LINE_STEP, text.lines[index],
-                           picker_text_color(index >= text.title_lines), 255);
+                           unavailable && (index<text.title_lines ||
+                            (index>=warning_begin && index<warning_end))?UI_COLOR_UNSUPPORTED:
+                            picker_text_color(index >= text.title_lines), 255);
     end_faded_region_draw(screen, layer, &panel, &old_clip, mix);
 }
 

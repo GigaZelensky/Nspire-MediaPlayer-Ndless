@@ -22,6 +22,9 @@ bool usb_fs_submit(UsbFsJob *);
 bool usb_fs_prepare(void);
 void usb_fs_debug(FILE *);
 void usb_fs_service(uint32_t);
+/* Foreground only, before entering the worker: 1 ready, 0 defer, -1 cancel.
+ * The hook may prepare native host ownership; it must not resume this worker. */
+void usb_fs_set_prepare(int (*)(void *),void *);
 void usb_fs_cancel(UsbFsJob *);
 void usb_fs_cancel_active(void);
 void usb_fs_wait(UsbFsJob *);

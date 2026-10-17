@@ -1,0 +1,3 @@
+# Keep imported audio libraries in their upstream formatting. Our source uses
+# the normal whitespace checks; vendored license/table formatting is preserved.
+src/audio/vendor/** -whitespace

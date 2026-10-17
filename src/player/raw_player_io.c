@@ -2,6 +2,7 @@
 #include <string.h>
 #include "raw_player_io.h"
 #include "app_task_io.h"
+#include "usb_browser.h"
 #include "native_interrupts.h"
 #include "player_idle.h"
 #include "storage_activity.h"
@@ -660,6 +661,10 @@ void raw_player_native_released(void)
     native_requested = false;
     usb_storage_unpark();
 }
+static void (*native_guard)(void *);
+static void *native_guard_context;
+void raw_player_set_native_guard(void (*guard)(void *),void *context)
+{native_guard=guard;native_guard_context=context;}
 static void before_foreground_io(bool native)
 {
     /* Ordinary foreground file/directory calls cannot reenter a suspended
@@ -667,6 +672,8 @@ static void before_foreground_io(bool native)
      * writes use the private contexts instead. */
     if (app_task_io_in_job())
         return;
+    if(native && native_guard)native_guard(native_guard_context);
+    if(native)usb_browser_release_io();
     /* Calls outside the observed private writer (including standby) are not
      * mutation-complete. Never reuse a region proof across this boundary. */
     if (native)
@@ -685,7 +692,7 @@ static void before_foreground_io(bool native)
             ctx->park = true;
         }
     }
-    app_task_io_drain();
+    if(!app_task_io_service_paused())app_task_io_drain();
     while (!raw_player_prepare_native()) {
     }
     raw_player_native_released();

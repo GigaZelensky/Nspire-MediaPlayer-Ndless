@@ -549,6 +549,7 @@ void destroy_movie(Movie *movie)
     if (!movie) {
         return;
     }
+    movie_audio_close(movie);
     /* Queue slots own the other RGB allocations after presentation swaps.
      * Release them while the displayed framebuffer and decoder still exist. */
     video_lookahead_destroy(movie);
@@ -598,6 +599,7 @@ void defer_playback_movie_cleanup(Movie *movie)
     if (!movie) {
         return;
     }
+    movie_audio_close(movie);
     /* The picker transition retains only the displayed image. Partial decode
      * work cannot outlive the chunk storage released below. */
     video_lookahead_destroy(movie);
@@ -876,14 +878,14 @@ static bool debug_dump_report(const char *path, const Movie *movie, const char *
         return false;
     /* Retain earlier failures even across player restarts. A new D recording
      * still replaces its own recording file; failure reports are separate. */
-    log_file = fopen(path, failure ? "ab" : "wb");
+    log_file = failure?player_error_log_open(path,true):fopen(path,"wb");
     if (!log_file) {
         return false;
     }
     log_buffer = (char *) malloc(16384U);
     if (log_buffer) setvbuf(log_file, log_buffer, _IOFBF, 16384U);
 
-    fputs("ND Video Player diagnostic log\n", log_file);
+    fputs("nMedia Player diagnostic log\n", log_file);
     fprintf(log_file, "build=%s %s hwtype=%u hwsubtype=%u ndless_rev=%u os_entry=%08lx\n",
         __DATE__, __TIME__, nl_hwtype(), nl_hwsubtype(), nl_ndless_rev(),
         (unsigned long)*(volatile uint32_t *)0x10000020U);
@@ -899,6 +901,7 @@ static bool debug_dump_report(const char *path, const Movie *movie, const char *
     fprintf(log_file, "hardware_identity asic=%08lx ndless_subtype_entry=%u ndless_subtype_now=%u source=validated_asic\n",
         (unsigned long)nspire_hardware_id(), nspire_initial_sdk_subtype(), nl_hwsubtype());
     storage_read_stream_debug(log_file);
+    movie_audio_debug(movie,log_file);
     usb_storage_debug(log_file);
     usb_browser_debug(log_file);
     performance_clock_debug(log_file);

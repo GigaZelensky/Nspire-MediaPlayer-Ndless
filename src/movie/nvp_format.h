@@ -7,6 +7,7 @@
 #define MOVIE_VERSION_POSITIONED_SUBS 10
 #define MOVIE_VERSION_CODEC_TAGGED 11
 #define MOVIE_VERSION_LARGE_FILES 12
+#define MOVIE_VERSION_MEDIA 13
 
 #define MOVIE_CODEC_FLAG_MASK 0x000FU
 #define MOVIE_CODEC_FLAG_H264 0x0000U
@@ -63,7 +64,7 @@ static inline MovieCodec movie_codec_from_header(const MovieHeader *header)
         header->version == MOVIE_VERSION_POSITIONED_SUBS) {
         return MOVIE_CODEC_H264;
     }
-    if (header->version == MOVIE_VERSION_CODEC_TAGGED || header->version == MOVIE_VERSION_LARGE_FILES) {
+    if (header->version == MOVIE_VERSION_CODEC_TAGGED || header->version == MOVIE_VERSION_LARGE_FILES || header->version == MOVIE_VERSION_MEDIA) {
         switch (header->flags & MOVIE_CODEC_FLAG_MASK) {
         case MOVIE_CODEC_FLAG_H264:
             return MOVIE_CODEC_H264;

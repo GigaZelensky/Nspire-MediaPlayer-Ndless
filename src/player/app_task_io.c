@@ -194,9 +194,12 @@ int app_task_io_sleep(AppTaskIo *task, unsigned amount)
     task->sleeping = false;
     return 0;
 }
+static bool service_paused;
+void app_task_io_pause_service(bool paused) {service_paused=paused;}
+bool app_task_io_service_paused(void) {return service_paused;}
 bool app_task_io_service(uint32_t budget)
 {
-    if (executing || !budget)
+    if (executing || !budget || service_paused)
         return false;
     AppTaskIo *task = storage_owner;
     if (!task) {

@@ -11,7 +11,10 @@ extern "C" {
 #define CODEC_MODULE_MPEG4 1U
 #define CODEC_MODULE_HEVC 2U
 #define CODEC_MODULE_AV1 3U
-#define CODEC_MODULE_COUNT 4U
+#define CODEC_MODULE_VORBIS 4U
+#define CODEC_MODULE_AAC 5U
+#define CODEC_MODULE_OPUS 6U
+#define CODEC_MODULE_COUNT 7U
 
 /* Modules use local runtime thunks and request only approved host C symbols.
  * Function symbols return their callable address; data symbols return the

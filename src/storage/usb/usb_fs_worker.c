@@ -21,6 +21,10 @@ static void (*progress_callback)(void *);
 static void *progress_context;
 static uint32_t progress_last;
 static bool progress_cancelled;
+static int (*prepare_callback)(void *);
+static void *prepare_context;
+void usb_fs_set_prepare(int (*callback)(void *),void *context)
+{prepare_callback=callback;prepare_context=context;}
 static uint32_t tick(void)
 {
     return usb_controller_ticks();
@@ -100,6 +104,11 @@ void usb_fs_service(uint32_t budget)
 {
     if (!worker || !worker->job || worker->running || worker->broken || !budget)
         return;
+    if(prepare_callback && !worker->job->cancelled) {
+        int ready=prepare_callback(prepare_context);
+        if(!ready)return;
+        if(ready<0)worker->job->cancelled=true;
+    }
     unsigned mask = native_critical_enter();
     if (!guards(worker)) {
         stack_failure();

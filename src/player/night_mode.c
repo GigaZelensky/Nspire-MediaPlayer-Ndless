@@ -130,17 +130,18 @@ bool night_mode_status_visible(uint32_t now_ms)
            (int32_t)(now_ms - (g_night_status_until + STATUS_BADGE_EXIT_ANIM_MS)) < 0;
 }
 
-void night_mode_draw_status(SDL_Surface *screen, const Fonts *fonts, const SDL_Rect *video_rect,
-                            uint32_t now_ms)
+void night_mode_draw_status_at(SDL_Surface *screen,const Fonts *fonts,int x,int y,uint32_t now_ms)
 {
-    SDL_Rect anchor;
     if (!night_mode_status_visible(now_ms) || g_display_power_state.off)
         return;
-    /* Reserve the playback-icon space even with the controls hidden, so the
-     * feedback has the identical anchor as the normal brightness badge. */
-    anchor = playback_status_badge_anchor(video_rect, true);
-    draw_status_overlay_badge(screen, fonts, anchor.x, anchor.y, g_night_status,
+    draw_status_overlay_badge(screen, fonts, x, y, g_night_status,
                               g_night_status_started, g_night_status_until, now_ms, 255);
+}
+void night_mode_draw_status(SDL_Surface *screen,const Fonts *fonts,const SDL_Rect *video_rect,
+                            uint32_t now_ms)
+{
+    SDL_Rect anchor=playback_status_badge_anchor(video_rect,true);
+    night_mode_draw_status_at(screen,fonts,anchor.x,anchor.y,now_ms);
 }
 
 /* Filter a separate presentation surface so repeated presents never accumulate

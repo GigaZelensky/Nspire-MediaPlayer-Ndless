@@ -1,5 +1,6 @@
 #ifndef NDVIDEO_CODEC_CONFIG_H
 #define NDVIDEO_CODEC_CONFIG_H
+#include "../media_config.h"
 
 /* Standalone builds keep every codec unless the build selects a subset.
  * These constants remove disabled adapter paths at compile time; the matching
@@ -29,8 +30,8 @@
 #if NDVIDEO_CODEC_MODULES != 0 && NDVIDEO_CODEC_MODULES != 1
 #error NDVIDEO_CODEC_MODULES must be 0 or 1
 #endif
-#if !NDVIDEO_WITH_H264 && !NDVIDEO_WITH_MPEG4 && !NDVIDEO_WITH_HEVC && !NDVIDEO_WITH_AV1
-#error At least one video codec must be enabled
+#if !NDVIDEO_WITH_H264 && !NDVIDEO_WITH_MPEG4 && !NDVIDEO_WITH_HEVC && !NDVIDEO_WITH_AV1 && !NDMEDIA_AUDIO
+#error At least one video or audio codec must be enabled
 #endif
 
 #endif

@@ -5,6 +5,9 @@
 #include <stdio.h>
 static unsigned loops,callbacks,clock_value,mask;
 static bool frozen=true;
+static int prepare_state=1;
+static unsigned prepares;
+static int prepare(void *unused) {(void)unused;++prepares;return prepare_state;}
 uint32_t usb_controller_ticks(void) {return frozen ? 0 : ++clock_value;}
 unsigned native_critical_enter(void) {unsigned old=mask;mask=0xc0;return old;}
 void native_critical_leave(unsigned value) {mask=value;}
@@ -26,4 +29,14 @@ int main(void) {
  assert(usb_fs_submit(&job));usb_fs_wait(&job);
  assert(job.done && !job.error && loops==100000 && mask==0);
  usb_fs_shutdown();puts("PASS stopped-clock CPU yield, foreground cancellation and normal-clock completion");
+ loops=0;prepare_state=0;usb_fs_set_prepare(prepare,NULL);job=(UsbFsJob){.run=cpu_job};
+ assert(usb_fs_submit(&job));usb_fs_service(8);assert(job.pending && !loops && prepares);
+ prepare_state=1;usb_fs_wait(&job);assert(job.done && !job.error && loops==100000);
+ loops=0;prepare_state=-1;job=(UsbFsJob){.run=cpu_job};assert(usb_fs_submit(&job));usb_fs_wait(&job);
+ assert(job.done && job.error==ECANCELED && !loops);
+ loops=0;prepare_state=1;job=(UsbFsJob){.run=cpu_job};assert(usb_fs_submit(&job));usb_fs_service(8);
+ assert(job.pending && loops<100000);prepare_state=-1;usb_fs_wait(&job);
+ assert(job.done && job.error==ECANCELED && loops<100000);
+ usb_fs_set_prepare(NULL,NULL);usb_fs_shutdown();
+ puts("PASS foreground host preparation: defer/resume and failed-prepare cancellation without entering the job");
 }

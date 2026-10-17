@@ -1,4 +1,4 @@
-#if NDVIDEO_CODEC_MODULES
+#if NDVIDEO_CODEC_MODULES || NDVIDEO_AUDIO_MODULES
 #include "codec_module_api.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +21,8 @@ static void *resolve_host_symbol(const char *name)
     SYMBOL(memmove);
     SYMBOL(memset);
     SYMBOL(memcmp);
+    SYMBOL(memchr);
+    SYMBOL(qsort);
     SYMBOL(strlen);
     SYMBOL(strcmp);
     SYMBOL(strncmp);

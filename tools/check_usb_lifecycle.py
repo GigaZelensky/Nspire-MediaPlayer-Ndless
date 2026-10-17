@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def function(source, name):
-    match = re.search(r'(?m)^(?:static )?(?:bool|void|int) ' + name + r'\(', source)
+    match = re.search(r'(?m)^(?:static )?(?:bool|void|int|uint32_t|uint64_t|size_t) ' + name + r'\(', source)
     if not match:
         raise ValueError(name)
     brace = source.index('{', match.end())
@@ -36,11 +36,24 @@ def main():
         folder = Path(temporary)
         file, exe = folder / 'lifecycle.c', folder / ('lifecycle.exe' if os.name == 'nt' else 'lifecycle')
         file.write_text(fixture.replace('/* PRODUCTION_TYPES */', types).replace(
-            '/* PRODUCTION_REUSE */', function(source, 'reuse_storage_binding')))
+            '/* PRODUCTION_ATTACHMENTS */',function(source,'select_attachment')+'\n'+function(source,'remember_attachment')).replace(
+            '/* PRODUCTION_FINISH */',function(source,'usb_storage_attachment_ready')+'\n'+function(source,'usb_storage_next_candidate')).replace(
+            '/* PRODUCTION_REUSE */', function(source, 'reuse_storage_binding')).replace(
+            '/* PRODUCTION_AUDIO_CLASSIFICATION */', function(source, 'usb_controller_audio_only')))
         subprocess.run([compiler, '-std=c99', '-O2', '-Wall', '-Wextra', '-Werror',
                         '-I' + str(ROOT / 'src/storage/usb'), str(file), '-o', str(exe)], check=True)
         subprocess.run([str(exe)], check=True, timeout=10)
         ui = (ROOT / 'src/player/native_usb_ui.c').read_text()
+        file.write_text((ROOT / 'tools/tests/usb/hub_parent.c').read_text().replace(
+            '/* PRODUCTION_PARENT */',function(ui,'storage_parent_owner')))
+        subprocess.run([compiler,'-std=c99','-O2','-Wall','-Wextra','-Werror',str(file),'-o',str(exe)],check=True)
+        subprocess.run([str(exe)],check=True,timeout=10)
+        bus=(ROOT / 'src/player/native_usb_bus.inc').read_text()
+        file.write_text((ROOT / 'tools/tests/usb/device_state.c').read_text().replace(
+            '/* PRODUCTION_STATE */',function(bus,'native_usb_ui_bus_device_state')))
+        subprocess.run([compiler,'-std=c99','-O2','-Wall','-Wextra','-Werror',
+                        '-I'+str(ROOT / 'src/storage/usb'),str(file),'-o',str(exe)],check=True)
+        subprocess.run([str(exe)],check=True,timeout=10)
         file.write_text((ROOT / 'tools/tests/usb/prepare_steps.c').read_text().replace(
             '/* PRODUCTION_PREPARE */', function(ui, 'native_usb_ui_prepare_step')))
         subprocess.run([compiler, '-std=c99', '-O2', '-Wall', '-Wextra', '-Werror',

@@ -26,6 +26,8 @@ int app_task_io_error(const AppTaskIo *);
 unsigned app_task_io_critical_enter(void);
 void app_task_io_critical_leave(unsigned);
 bool app_task_io_service(uint32_t budget_ticks);
+void app_task_io_pause_service(bool);
+bool app_task_io_service_paused(void);
 bool app_task_io_pending(void);
 bool app_task_io_in_job(void);
 /* Memory-only dispatch witness check for a masked raw-reader service batch.

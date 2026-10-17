@@ -8,7 +8,7 @@
 #define NDVIDEO_CX_SRAM_SURVEY 0
 #define NDVIDEO_CX_SRAM_EXPERIMENTAL 0
 typedef struct { bool checkpoint_enabled, checkpoint_started; } UsbConnectWindow;
-static bool verbose, d_down, connection_attempted, exit_audit_enabled;
+static bool verbose, d_down, connection_attempted, exit_audit_enabled, quiet_reconnect;
 static unsigned mask, prepare_calls, critical_calls;
 static const char *connection_stage;
 static bool debug_is_runtime_logging_enabled(void) { return verbose; }
@@ -30,6 +30,8 @@ static void usb_browser_debug(FILE *file) { (void)file; }
 static FILE *diagnostic_open(const char *name, const char *mode)
 { (void)name; return strcmp(mode, "rb") ? tmpfile() : NULL; }
 #define fopen diagnostic_open
+static FILE *player_error_log_open(const char *path,bool append)
+{return diagnostic_open(path,append?"ab":"wb");}
 /* PRODUCTION_CHECKPOINT */
 /* PRODUCTION_EXIT_AUDIT */
 static uint32_t model;

@@ -1,5 +1,6 @@
 #include "player_data.h"
 #include "native_interrupts.h"
+#include "raw_player_io.h"
 #include "player_internal.h"
 #include "native_screen_power.h"
 #include "media_browser.h"
@@ -330,11 +331,13 @@ void report_app_failure(const char *app_path, const char *reason, const char *me
     char text[192];
     snprintf(text, sizeof(text), "%.120s\n%s", message,
         saved ? "See ndvideo-data/ndvideo-error.log.tns." : "Error report could not be saved.");
-    show_msgbox("ND Video Player", text);
+    show_msgbox("nMedia Player", text);
 }
 
 void report_movie_decode_failure(Movie *movie, const char *movie_path, const char *reason)
 {
+    movie_audio_suspend(movie);
+    raw_player_before_native();
     if (!strcmp(debug_last_error(), "unknown"))
         debug_failf("Playback %s failed frame=%lu chunk=%d", reason ? reason : "decode",
             (unsigned long)(movie ? movie->current_frame : 0U), movie ? movie->loaded_chunk : -1);
@@ -371,6 +374,7 @@ void report_movie_decode_failure(Movie *movie, const char *movie_path, const cha
 
 void report_movie_open_failure(const char *movie_path, MovieCodec missing_codec)
 {
+    raw_player_before_native();
     if (usb_path(movie_path) && usb_controller_error() == ENODEV) {
         queue_player_message("USB disconnected", "Reconnect the USB drive to open this video.");
         return;
