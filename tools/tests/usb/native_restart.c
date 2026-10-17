@@ -22,6 +22,7 @@ static bool resolved,tree_valid,code_valid;
 static int start_error;
 static unsigned start_count;
 static int start_result,start_cleanup_result;
+static uint32_t start_phy_before[10],start_phy_after[10];
 static const char *stage;
 static uint8_t *arena;
 static uint32_t base;
@@ -102,6 +103,8 @@ static int enumerate_empty_root(const UsbHostTree *t,const UsbRegisters *r)
 static void reprobe_storage(const UsbHostTree *t){assert(t->bus==BUS);++reprobes;}
 static bool retain_bus_lease(uint32_t first,uint32_t second)
 {assert(first==USB_LOCK && second==TREE_LOCK);return false;}
+static void native_usb_ui_bus_phy(uint32_t out[10])
+{memset(out,0,10*sizeof(*out));out[0]=1;out[1]=WORD(MMIO);}
 /* PRODUCTION_NATIVE_RESTART */
 static void reset(bool run)
 {
@@ -136,6 +139,8 @@ int main(void)
     for(unsigned running=0;running<2;++running) {
         reset(running);assert(!resume_host(false));
         assert(starts==1 && !stops && enumerations==1 && reprobes==1 && WORD(BUS+604) && WORD(BUS+1772));unlocked();
+        assert(start_phy_before[0] && start_phy_before[1]==(running?0x80031U:0U) &&
+            start_phy_after[0] && start_phy_after[1]==0x80031U);
     }
     puts("PASS native root-only restart accepts both recorded stopped-driver/RUN and halted-controller states");
     for(unsigned failure=0;failure<12;++failure) {

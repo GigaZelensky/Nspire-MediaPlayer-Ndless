@@ -31,6 +31,7 @@ static uint32_t reprobe_args[12];
 static unsigned start_count;
 static int start_result;
 static int start_cleanup_result;
+static uint32_t start_phy_before[10],start_phy_after[10];
 static unsigned enumeration_count;
 static int enumeration_result;
 static bool memory(uint32_t at, unsigned bytes);
@@ -452,6 +453,14 @@ static uint32_t apd_blocks(uint32_t *address)
     return WORD(state + 44U);
 }
 
+static void debug_phy(FILE *file,const char *when,const uint32_t values[10])
+{
+    fprintf(file,"usb_ui_phy when=%s valid=%lu cmd=%08lx sts=%08lx port=%08lx otg=%08lx "
+        "misc=%08lx otg_status=%08lx otg_enable=%08lx global_status=%08lx global_mask=%08lx\n",
+        when,(unsigned long)values[0],(unsigned long)values[1],(unsigned long)values[2],
+        (unsigned long)values[3],(unsigned long)values[4],(unsigned long)values[5],
+        (unsigned long)values[6],(unsigned long)values[7],(unsigned long)values[8],(unsigned long)values[9]);
+}
 void native_usb_ui_debug(FILE *file)
 {
     if (!file)
@@ -503,6 +512,8 @@ void native_usb_ui_debug(FILE *file)
     uint32_t start_resources[12] = {0};
     uint32_t async_details[16];
     native_usb_ui_bus_details(async_details);
+    uint32_t phy_details[10];
+    native_usb_ui_bus_phy(phy_details);
     uint32_t root_port[3] = {0};
     if (tree_valid) {
         uint32_t info = WORD(tree.hub + 96);
@@ -598,6 +609,11 @@ void native_usb_ui_debug(FILE *file)
         (unsigned long)async_details[15]);
     fprintf(file, "usb_ui_start attempts=%u result=%d cleanup=%d\n",
             start_count, start_result, start_cleanup_result);
+    debug_phy(file,"current",phy_details);
+    if(start_count) {
+        debug_phy(file,"before-start",start_phy_before);
+        debug_phy(file,"after-start",start_phy_after);
+    }
     fprintf(file, "usb_ui_enumerate attempts=%u result=%d\n", enumeration_count, enumeration_result);
     for (unsigned i = 0; i < binding_trace_count && i < 16; ++i) {
         const uint32_t *b = binding_trace[i];
@@ -886,7 +902,10 @@ static int resume_host(bool retain_bus)
         ((WORD(registers.command) & 1U) || !(WORD(registers.command + 4) & 0x1000U) ||
          !(WORD(tree.bus + 648) & 1U))) goto done;
     stage = cold ? "start existing EHCI host" : "resume existing EHCI host";
-    if (cold) { ++start_count; start_cleanup_result = 0; }
+    if (cold) {
+        ++start_count; start_cleanup_result = 0;
+        native_usb_ui_bus_phy(start_phy_before);
+    }
     native_critical_leave(0);
     if (cold) {
         result = ((int (*)(uint32_t, unsigned, unsigned))(uintptr_t)
@@ -895,6 +914,7 @@ static int resume_host(bool retain_bus)
         result = ((int (*)(uint32_t))(uintptr_t)resume)(tree.hcd);
     }
     native_critical_enter();
+    if(cold)native_usb_ui_bus_phy(start_phy_after);
     if (!result) {
         if (!portable_reader_platform_refresh(&mapping) || !resume_tree(&tree, &resume) ||
             WORD(tree.bus + 1772) != 1 || !WORD(tree.bus + 604) ||

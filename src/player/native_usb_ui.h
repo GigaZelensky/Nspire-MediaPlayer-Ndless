@@ -43,5 +43,7 @@ void native_usb_ui_bus_snapshot(uint32_t [8]);
 /* Read-only CX II native queue/interrupt details for setup-failure reports.
  * CPU-view queue fields are sampled without changing cache or controller state. */
 void native_usb_ui_bus_details(uint32_t [16]);
+/* Read-only CX II role/PHY state, including the transceiver suspend control. */
+void native_usb_ui_bus_phy(uint32_t [10]);
 void native_usb_ui_bus_observer(void (*)(const char *));
 #endif

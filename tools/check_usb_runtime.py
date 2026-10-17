@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix='ndvideo-usb-lease-') as temporary:
     source=(root/'src/player/native_usb_bus.inc').read_text()
     fixture=(root/'tools/tests/usb/native_lease.c').read_text().replace(
         '/* PRODUCTION_NATIVE_LEASE */', '\n'.join(function(source,name) for name in (
-            'native_usb_ui_bus_details','running_native_bus','retain_bus_lease')))
+            'native_usb_ui_bus_details','native_usb_ui_bus_phy','running_native_bus','retain_bus_lease')))
     (work/'lease.c').write_text(fixture)
     subprocess.run([gcc,'-std=c99','-O2','-Wall','-Wextra','-Werror',str(work/'lease.c'),'-o',str(work/'lease.exe')],check=True)
     subprocess.run([str(work/'lease.exe')],check=True,timeout=10)

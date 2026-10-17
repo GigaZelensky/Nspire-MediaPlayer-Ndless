@@ -67,6 +67,15 @@ int main(void)
     tree_valid=false;native_usb_ui_bus_details(details);for(unsigned i=0;i<16;++i)assert(!details[i]);
     reset();bus[1740/4]=0xfffffff0;native_usb_ui_bus_details(details);assert(details[0] && !details[7]);
     puts("PASS native queue diagnostic is read-only, validates pointers and rejects an unknown tree");
+    reset();registers[0x40/4]=0x40;registers[0x84/4]=0x400;registers[0x88/4]=0x1234;
+    registers[0xc0/4]=2;registers[0xc4/4]=1;
+    memcpy(saved_registers,registers,sizeof(registers));
+    uint32_t phy[10];native_usb_ui_bus_phy(phy);
+    assert(phy[0] && phy[1]==0x80031 && phy[3]==5 && phy[5]==0x40 && phy[6]==0x400 &&
+        phy[7]==0x1234 && phy[8]==2 && phy[9]==1 && !memcmp(saved_registers,registers,sizeof(registers)));
+    api.classic_cx=true;native_usb_ui_bus_phy(phy);for(unsigned i=0;i<10;++i)assert(!phy[i]);
+    api.classic_cx=false;registers[0]=0;native_usb_ui_bus_phy(phy);for(unsigned i=0;i<10;++i)assert(!phy[i]);
+    puts("PASS role/PHY capture is read-only and rejects classic-CX or an unreadable controller");
     for(unsigned mode=0;mode<7;++mode) {
         reset();
         switch(mode) {

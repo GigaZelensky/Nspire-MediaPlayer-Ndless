@@ -127,6 +127,27 @@ void native_usb_ui_bus_details(uint32_t out[16])
     native_critical_leave(mask);
 }
 
+void native_usb_ui_bus_phy(uint32_t out[10])
+{
+    memset(out,0,10*sizeof(*out));
+    unsigned mask=native_critical_enter();
+    UsbRegisters r;
+    if(resolved && !api.classic_cx && usb_registers_for_asic(0x202U,&r) && usb_registers_valid(&r)) {
+        uint32_t base=r.capability;
+        out[0]=1;
+        out[1]=WORD(r.command);
+        out[2]=WORD(r.command+4);
+        out[3]=WORD(r.port);
+        out[4]=WORD(r.otg);
+        out[5]=WORD(base+0x40); /* MISC: bit 6 suspends the transceiver. */
+        out[6]=WORD(base+0x84); /* OTG interrupt status, read without W1C. */
+        out[7]=WORD(base+0x88); /* OTG interrupt enable. */
+        out[8]=WORD(base+0xc0); /* Global interrupt status. */
+        out[9]=WORD(base+0xc4); /* Global mask: device/OTG/host bits 0/1/2. */
+    }
+    native_critical_leave(mask);
+}
+
 static bool native_irq_shape(uint32_t at, const uint32_t *words, unsigned count)
 {
     const PortableView *v = portable_reader_platform_view(&mapping);
