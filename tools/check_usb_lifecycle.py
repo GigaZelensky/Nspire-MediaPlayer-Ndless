@@ -45,6 +45,14 @@ def main():
         subprocess.run([compiler, '-std=c99', '-O2', '-Wall', '-Wextra', '-Werror',
                         '-I' + str(ROOT / 'src/storage/usb'), str(file), '-o', str(exe)], check=True)
         subprocess.run([str(exe)], check=True, timeout=10)
+        fixture = (ROOT / 'tools/tests/usb/bulk_reopen.c').read_text()
+        file.write_text(fixture.replace('/* PRODUCTION_TYPES */',types).replace(
+            '/* PRODUCTION_BULK_REOPEN */', function(source,'reset_bulk_transport')+'\n'+
+            function(source,'usb_storage_prepare_endpoints')))
+        subprocess.run([compiler,'-std=c99','-O2','-Wall','-Wextra','-Werror',
+            '-I'+str(ROOT/'src/storage/usb'),str(file),str(ROOT/'src/storage/usb/usb_transport.c'),
+            str(ROOT/'src/storage/usb/usb_scsi.c'),'-o',str(exe)],check=True)
+        subprocess.run([str(exe)],check=True,timeout=10)
         ui = (ROOT / 'src/player/native_usb_ui.c').read_text()
         file.write_text((ROOT / 'tools/tests/usb/hub_parent.c').read_text().replace(
             '/* PRODUCTION_PARENT */',function(ui,'storage_parent_owner')))

@@ -27,7 +27,7 @@ typedef struct {
     usbd_interface_handle interface;
     uint8_t address,speed;
     uint8_t sense_key,asc,ascq;
-    bool present,tried;
+    bool present,tried,reset_required;
 } UsbAttachment;
 typedef struct {
     int (*callbacks[4])(device_t, UsbController *);
@@ -68,6 +68,8 @@ struct UsbController {
     unsigned attachment_count,selected_attachment;
     uint8_t address, speed, endpoint_in, endpoint_out;
     bool registered, accepting, attached, online, parked, init_failed, reused_driver;
+    unsigned bulk_resets;
+    int bulk_reset_result, bulk_clear_in_result, bulk_clear_out_result;
     int error;
 };
 unsigned usb_controller_max_read_bytes(void){return hardware_acceleration_enabled(HW_ACCEL_USB_LARGE)?USB_READ_BYTES:4096U;}
@@ -237,7 +239,7 @@ static void select_attachment(UsbController *c,unsigned index)
     c->sector_size=0;c->last_sector=0;c->endpoint_in=c->endpoint_out=0;
     c->init_failed=false;
 }
-static bool remember_attachment(UsbController *c,device_t owner,usbd_device_handle device,usbd_interface_handle interface)
+static bool remember_attachment(UsbController *c,device_t owner,usbd_device_handle device,usbd_interface_handle interface,bool retained)
 {
     if(!ram(device,12))return false;
     const uint8_t *bytes=(const uint8_t *)device;
@@ -249,7 +251,7 @@ static bool remember_attachment(UsbController *c,device_t owner,usbd_device_hand
     }
     if(index==c->attachment_count){if(index==16)return false;++c->attachment_count;}
     c->attachments[index]=(UsbAttachment){.owner=owner,.device=device,.interface=interface,
-        .address=bytes[8],.speed=bytes[11],.present=true};
+        .address=bytes[8],.speed=bytes[11],.present=true,.reset_required=retained};
     if(!c->attached)select_attachment(c,index);
     c->init_failed=false;return true;
 }
@@ -259,7 +261,7 @@ static int attach(device_t d, UsbController *c)
     ++c->attaches;
     int result = ENXIO;
     struct usb_attach_arg *a = arguments(c, d);
-    if (c->accepting && mass_storage(c,a) && remember_attachment(c,d,a->device,a->iface))result=0;
+    if (c->accepting && mass_storage(c,a) && remember_attachment(c,d,a->device,a->iface,false))result=0;
     native_critical_leave(mask);
     return result;
 }
@@ -477,14 +479,14 @@ static bool reuse_storage_binding(UsbController *c, uint32_t native_free)
     stub->callbacks[3] = cleanup;
     drain(NULL);
     stub->host = c;
-    remember_attachment(c,(device_t)(uintptr_t)owner,c->device,c->interface);
+    remember_attachment(c,(device_t)(uintptr_t)owner,c->device,c->interface,true);
     unsigned after=c->address;
     uint32_t more_owner,more_device,more_interface;
     while(native_usb_ui_storage_binding_after(after,&more_owner,&more_device,&more_interface)) {
         after=*(const volatile uint8_t *)(uintptr_t)(more_device+8);
         if(REG(more_owner)!=driver)continue;
         remember_attachment(c,(device_t)(uintptr_t)more_owner,(usbd_device_handle)(uintptr_t)more_device,
-            (usbd_interface_handle)(uintptr_t)more_interface);
+            (usbd_interface_handle)(uintptr_t)more_interface,true);
     }
     operation = "reuse storage binding";
     reuse_stage = 0;
@@ -613,11 +615,59 @@ static uint32_t be32(const uint8_t *p)
 {
     return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
 }
+static bool reset_bulk_transport(UsbController *c)
+{
+    operation="reset bulk transport";
+    c->bulk_reset_result=c->bulk_clear_in_result=c->bulk_clear_out_result=-1;
+    if(!c->attached || !c->device || !c->input || !c->output ||
+       !usb_transport_quiescent(&c->transport) || c->owner || usb_scsi_busy(&c->scsi) ||
+       native_usb_ui_bus_is_leased() || !c->interface ||
+       !ram(c->interface,c->descriptor_offset+4))goto failed;
+    const usb_interface_descriptor_t *descriptor=
+        *(const usb_interface_descriptor_t **)((uint8_t *)c->interface+c->descriptor_offset);
+    if(!descriptor || !ram(descriptor,sizeof(*descriptor)) || descriptor->bLength<sizeof(*descriptor) ||
+       descriptor->bDescriptorType!=UDESC_INTERFACE || descriptor->bInterfaceClass!=UICLASS_MASS ||
+       descriptor->bInterfaceSubClass!=UISUBCLASS_SCSI || descriptor->bInterfaceProtocol!=UIPROTO_MASS_BBB)
+        goto failed;
+    if(!nl_hassyscall(usbd_do_request) || !nl_hassyscall(usbd_clear_endpoint_stall)) {
+        usb_controller_set_error("USB storage reset is unavailable on this OS.",ENOSYS);return false;
+    }
+    usbd_device_handle device=c->device;
+    usbd_pipe_handle input=c->input,output=c->output;
+    usb_device_request_t request={0};
+    request.bmRequestType=UT_WRITE_CLASS_INTERFACE;request.bRequest=0xff;
+    USETW(request.wIndex,descriptor->bInterfaceNumber);
+    ++c->bulk_resets;
+    /* USB Mass Storage Bulk-Only 1.0, 5.3.4: reset, clear IN halt, clear OUT
+     * halt. Reset alone preserves DATA toggles. The clear-halt syscall also
+     * resets the native HCD toggle; the new private transport starts at DATA0.
+     * Native control requests run before taking the private schedule lease. */
+    native_critical_leave(0);
+    c->bulk_reset_result=usbd_do_request(device,&request,NULL);
+    native_critical_enter();
+    if(c->bulk_reset_result || !c->attached || c->device!=device || c->input!=input || c->output!=output)
+        goto failed;
+    native_critical_leave(0);
+    c->bulk_clear_in_result=usbd_clear_endpoint_stall(input);
+    native_critical_enter();
+    if(c->bulk_clear_in_result || !c->attached || c->device!=device || c->input!=input || c->output!=output)
+        goto failed;
+    native_critical_leave(0);
+    c->bulk_clear_out_result=usbd_clear_endpoint_stall(output);
+    native_critical_enter();
+    if(c->bulk_clear_out_result || !c->attached || c->device!=device || c->input!=input || c->output!=output)
+        goto failed;
+    return true;
+failed:
+    usb_controller_set_error("Could not reset the USB storage connection.",EIO);
+    return false;
+}
+
 bool usb_storage_prepare_endpoints(void)
 {
     UsbController *c = controller;
     operation = "open endpoints";
-    if (!c || !c->attached) {
+    if (!c || !c->attached || c->selected_attachment>=c->attachment_count) {
         usb_controller_set_error("No USB storage device was detected.", ENODEV);
         return false;
     }
@@ -630,6 +680,12 @@ bool usb_storage_prepare_endpoints(void)
         usb_controller_set_error("The USB controller needs to be reconnected.", EIO);
         return false;
     }
+    if (!usb_transport_quiescent(&c->transport) || c->owner || usb_scsi_busy(&c->scsi) ||
+        native_usb_ui_bus_is_leased()) {
+        usb_controller_set_error("A USB storage transfer is still finishing.", EBUSY);
+        return false;
+    }
+    bool synchronize=c->attachments[c->selected_attachment].reset_required;
     close_pipes(c);
     free(c->arena);
     c->arena = NULL;
@@ -671,6 +727,10 @@ bool usb_storage_prepare_endpoints(void)
     if (usbd_open_pipe(c->interface, c->endpoint_in, USBD_EXCLUSIVE_USE, &c->input) ||
         usbd_open_pipe(c->interface, c->endpoint_out, USBD_EXCLUSIVE_USE, &c->output))
         goto failed;
+    /* A retained binding can still contain DATA1 or an unfinished CSW from
+     * the previous app/read. Synchronize only this owned bulk interface;
+     * keep freshly enumerated first-use devices on their normal fast path. */
+    if(synchronize && !reset_bulk_transport(c))goto failed;
     c->arena = malloc(USB_DMA_ALLOCATION_BYTES);
     if (!c->arena) {
         usb_controller_set_error("Not enough memory for USB transfers.", ENOMEM);
@@ -692,6 +752,8 @@ bool usb_storage_prepare_endpoints(void)
     c->transport.endpoint_in = c->endpoint_in;
     c->transport.endpoint_out = c->endpoint_out;
     usb_scsi_init(&c->scsi, &c->transport);
+    c->attachments[c->selected_attachment].reset_required=true;
+    operation="storage endpoints ready";
     return true;
 failed:
     if(!error_text[0])usb_controller_set_error("Could not open USB storage endpoints.",EIO);
@@ -961,6 +1023,8 @@ void usb_controller_debug(FILE *file)
             (unsigned long)REG(registers.otg), (unsigned long)REG(registers.command + 8),
             (unsigned long)REG(registers.otg_mask));
     if (!c) return;
+    fprintf(file,"usb_bulk_reset attempts=%u reset=%d clear_in=%d clear_out=%d\n",
+        c->bulk_resets,c->bulk_reset_result,c->bulk_clear_in_result,c->bulk_clear_out_result);
     fprintf(file,"usb_storage_candidates count=%u selected=%u address=%u classes=%08lx\n",
         c->attachment_count,c->selected_attachment,c->address,(unsigned long)c->interface_classes);
     for(unsigned i=0;i<c->attachment_count;++i) {

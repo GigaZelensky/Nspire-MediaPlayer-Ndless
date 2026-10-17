@@ -8,7 +8,7 @@
 typedef void *device_t;
 typedef void *usbd_device_handle;
 typedef void *usbd_interface_handle;
-typedef struct {device_t owner;void *device,*interface;uint8_t address,speed,sense_key,asc,ascq;bool present,tried;} UsbAttachment;
+typedef struct {device_t owner;void *device,*interface;uint8_t address,speed,sense_key,asc,ascq;bool present,tried,reset_required;} UsbAttachment;
 typedef struct {
     UsbAttachment attachments[16];unsigned attachment_count,selected_attachment;
     void *native_owner,*device,*interface;unsigned address,speed,generation;
@@ -33,7 +33,7 @@ int main(void)
         unsigned index=cycle%17;device[index][8]=(uint8_t)(index+1);device[index][11]=3;
         void *owner=(void *)(uintptr_t)(0x1000+cycle%2*4);
         void *iface=(void *)(uintptr_t)(0x2000+cycle*4);
-        assert(remember_attachment(&c,owner,device[index],iface));
+        assert(remember_attachment(&c,owner,device[index],iface,false));
         assert(c.attached && c.attachment_count==1 && c.device==device[index] && c.interface==iface);
         assert(c.address==index+1 && !c.attachments[0].tried && !c.init_failed);
         c.attachments[0].tried=true;c.init_failed=true;
@@ -42,12 +42,12 @@ int main(void)
     memset(&c,0,sizeof(c));
     for(unsigned i=0;i<17;++i){
         device[i][8]=(uint8_t)(i+1);device[i][11]=2;
-        bool added=remember_attachment(&c,(void *)(uintptr_t)(i+1),device[i],device[i]);
+        bool added=remember_attachment(&c,(void *)(uintptr_t)(i+1),device[i],device[i],false);
         assert(added==(i<16));
     }
     assert(c.attachment_count==16);
     assert(detach((void *)8,&c)==0);
-    assert(remember_attachment(&c,(void *)17,device[16],device[16]));
+    assert(remember_attachment(&c,(void *)17,device[16],device[16],false));
     assert(c.attachment_count==16 && c.attachments[7].present && c.attachments[7].address==17);
     puts("PASS production USB attachments: 64 detach/reinsert cycles, recycled owners, slot reuse and live capacity");
     return 0;

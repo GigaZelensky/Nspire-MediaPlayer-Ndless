@@ -101,10 +101,10 @@ int main(void)
            stub->callbacks[1] == attach && stub->callbacks[2] == detach && stub->callbacks[3] == cleanup);
     assert(c.registered && c.attached && c.reused_driver && c.address == 2 && c.speed == 3);
     assert(c.attachment_count==1 && c.attachments[0].present);
-    assert(remember_attachment(&c,(void *)arena,(void *)(arena+256),(void *)(arena+512)));
+    assert(remember_attachment(&c,(void *)arena,(void *)(arena+256),(void *)(arena+512),false));
     assert(c.attachment_count==1);
     arena[768+8]=3;arena[768+11]=3;
-    assert(remember_attachment(&c,(void *)(arena+128),(void *)(arena+768),(void *)(arena+800)));
+    assert(remember_attachment(&c,(void *)(arena+128),(void *)(arena+768),(void *)(arena+800),false));
     assert(c.attachment_count==2 && c.address==2);
     select_attachment(&c,1);assert(c.address==3 && c.device==(void *)(arena+768));
     controller=&c;
@@ -114,7 +114,7 @@ int main(void)
     assert(c.attachments[0].tried && c.attachments[1].tried);
     assert(!usb_storage_attachment_ready());
     arena[864+8]=4;arena[864+11]=3;
-    assert(remember_attachment(&c,(void *)(arena+192),(void *)(arena+864),(void *)(arena+896)));
+    assert(remember_attachment(&c,(void *)(arena+192),(void *)(arena+864),(void *)(arena+896),false));
     /* Native pipe close can yield to a late attach before an older probe
      * writes its failure flag. Pending attachments must remain discoverable. */
     c.init_failed=true;
