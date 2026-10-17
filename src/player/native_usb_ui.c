@@ -166,6 +166,16 @@ static int cold_start_check(const UsbHostTree *tree)
     return root_found ? 0 : -38;
 }
 
+static bool cold_advance_idle(const UsbHostTree *tree,uint32_t status)
+{
+    if(status & (0x4000U | 0x8000U))return false;
+    uint32_t event=WORD(tree->bus+1764);
+    /* The native event survives stop/start. A still-sleeping operation owns
+     * its completion even if its driver has already become inactive. */
+    return memory(event,36) && WORD(event+12)==0x45564e54U &&
+        !WORD(event+28) && !WORD(event+32);
+}
+
 static bool storage_configuration(uint32_t device)
 {
     const PortableView *v = portable_reader_platform_view(&mapping);
@@ -514,6 +524,29 @@ void native_usb_ui_debug(FILE *file)
     native_usb_ui_bus_details(async_details);
     uint32_t phy_details[10];
     native_usb_ui_bus_phy(phy_details);
+    uint32_t event_state[11]={0},linked_qh[9]={0};
+    if(bus) {
+        uint32_t event=WORD(bus+1764);
+        event_state[0]=event;
+        if(memory(event,36)) {
+            event_state[1]=WORD(event+12);event_state[2]=WORD(event+24);
+            event_state[3]=WORD(event+28);event_state[4]=WORD(event+32);
+            if(event_state[1]==0x45564e54U && event_state[3] && memory(event_state[4],32)) {
+                uint32_t task=WORD(event_state[4]+24);
+                if(memory(task,0x90) && WORD(task+12)==0x5441534bU) {
+                    event_state[5]=task;event_state[6]=WORD(task+24)&255U;
+                    event_state[7]=WORD(task+0x74);event_state[8]=WORD(task+0x7c);
+                }
+            }
+        }
+        uint32_t first=async_details[11];
+        if(memory(first,80)) {
+            linked_qh[0]=first;
+            for(unsigned i=0;i<8;++i)linked_qh[i+1]=WORD(first+i*4);
+        }
+    }
+    if(memory(api.clock_hz,4))event_state[9]=WORD(api.clock_hz);
+    if(memory(api.clock_counter,4))event_state[10]=WORD(api.clock_counter);
     uint32_t root_port[3] = {0};
     if (tree_valid) {
         uint32_t info = WORD(tree.hub + 96);
@@ -610,6 +643,17 @@ void native_usb_ui_debug(FILE *file)
     fprintf(file, "usb_ui_start attempts=%u result=%d cleanup=%d\n",
             start_count, start_result, start_cleanup_result);
     debug_phy(file,"current",phy_details);
+    fprintf(file,"usb_ui_advance_event address=%08lx magic=%08lx flags=%08lx waiters=%lu head=%08lx "
+        "task=%08lx reason=%lu timer_armed=%lu timer_delta=%lu hz=%lu tick=%lu\n",
+        (unsigned long)event_state[0],(unsigned long)event_state[1],(unsigned long)event_state[2],
+        (unsigned long)event_state[3],(unsigned long)event_state[4],(unsigned long)event_state[5],
+        (unsigned long)event_state[6],(unsigned long)event_state[7],(unsigned long)event_state[8],
+        (unsigned long)event_state[9],(unsigned long)event_state[10]);
+    if(linked_qh[0])fprintf(file,"usb_ui_linked_qh address=%08lx link=%08lx info1=%08lx info2=%08lx "
+        "current=%08lx next=%08lx alt=%08lx token=%08lx buffer=%08lx\n",
+        (unsigned long)linked_qh[0],(unsigned long)linked_qh[1],(unsigned long)linked_qh[2],
+        (unsigned long)linked_qh[3],(unsigned long)linked_qh[4],(unsigned long)linked_qh[5],
+        (unsigned long)linked_qh[6],(unsigned long)linked_qh[7],(unsigned long)linked_qh[8]);
     if(start_count) {
         debug_phy(file,"before-start",start_phy_before);
         debug_phy(file,"after-start",start_phy_after);
@@ -871,9 +915,15 @@ static int resume_host(bool retain_bus)
     result = -28;
     UsbRegisters registers;
     if (!usb_registers_for_asic(api.classic_cx ? 0x101U : 0x202U, &registers) ||
-        !usb_registers_valid(&registers) || (WORD(registers.otg) & registers.role_mask) ||
-        (WORD(registers.command) & (2U | 64U)) ||
-        (WORD(registers.command + 4) & 16U)) goto done;
+        !usb_registers_valid(&registers) || (WORD(registers.otg) & registers.role_mask)) goto done;
+    uint32_t command = WORD(registers.command), status = WORD(registers.command + 4);
+    if ((command & 2U) || (status & 16U)) goto done;
+    /* Control19 can leave IAAD set after its last queue wait timed out. With
+     * that driver completely stopped and both schedules quiescent, its
+     * matching control18 replaces the stale command along with the lists.
+     * An active/suspended owner or running schedule still owns its advance;
+     * do not acknowledge it, change a queue, or manufacture a completion. */
+    if ((command & 64U) && (!cold || !cold_advance_idle(&tree,status))) goto done;
     if (!(WORD(registers.port) & 1U) && !cold) {
         /* An initialized, running host can simply wait for insertion. A cold
          * root-only host below must be started even before PORT_CONNECT:
@@ -903,8 +953,14 @@ static int resume_host(bool retain_bus)
          !(WORD(tree.bus + 648) & 1U))) goto done;
     stage = cold ? "start existing EHCI host" : "resume existing EHCI host";
     if (cold) {
-        ++start_count; start_cleanup_result = 0;
         native_usb_ui_bus_phy(start_phy_before);
+        /* Recheck hardware at the native-call boundary while both software
+         * locks still exclude a replacement driver or newly linked child. */
+        if (!start_phy_before[0] || (start_phy_before[1] & 2U) || (start_phy_before[2] & 16U) ||
+            ((start_phy_before[1] & 64U) && !cold_advance_idle(&tree,start_phy_before[2]))) {
+            result = -28; goto done;
+        }
+        ++start_count; start_cleanup_result = 0;
     }
     native_critical_leave(0);
     if (cold) {

@@ -19,6 +19,7 @@ enum {UI_SEM_TAKE,UI_SEM_GIVE,UI_HCD_CONTROL,UI_HCD_CORE_CONTROL,UI_EHCI_START,U
 static struct {bool classic_cx;uint32_t bsd_locks,bsd_mode;uintptr_t function[6];} api;
 static unsigned mapping,mask,borrow_lock_stage,starts,stops,enumerations,reprobes;
 static bool resolved,tree_valid,code_valid;
+static bool schedule_changed_before_start;
 static int start_error;
 static unsigned start_count;
 static int start_result,start_cleanup_result;
@@ -40,6 +41,7 @@ static uint32_t base;
 #define TREE_LOCK (base+0x1800)
 #define MODE (base+0x1901)
 #define HUB (base+0x1a00)
+#define ADVANCE_EVENT (base+0x1e00)
 #define PERIODIC (base+0x2000)
 #define CORE 0x81000000U
 #define START 0x82000000U
@@ -104,13 +106,17 @@ static void reprobe_storage(const UsbHostTree *t){assert(t->bus==BUS);++reprobes
 static bool retain_bus_lease(uint32_t first,uint32_t second)
 {assert(first==USB_LOCK && second==TREE_LOCK);return false;}
 static void native_usb_ui_bus_phy(uint32_t out[10])
-{memset(out,0,10*sizeof(*out));out[0]=1;out[1]=WORD(MMIO);}
+{
+    if(schedule_changed_before_start)WORD(MMIO+4)|=0x8000;
+    memset(out,0,10*sizeof(*out));out[0]=1;out[1]=WORD(MMIO);out[2]=WORD(MMIO+4);
+}
 /* PRODUCTION_NATIVE_RESTART */
 static void reset(bool run)
 {
     memset(arena,0,0x8000);resolved=tree_valid=code_valid=true;mask=0x80;
     borrow_lock_stage=starts=stops=enumerations=reprobes=start_count=0;
     start_error=start_result=start_cleanup_result=0;
+    schedule_changed_before_start=false;
     api.classic_cx=false;api.bsd_locks=LOCKS;api.bsd_mode=MODE;arena[0x1901]=1;
     api.function[UI_SEM_TAKE]=(uintptr_t)take;api.function[UI_SEM_GIVE]=(uintptr_t)give;
     api.function[UI_HCD_CONTROL]=(uintptr_t)control;
@@ -123,6 +129,7 @@ static void reset(bool run)
     WORD(DMA+4)=PERIODIC;WORD(BUS+1740)=HEAD;
     WORD(HEAD+76)=HEAD;WORD(HEAD)=HEAD|2;WORD(HEAD+16)=1;WORD(HEAD+24)=0x40;
     WORD(BUS+52+4)=HUB;
+    WORD(BUS+1764)=ADVANCE_EVENT;WORD(ADVANCE_EVENT+12)=0x45564e54;
     WORD(MMIO)=run?0x80031:0;WORD(MMIO+4)=run?0xc000:0x1000;WORD(MMIO+0x20)=0xd;
 }
 static void unlocked(void)
@@ -161,6 +168,31 @@ int main(void)
         }
         assert(resume_host(false)<0 && !starts && !stops && !enumerations);unlocked();
     }
+    /* Recorded after a clean-reset hub unplug/replug: native control19 has
+     * retired all children and IRQ state, but IAAD survives with ASS/PSS=0. */
+    reset(true);WORD(MMIO)|=64;WORD(MMIO+4)=8;
+    WORD(ADVANCE_EVENT+24)=0x12345678; /* A real pending flag stays untouched. */
+    assert(!resume_host(false) && starts==1 && !stops && enumerations==1);
+    assert(start_phy_before[1]==0x80071 && start_phy_after[1]==0x80031 &&
+        WORD(ADVANCE_EVENT+24)==0x12345678);unlocked();
+    for(unsigned event_case=0;event_case<4;++event_case) {
+        reset(true);WORD(MMIO)|=64;WORD(MMIO+4)=8;
+        if(event_case==0)WORD(BUS+1764)=0;
+        if(event_case==1)WORD(ADVANCE_EVENT+12)=0;
+        if(event_case==2)WORD(ADVANCE_EVENT+28)=1;
+        if(event_case==3)WORD(ADVANCE_EVENT+32)=base+0x1f00;
+        assert(resume_host(false)==-28 && !starts && !stops && (WORD(MMIO)&64));unlocked();
+    }
+    /* That exception must not complete or replace a live owner's request. */
+    for(unsigned status=0;status<3;++status) {
+        reset(true);WORD(MMIO)|=64;
+        WORD(MMIO+4)=status==1?0x4000:status==2?0x8000:0;
+        if(!status){WORD(BUS+604)=IRQ;WORD(BUS+1772)=1;}
+        assert(resume_host(false)==-28 && !starts && !stops);unlocked();
+    }
+    puts("PASS stale advance restarts only an authenticated stopped native driver with no linked queue and quiescent schedules");
+    reset(true);WORD(MMIO)|=64;WORD(MMIO+4)=8;schedule_changed_before_start=true;
+    assert(resume_host(false)==-28 && !starts && !stops && (WORD(MMIO)&64));unlocked();
     reset(true);WORD(BUS+604)=IRQ;WORD(BUS+1772)=1;
     assert(!resume_host(false) && !starts && enumerations==1);unlocked();
     WORD(BUS+1760)=WORD(HANDLE+32)=1;

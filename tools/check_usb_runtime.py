@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix='ndvideo-usb-restart-') as temporary:
     source=(root/'src/player/native_usb_ui.c').read_text()
     fixture=(root/'tools/tests/usb/native_restart.c').read_text().replace(
         '/* PRODUCTION_NATIVE_RESTART */', '\n'.join(function(source,name) for name in (
-            'cold_start_check','resume_host')))
+            'cold_start_check','cold_advance_idle','resume_host')))
     (work/'restart.c').write_text(fixture)
     subprocess.run([gcc,'-std=c99','-O2','-Wall','-Wextra','-Werror',str(work/'restart.c'),'-o',str(work/'restart.exe')],check=True)
     subprocess.run([str(work/'restart.exe')],check=True,timeout=10)
