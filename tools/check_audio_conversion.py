@@ -66,6 +66,9 @@ def check(work,screenshots=None):
     assert info['audio_only'] and info['width']==0 and info['music']['covers']==2
     assert any(e['kind']=='preview' for e in events)
     options=AudioOptions(source=str(source),output=str(work/'worker.opus'),audio_rate=0,audio_channels=0)
+    overhead=options.metadata_overhead(info);options.keep_tags=False
+    assert options.metadata_overhead(info)<overhead
+    options.keep_tags=True
     result,events=wait(encode_task(options.arguments(info),audio=True))
     assert result and not [e for e in events if e['kind']=='error'],events
     assert read_metadata(result['output_path']).tags['TITLE']==expected['TITLE']

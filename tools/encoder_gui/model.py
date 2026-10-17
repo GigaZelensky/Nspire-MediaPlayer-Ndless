@@ -185,6 +185,9 @@ class AudioOptions(EncodeOptions):
         # releases their budget immediately, before conversion starts.
         music=(info or {}).get('music',{})
         total=music.get('metadata_bytes',{}).get(self.audio_codec,8192)
+        if not self.keep_tags:
+            total-=sum(len(k.encode('utf8'))+sum(len(v.encode('utf8'))+32 for v in values)
+                       for k,values in music.get('tags',{}).items())
         if not self.keep_art:
             art=music.get('cover_bytes',0)
             total-=art*4//3 if self.audio_codec in ('opus','vorbis') else art

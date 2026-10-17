@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the portable Windows GUI with its native FFmpeg runtime."""
 from pathlib import Path
-import argparse,hashlib,json,os,shutil,subprocess,sys,zipfile,io
+import argparse,hashlib,json,os,shutil,subprocess,sys,zipfile,struct
 from importlib.metadata import distribution
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -13,14 +13,11 @@ def main():
     work=ROOT/'build/encoder-desktop';work.mkdir(parents=True,exist_ok=True)
     # All generated build files stay in this explicit workspace build folder.
     assert work.resolve().is_relative_to(ROOT.resolve())
-    from PySide6.QtCore import QByteArray,QBuffer,QIODevice
-    from PySide6.QtGui import QImage,QPainter
-    from PySide6.QtSvg import QSvgRenderer
     from PIL import Image
-    image=QImage(256,256,QImage.Format.Format_ARGB32);image.fill(0)
-    painter=QPainter(image);QSvgRenderer(str(ROOT/'tools/encoder_gui/assets/app.svg')).render(painter);painter.end()
-    data=QByteArray();buffer=QBuffer(data);buffer.open(QIODevice.OpenModeFlag.WriteOnly);image.save(buffer,'PNG')
-    app_icon=work/'app.ico';Image.open(io.BytesIO(bytes(data))).save(app_icon,format='ICO',sizes=[(n,n) for n in (16,24,32,48,64,128,256)])
+    image=Image.open(ROOT/'tools/encoder_gui/assets/app.png').convert('RGBA')
+    image.thumbnail((256,256),Image.Resampling.LANCZOS)
+    canvas=Image.new('RGBA',(256,256));canvas.alpha_composite(image,((256-image.width)//2,(256-image.height)//2))
+    app_icon=work/'app.ico';canvas.save(app_icon,format='ICO',sizes=[(n,n) for n in (16,24,32,48,64,128,256)])
     licenses=work/'licenses';licenses.mkdir(exist_ok=True)
     for name in ('PySide6-Essentials','shiboken6','PyInstaller','Pillow','cryptography','psutil','imageio-ffmpeg','mutagen'):
         dist=distribution(name)
@@ -54,6 +51,17 @@ def main():
     subprocess.run(command,cwd=ROOT,env=environment,check=True)
     exe=output/'nMedia-Encoder-Windows-x64.exe'
     if os.name!='nt':exe=output/'nMedia-Encoder-Windows-x64'
+    if os.name=='nt':
+        import pefile
+        raw=app_icon.read_bytes();count=struct.unpack_from('<H',raw,4)[0]
+        expected=set()
+        for i in range(count):
+            length,offset=struct.unpack_from('<II',raw,6+i*16+8);expected.add(raw[offset:offset+length])
+        with pefile.PE(str(exe)) as pe:
+            actual={pe.get_data(lang.data.struct.OffsetToData,lang.data.struct.Size)
+                for entry in pe.DIRECTORY_ENTRY_RESOURCE.entries if entry.id==3
+                for item in entry.directory.entries for lang in item.directory.entries}
+        if not expected.issubset(actual):raise RuntimeError('The executable did not embed every size of the nMedia icon.')
     digest=hashlib.sha256(exe.read_bytes()).hexdigest()
     shutil.copy2(ROOT/'LICENSE',output/'nMedia-Encoder-LICENSE.txt')
     with zipfile.ZipFile(output/'nMedia-Encoder-Licenses.zip','w',zipfile.ZIP_DEFLATED) as archive:

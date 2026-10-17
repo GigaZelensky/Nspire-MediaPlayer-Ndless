@@ -117,6 +117,7 @@ def main():
         pixmap=QPixmap();pixmap.loadFromData(preview);window.preview.set_image(pixmap);window.source.set_image(pixmap)
         window.source.title.setText('A video with two soundtracks.mkv');window.show();app.processEvents()
         assert window.encode.isEnabled()
+        assert not window.windowIcon().isNull(),'The bundled nMedia logo must load as the window icon'
         window.audio_track.setCurrentIndex(1);assert window.options().audio_track==1
         window.subtitle_mode.setCurrentIndex(1);window.tracks.topLevelItem(1).setCheckState(0,Qt.CheckState.Checked)
         assert window.options().subtitle_tracks==[1]

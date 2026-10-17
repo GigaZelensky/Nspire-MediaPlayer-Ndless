@@ -49,7 +49,7 @@ def form():
 class EncoderWindow(QMainWindow):
     def __init__(self):
         super().__init__();self.setWindowTitle('nMedia Encoder');self.resize(1120,860);self.setMinimumSize(820,650)
-        self.setWindowIcon(QIcon(str(Path(__file__).resolve().parent/'assets/app.svg')));self.settings=QSettings('nMedia','Encoder')
+        self.setWindowIcon(QIcon(str(Path(__file__).resolve().parent/'assets/app.png')));self.settings=QSettings('nMedia','Encoder')
         self.info=None;self.original_info=None;self.original_path='';self.task=None;self.task_type='';self.task_error=None;self.job_started=0;self.completed_output=''
         self.external_subtitles=[];self.loading_tracks=False;self.selected_path='';self.audio_requested=self.settings.value('include_audio',True,type=bool)
         self.root=QWidget();self.setCentralWidget(self.root)
@@ -86,7 +86,7 @@ class EncoderWindow(QMainWindow):
         self._video_tab();self._audio_tab();self._subtitle_tab();main.addLayout(content,1)
         self.error=QLabel();self.error.setObjectName('error');self.error.setTextFormat(Qt.TextFormat.PlainText);self.error.setWordWrap(True);self.error.hide();main.addWidget(self.error)
         output_row=QHBoxLayout();output_row.addWidget(QLabel('Save as'))
-        self.output=QLineEdit();self.output.setPlaceholderText('Choose an output file');self.output.setAccessibleName('Output video filename');output_row.addWidget(self.output,1)
+        self.output=QLineEdit();self.output.setPlaceholderText('Choose an output file');self.output.setAccessibleName('Output filename');output_row.addWidget(self.output,1)
         self.output_browse=QPushButton('Browse…');output_row.addWidget(self.output_browse);main.addLayout(output_row)
         self.progress=QProgressBar();self.progress.setRange(0,1000);self.progress.setValue(0);self.progress.setTextVisible(False);self.progress.hide();main.addWidget(self.progress)
         status_row=QHBoxLayout();status_box=QVBoxLayout();status_box.setSpacing(5)
@@ -372,13 +372,13 @@ class EncoderWindow(QMainWindow):
     def load_source(self,path):
         if self.task:return
         self.selected_path=str(Path(path).resolve());self.info=None;self.original_info=None;self.original_path='';self.original_entry.clear();self.original_start.setText('0');self.completed_output='';self.open_folder.hide();self.log.clear();self.error.hide()
-        self.source.title.setText(Path(path).name);self.source.detail.setText('Reading video details…');self.source.browse.setText('Change…');self.source.setToolTip(self.selected_path)
+        self.source.title.setText(Path(path).name);self.source.detail.setText('Reading media details…');self.source.browse.setText('Change…');self.source.setToolTip(self.selected_path)
         self.preview.set_image(QPixmap());self.source.set_image(QPixmap());self.output.setText(str(Path(path).with_suffix('.nvp.tns')))
         self.settings.setValue('last_directory',str(Path(path).parent))
         self.task_type='probe';self.task_error=None
         try:self.task=Task({'task':'probe','path':self.selected_path,'allow_audio':True})
         except OSError as error:
-            self.error.setText(f'Could not read this video: {error}');self.error.show();return
+            self.error.setText(f'Could not read this source: {error}');self.error.show();return
         self.set_busy(True)
         self.status.setText('Reading media details…');self.status_detail.setText('You can cancel if this file is unavailable.');self.progress.setRange(0,0)
     def set_source_info(self,info):
@@ -519,7 +519,9 @@ class EncoderWindow(QMainWindow):
         elif self.task_error or not result:
             message=(self.task_error or {}).get('message','The encoder stopped unexpectedly. Open details for the error.')
             self.error.setText(message[:700]);self.error.show();self.status.setText('Could not read this source.' if self.task_type in ('probe','original') else 'Encoding stopped.');self.status_detail.setText('Your source file was not changed. Show details to inspect the error.')
-        else:self.status.setText('Ready to save track changes.' if (self.info or {}).get('encoded') else 'Ready to encode.');self.status_detail.setText('Choose your tracks, then save a new copy.' if (self.info or {}).get('encoded') else 'Choose your settings, then encode the video.')
+        else:
+            self.status.setText('Ready to convert audio.' if self.is_audio() else 'Ready to save track changes.' if (self.info or {}).get('encoded') else 'Ready to encode.')
+            self.status_detail.setText('Choose your settings, then convert the audio.' if self.is_audio() else 'Choose your tracks, then save a new copy.' if (self.info or {}).get('encoded') else 'Choose your settings, then encode the video.')
     def save_details(self):
         path,_=QFileDialog.getSaveFileName(self,'Save encoder log','nMedia-encoder-log.txt','Text file (*.txt)')
         if path:
