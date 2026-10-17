@@ -328,6 +328,36 @@ the default and writes version 10 containers. `--codec hevc` selects H.265;
 `--codec av1` selects AV1; `--codec mpeg4` selects MPEG-4 Part 2.
 These alternatives use version 11 containers.
 
+### Desktop encoder (Windows)
+
+Download **`nMedia-Encoder-Windows-x64.exe`** from [Releases](https://github.com/GigaZelensky/Nspire-MediaPlayer-Ndless/releases/latest). Open it, choose or drop a video, choose the picture, audio and subtitle settings, then click **Encode video**. Python is not required for the executable. It runs native FFmpeg on your computer and does not upload your media.
+
+The GUI can select soundtrack languages/titles and subtitle tracks, embed text subtitles or burn them in, trim/crop a video, convert HDR to SDR, and target a total file size. Existing output is replaced only after encoding succeeds. **Copy command** gives the equivalent Python CLI command, which remains available below.
+
+| Encode a source video | Edit an encoded video's tracks |
+| --- | --- |
+| <img src="examples/screenshots/encoder-video.png" width="440" alt="nMedia Encoder video settings"> | <img src="examples/screenshots/encoder-edit.png" width="440" alt="nMedia Encoder editing tracks without re-encoding video"> |
+
+To run the GUI from source:
+
+```powershell
+python -m pip install -r requirements-encoder.txt
+python tools/encode_gui.py
+```
+
+To build the executable, install `requirements-encoder-build.txt` and run `python tools/build_encoder_gui.py`. GitHub Actions builds and tests the app, including an actual encode and cancellation inside the packaged executable, and attaches it to releases. The Windows executable targets Windows 10/11 x64; it does not support Windows XP.
+
+Open an existing unencrypted `.nvp.tns` in the same app to edit its tracks. You can keep, replace or remove its soundtrack and selectable subtitles without encoding the video again. Choose the original video (or an audio file) as the track source when adding audio; if the encoded video was trimmed, enter where it starts in the original. Image subtitles already burned into the picture cannot be removed this way.
+
+The track editor is also available from the CLI:
+
+```powershell
+python tools/edit_ndless_video.py "movie.nvp.tns" --output "movie-silent.nvp.tns" --audio remove --strip-subtitles
+python tools/edit_ndless_video.py "movie.nvp.tns" --output "movie-with-audio.nvp.tns" --audio replace --track-source "original.mkv" --audio-track 0 --audio-codec opus --audio-bitrate 128
+```
+
+Use repeated `--source-subtitle-track N` options for text subtitles from the original, or `--subtitle "captions.srt"` for an external file. Original-source subtitles follow `--source-start`; external subtitle files should already match the encoded video's timeline. Edited output is written as a new file. Encrypted NVPs and formats older than version 10 are not supported by the track editor.
+
 ### Python Requirements
 
 Download/clone the whole repository, rather than only the encoder script: it

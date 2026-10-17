@@ -4207,6 +4207,10 @@ def encode(args: argparse.Namespace) -> EncodeStats:
             if max_chunk_bytes is not None else None
         )
         encode_duration = args.duration if args.duration is not None else max(0.0, video_probe.duration - args.start)
+        if subtitle_tracks and (args.start or args.duration is not None):
+            from nvp_tracks import retime_tracks
+            subtitle_tracks=retime_tracks(subtitle_tracks,args.start,encode_duration)
+            subtitle_count=sum(len(track.cues) for track in subtitle_tracks)
         if fps < video_probe.fps * 0.995:
             source_frames_estimate = max(0, int(round(encode_duration * video_probe.fps)))
             target_frames_estimate = max(0, int(round(encode_duration * fps)))
@@ -4604,7 +4608,7 @@ def encode(args: argparse.Namespace) -> EncodeStats:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__,usage="%(prog)s INPUT --output OUTPUT [options]")
     parser.add_argument("input", help="Input video file")
     parser.add_argument("--output", help="Output .nvp.tns file (required unless listing audio tracks)")
     parser.add_argument("--subtitle", action="append", help="Optional subtitle source path or 'embedded'; repeat to mix multiple subtitle sources")

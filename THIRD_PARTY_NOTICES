@@ -36,6 +36,15 @@ Code from FAAD2 is copyright (c) Nero AG, www.nero.com
 GNU GPL version 2 or any later version; full terms are in faad2/COPYING.
 https://github.com/FreewareAdvancedAudio/faad2
 
+Desktop encoder: PySide6/Qt, PyInstaller, imageio-ffmpeg, Pillow, cryptography,
+psutil and the Public Sans typeface. These are PC-side dependencies; they are
+not linked into the calculator player. Pinned versions are listed in
+requirements-encoder.txt and requirements-encoder-build.txt. The encoder's
+release includes dependency license texts in nMedia-Encoder-Licenses.zip and
+inside the executable. Public Sans's SIL Open Font License is retained beside
+the font in tools/encoder_gui/assets/PublicSans-OFL.txt. Native FFmpeg build
+sources are available at https://github.com/imageio/imageio-binaries.
+
 MP4 demuxing: src/audio/vendor/minimp4
 Public domain / CC0; the original license is in minimp4/LICENSE.
 https://github.com/lieff/minimp4

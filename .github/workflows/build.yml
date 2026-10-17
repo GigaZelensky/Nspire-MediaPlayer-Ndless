@@ -135,6 +135,7 @@ jobs:
         run: |
           python tools/check_media.py
           python tools/check_audio_tracks.py
+          python tools/check_nvp_tracks.py
 
       - name: Build Full and Video Lite
         run: make -j2 release SDKROOT=./external/Ndless-official/ndless-sdk
@@ -231,3 +232,70 @@ jobs:
               --title "nMedia Player ${RELEASE_TAG}" \
               --notes-file build/publish-notes.md
           fi
+
+  encoder-windows:
+    needs: build
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name || inputs.release_tag || github.ref }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-encoder*.txt
+
+      - name: Install encoder build dependencies
+        run: python -m pip install -r requirements-encoder-build.txt
+
+      - name: Check GUI and native encoding
+        run: |
+          python tools/check_encoder_gui.py --screenshots build/encoder-check/screenshots
+          if ($LASTEXITCODE -ne 0) { throw 'Encoder GUI checks failed' }
+
+      - name: Build portable encoder executable
+        run: python tools/build_encoder_gui.py
+
+      - name: Test the packaged executable
+        run: python tools/check_encoder_exe.py --exe dist/encoder/nMedia-Encoder-Windows-x64.exe
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nMedia-Encoder-Windows-${{ github.sha }}
+          path: dist/encoder/*
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: nMedia-Encoder-checks-${{ github.sha }}
+          path: |
+            build/encoder-check/screenshots/*
+            build/encoder-exe-check/*
+          if-no-files-found: ignore
+
+      - name: Attach encoder to release
+        if: >-
+          github.event_name == 'release' ||
+          (github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))) ||
+          (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+        run: |
+          $tag = $env:REQUESTED_TAG
+          if (-not $tag) { $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { 'latest' } }
+          $commit = git rev-parse HEAD
+          $release = gh release view $tag --json body | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Release is unavailable' }
+          if (-not $release.body.Contains($commit)) {
+            Write-Host 'A newer build replaced this release; its encoder assets will be kept.'
+            exit 0
+          }
+          $assets = Get-ChildItem -LiteralPath dist/encoder -File | ForEach-Object FullName
+          gh release upload $tag @assets --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Encoder release upload failed' }
