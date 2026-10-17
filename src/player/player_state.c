@@ -17,6 +17,8 @@ MoviePickerCache g_picker_cache, g_previous_picker_cache;
 DeferredHistorySave g_pending_history_save;
 DisplayPowerState g_display_power_state;
 bool g_pending_theme_save = false;
+unsigned g_audio_volume = 20;
+bool g_audio_muted = false;
 const PlaybackRate g_playback_rates[PLAYBACK_RATE_COUNT] = {
     {1, 4, "0.25x"},
     {1, 2, "0.5x"},

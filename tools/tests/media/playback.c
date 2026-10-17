@@ -43,7 +43,7 @@ static void playback_capture_reset_timeline(Movie *m) {(void)m;}
 static uint64_t movie_frame_time_scaled_ticks(Movie *m, unsigned frames, const PlaybackRate *rate)
 {(void)m;(void)rate;return frames;}
 static UsbAudio device;
-static bool remembered_mute;
+static void history_set_audio_preference(unsigned volume,bool muted){(void)volume;(void)muted;}
 static unsigned opens, closes, pauses, starts, seeks, dialogs, decoder_steps;
 static bool pause_ok = true;
 static const char *transfer_fault="stream token=12345678";

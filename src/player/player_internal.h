@@ -266,6 +266,8 @@ typedef struct {
     unsigned clock_mhz;
     bool clock_keep_after_exit;
     bool has_clock_preference;
+    unsigned audio_volume;
+    bool audio_muted, has_audio_preference;
 } HistoryStore;
 
 typedef struct {
@@ -749,6 +751,8 @@ extern MoviePickerCache g_picker_cache, g_previous_picker_cache;
 extern DeferredHistorySave g_pending_history_save;
 extern DisplayPowerState g_display_power_state;
 extern bool g_pending_theme_save;
+extern unsigned g_audio_volume;
+extern bool g_audio_muted;
 extern const PlaybackRate g_playback_rates[PLAYBACK_RATE_COUNT];
 extern const int g_subtitle_font_choices[SUBTITLE_FONT_CHOICE_COUNT];
 extern const char *g_subtitle_font_names[SUBTITLE_FONT_CHOICE_COUNT];
@@ -890,9 +894,10 @@ bool save_history_store_to_path(const char *history_path, const HistoryStore *hi
 bool save_history_store(const char *movie_path, const HistoryStore *history);
 unsigned history_load_clock_preference(const char *app_path, bool *keep_after_exit);
 bool history_save_clock_preference(const char *app_path, unsigned mhz, bool keep_after_exit);
-void ui_load_theme(void);
+void load_app_preferences(void);
+void history_set_audio_preference(unsigned volume, bool muted);
 void ui_queue_theme_save(void);
-void flush_queued_theme_save(const char *reason);
+void flush_queued_preferences_save(const char *reason);
 int history_find_entry_index(const HistoryStore *history, const char *movie_path);
 void history_remove_entry(HistoryStore *history, const char *movie_path);
 void history_upsert_entry( HistoryStore *history, const char *movie_path, const Movie *movie, bool has_resume, uint32_t frame, ScaleMode scale_mode, size_t playback_rate_index, PlaybackMode playback_mode, bool realtime_frame_skip, size_t subtitle_font_index, int subtitle_size, SubtitlePlacement subtitle_placement, VideoAlign video_align_x, VideoAlign video_align_y );

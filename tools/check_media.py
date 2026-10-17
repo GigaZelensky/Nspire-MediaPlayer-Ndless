@@ -18,6 +18,8 @@ def run(arguments):
 
 
 def check(work):
+    from check_player_preferences import check as check_preferences
+    check_preferences(work / "preferences")
     from check_audio_controls import check as check_audio_controls
     check_audio_controls(work / "audio-controls")
     from check_space_font import check as check_space_font

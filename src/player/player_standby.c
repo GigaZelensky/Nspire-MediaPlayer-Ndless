@@ -95,7 +95,7 @@ bool player_standby(SDL_Surface *screen, Movie *movie, const char *path, bool is
     screenshot_preview_tick(preview, monotonic_clock_now_ms());
     screenshot_writer_shutdown();
     flush_queued_history_save(&g_pending_history_save, "standby");
-    flush_queued_theme_save("standby");
+    flush_queued_preferences_save("standby");
 
     (void)is_directory;
     /* Return the timer to its entry configuration for the native drivers.

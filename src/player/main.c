@@ -58,7 +58,7 @@ int main(int argc, char **argv)
     unsigned saved_clock = history_load_clock_preference(argv[0], &keep_clock);
     performance_clock_load(saved_clock, keep_clock);
     performance_clock_startup_begin();
-    ui_load_theme();
+    load_app_preferences();
     screen = SDL_SetVideoMode(SCREEN_W, SCREEN_H, 16, SDL_SWSURFACE);
     if (!screen) {
         SDL_Quit();
@@ -211,7 +211,7 @@ int main(int argc, char **argv)
     player_crash_trace_end(NULL, PLAYER_CRASH_EXIT);
     screenshot_writer_shutdown();
     flush_queued_history_save(&g_pending_history_save, "shutdown");
-    flush_queued_theme_save("shutdown");
+    flush_queued_preferences_save("shutdown");
     if (g_display_power_state.off || g_display_power_state.off_fade_active) {
         /* Retain video for normal wake, but do not flash it while exiting to
          * the OS from an off screen. The SDL surface is still owned here. */

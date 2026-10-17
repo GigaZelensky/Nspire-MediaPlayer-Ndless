@@ -63,8 +63,9 @@ typedef struct { bool cancelled,preconnected,timed_out,connected,audio_only; int
 static unsigned kernel_policy=7,now_ms,resume_attempts;static int resume_result;
 static bool standby_was_outer,native_clock,player_timer=true,audio_mode,tree_busy,lease,host_running=true;
 static unsigned native_waits;
+static unsigned soft_refusals;
 static unsigned candidate,candidate_total=1,candidate_available=1;
-static bool accepting,late_child;
+static bool accepting,late_child,quiet_reconnect;
 static unsigned late_attachments;
 static uint32_t os_counter;
 enum {USB_AUTO_UNKNOWN=255,USB_AUTO_ADAPTER=1};
@@ -106,7 +107,10 @@ static bool usb_storage_finish_connection(void) {assert(!native_clock && kernel_
 static void progress(void *p) {}
 static void usb_fs_set_progress(void (*f)(void *),void *p) {}
 static bool usb_volume_mount(int *e) {assert(kernel_policy==7 && !native_clock && player_timer && lease && host_running);return true;}
-static int native_usb_ui_resume_host(void) {return tree_busy?-51:0;}
+static int native_usb_ui_resume_host(void) {
+ if(soft_refusals){--soft_refusals;return -28;}
+ if(quiet_reconnect && !candidate_available)candidate_available=1;
+ return tree_busy?-51:0;}
 static int native_usb_ui_reassert(void) {return 0;}
 static int native_usb_ui_wait(void) {
  assert(native_clock && kernel_policy==0 && !lease);++native_waits;tree_busy=false;
@@ -134,6 +138,10 @@ int main(void) {
  candidate=0;candidate_available=1;late_child=false;
  w=(UsbConnectWindow){.preconnected=true};connect_native(&w);
  assert(!w.connected && w.timed_out && candidate==1 && !accepting && !w.guard_error);
+ candidate=0;candidate_available=0;candidate_total=1;soft_refusals=5;quiet_reconnect=true;
+ w=(UsbConnectWindow){.preconnected=true};connect_native(&w);
+ assert(w.connected && resume_attempts==6 && !soft_refusals && !w.timed_out && !w.guard_error);
+ quiet_reconnect=false;
  return 0;}
 '''
 with tempfile.TemporaryDirectory() as tmp:
@@ -142,6 +150,7 @@ with tempfile.TemporaryDirectory() as tmp:
  subprocess.run([str(exe)],check=True,timeout=10)
 print('PASS production connection retires native policy and reclaims disturbed app timer before filesystem mount')
 print('PASS hub discovery: empty reader first, flash attached on a later scheduler tick, and bounded no-media timeout')
+print('PASS background recovery keeps retrying soft native refusals once per second beyond the initial scan budget')
 clock=(root/'src/player/platform_debug.c').read_text().split('bool monotonic_clock_restore_player_timer(void)',1)[1].split('bool monotonic_clock_try_init_hw_timer(void)',1)[0]
 clock='bool monotonic_clock_restore_player_timer(void)'+clock
 fixture='''#include <assert.h>

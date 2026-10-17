@@ -340,5 +340,6 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
     audio_controls_reset();
     audio_playback_close(audio);
     music_ui_close(&ui);
+    flush_queued_preferences_save("music-close");
     return result;
 }

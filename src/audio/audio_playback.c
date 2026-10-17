@@ -46,8 +46,6 @@ struct AudioPlayback {
     const void *diagnostics_context;bool diagnostics_error;
 };
 static AudioPlayback *current_audio;
-static unsigned remembered_volume=20;
-static bool remembered_mute;
 static void pump_audio(AudioPlayback *, bool check_health);
 
 
@@ -283,8 +281,8 @@ AudioPlayback *audio_playback_open(const char *path, const AudioPlaybackTrack *t
     AudioPlayback *a = calloc(1, sizeof(*a));
     if (!a)
         return NULL;
-    a->volume = remembered_volume;
-    a->mute = remembered_mute;
+    a->volume = g_audio_volume;
+    a->mute = g_audio_muted;
     snprintf(a->source_path,sizeof(a->source_path),"%s",path);
     a->num = a->den = 1;
     a->loading = loading;
@@ -496,7 +494,8 @@ bool audio_playback_retry(AudioPlayback *a, uint32_t frame)
 {
     if (!a || !a->decoder) return false;
     audio_playback_suspend(a);
-    a->failed=false; a->source_error=0; a->mute=false;remembered_mute=false;
+    a->failed=false; a->source_error=0; a->mute=false;
+    history_set_audio_preference(a->volume,false);
     a->transfer_fault[0]=0;
     a->primary_saved=false;
     a->usb_failed=false;
@@ -716,7 +715,7 @@ void audio_playback_set_volume(AudioPlayback *a, unsigned volume)
     if (!a) return;
     a->volume = volume > 100 ? 100 : volume;
     a->mute = false;
-    remembered_volume=a->volume;remembered_mute=false;
+    history_set_audio_preference(a->volume,false);
     if (a->usb)
         usb_audio_volume(a->usb, a->volume);
 }
@@ -736,7 +735,7 @@ void audio_playback_mute(AudioPlayback *a)
     if (!a) return;
     if (a->failed) { audio_playback_retry(a,(uint32_t)(a->position>>32)); return; }
     a->mute=!a->mute;
-    remembered_mute=a->mute;
+    history_set_audio_preference(a->volume,a->mute);
     if (a->usb) usb_audio_volume(a->usb,a->mute?0:a->volume);
 }
 

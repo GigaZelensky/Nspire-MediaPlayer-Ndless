@@ -48,7 +48,8 @@ static bool usb_path(const char *path){return !strncmp(path,"usb:",4);}
 static bool usb_storage_mounted(void){return mounted;}
 static uint32_t monotonic_clock_now_ms(void){return clock_ms;}
 static bool isKeyPressed(unsigned key){return key==KEY_NSPIRE_ESC?(cancel_at && clock_ms>=cancel_at):
-    (scenario==9 && key==KEY_NSPIRE_ENTER && clock_ms>=200 && clock_ms<260);}
+    ((scenario==9 && clock_ms>=200 && clock_ms<260) ||
+     (scenario==14 && clock_ms>=900 && clock_ms<960)) && key==KEY_NSPIRE_ENTER;}
 static void player_delay_ms(unsigned ms){clock_ms+=ms;assert(clock_ms<15000);}
 static void display_power_restore(int *state,uint32_t now){(void)state;(void)now;}
 static void music_ui_render(SDL_Surface *s,const Fonts *f,const char *p,AudioPlayback *a,
@@ -96,11 +97,17 @@ static bool usb_browser_connect(SDL_Surface *s,const Fonts *f,PointerState *p,
     void (*backdrop)(SDL_Surface *,void *,uint32_t),void *context)
 {(void)s;(void)f;(void)p;(void)context;assert(!current && quiet_reconnect && retry_progress && !backdrop);
  UsbConnectWindow window={0};assert(render_retry(&window));++source_retries;clock_ms+=100;
+ if(scenario>=14 && source_retries==1) {
+  for(unsigned i=0;i<30 && !window.cancelled;++i){clock_ms+=16;render_retry(&window);}
+  assert(window.cancelled);
+ }
  if(window.cancelled){last_connection_cancelled=true;return false;}
  if(scenario==6){last_connection_cancelled=true;return false;}mounted=source_retries>=2;return mounted;}
 static void pointer_update(PointerState *p){p->press_edge=scenario==8 && clock_ms>=200 && !p->down && clock_ms<250;
+ if(scenario==15)p->press_edge=clock_ms>=900 && !p->down && clock_ms<950;
  p->down=scenario==8 && clock_ms>=200 && clock_ms<250;
- if(scenario==8 || scenario==9){p->visible=true;p->x=160;p->y=164;}}
+ if(scenario==15)p->down=clock_ms>=900 && clock_ms<950;
+ if(scenario==8 || scenario==9 || scenario==15){p->visible=true;p->x=scenario==15?116:204;p->y=164;}}
 static void pointer_update_captured(PointerState *p){pointer_update(p);p->press_edge=false;}
 static void pointer_init(PointerState *p){(void)p;}
 static bool rect_contains_point(const SDL_Rect *r,int x,int y){return x>=r->x && x<r->x+r->w && y>=r->y && y<r->y+r->h;}
@@ -112,7 +119,7 @@ static void draw_ui_label(SDL_Surface *s,const Fonts *f,int x,int y,const char *
 static unsigned ui_transition_update(UiTransition *t,bool active,uint32_t now,unsigned ms){(void)t;(void)now;(void)ms;return active?255:0;}
 static unsigned ui_transition_update_press_ex(UiTransition *t,bool active,uint32_t now,unsigned a,unsigned b){(void)b;return ui_transition_update(t,active,now,a);}
 static void ui_transition_begin_press_release(UiTransition *t,uint32_t now){(void)t;(void)now;}
-static void draw_prompt_button(SDL_Surface *s,const Fonts *f,const SDL_Rect *r,const char *text,unsigned a,unsigned b){(void)s;(void)f;(void)a;(void)b;assert(!strcmp(text,"Cancel") && r->y==154);}
+static void draw_prompt_button(SDL_Surface *s,const Fonts *f,const SDL_Rect *r,const char *text,unsigned a,unsigned b){(void)s;(void)f;(void)a;(void)b;assert((!strcmp(text,"Cancel") || !strcmp(text,"Retry")) && r->y==154);}
 static void draw_cursor(SDL_Surface *s,int x,int y){(void)s;(void)x;(void)y;}
 static void present_screen(SDL_Surface *s){(void)s;}
 static void save_recovery(const MusicUi *ui,int result,AudioPlayback *audio){(void)audio;assert(ui->reconnect_max_ms==clock_ms);if(result<=0)++recovery_saves;}
@@ -120,21 +127,21 @@ static void save_recovery(const MusicUi *ui,int result,AudioPlayback *audio){(vo
 int main(void)
 {
     SDL_Surface screen={0};Fonts fonts={0};PointerState pointer={0};
-    for(scenario=0;scenario<14;++scenario){
+    for(scenario=0;scenario<16;++scenario){
         clock_ms=closes=quiet_closes=opens=source_retries=frames=discovery=0;
         cancel_at=scenario==1?200:scenario==4 || scenario==12?1000:0;
         recovery_saves=0;pointer=(PointerState){0};retry_progress=NULL;
         native_polls=0;
-        mounted=scenario!=2 && scenario!=6 && scenario!=11;quiet_reconnect=last_connection_cancelled=false;attempt_failures=scenario==0?2:0;
+        mounted=scenario!=2 && scenario!=6 && scenario!=11 && scenario<14;quiet_reconnect=last_connection_cancelled=false;attempt_failures=scenario==0?2:0;
         original=(AudioPlayback){.live=true,.failed=true,.retry=true,.rate=44100,.position=44100};
         current=&original;AudioPlayback *audio=&original;
         AudioPlaybackInfo info={44100,1000000,44100,2,3,true,false,true,false};
         MusicControls controls={.capture=7,.scrubbing=true,.pending_seek=true,.paused=scenario==5};
         MusicUi ui={0};
-        int result=music_wait_for_audio(&screen,&fonts,scenario==2 || scenario==6 || scenario==11?"usb:/disk/song.flac":"song.flac",
+        int result=music_wait_for_audio(&screen,&fonts,scenario==2 || scenario==6 || scenario==11 || scenario>=14?"usb:/disk/song.flac":"song.flac",
                                       &audio,&info,&controls,&pointer,&ui);
         assert(closes==1 && !controls.capture && !controls.scrubbing && !controls.pending_seek);
-        assert(ui.reconnects==1 && ui.reconnect_attempts==opens+source_retries-(scenario==2 || scenario==11?1:0));
+        assert(ui.reconnects==1 && ui.reconnect_attempts==opens+source_retries-(scenario==2 || scenario==11 || scenario>=14?1:0));
         if(scenario==1 || scenario==4 || scenario==6 || scenario==7 || scenario==8 || scenario==9 || scenario==12)assert(!result);
         else if(scenario==3)assert(result==-1 && audio && audio->failed);
         else {
@@ -144,12 +151,13 @@ int main(void)
             if(scenario==10)assert(opens==1 && discovery && !source_retries);
             if(scenario==11)assert(source_retries==2 && discovery);
             if(scenario==13)assert(opens==1 && native_polls>=6 && !discovery);
+            if(scenario>=14)assert(source_retries==2 && opens==1 && !recovery_saves);
         }
         if(scenario==12)assert(!opens && !source_retries && discovery);
         if(audio)audio_playback_close(audio);
         assert(!current && frames && ui.reconnect_max_ms==clock_ms && !quiet_reconnect && !retry_progress);
         assert(recovery_saves==(result<=0));
     }
-    puts("PASS music reconnect: adapter-only wake, native child recovery behind a connected hub, saved position/rate, repeated quiet failures, remount, pause and cancellation");
+    puts("PASS music reconnect: adapter-only wake, native child recovery, saved position/rate, quiet failures, remount, pause, cancellation and pointer/Enter retry during USB scan");
     return 0;
 }

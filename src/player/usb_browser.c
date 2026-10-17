@@ -617,7 +617,7 @@ static void connect_native(void *context)
         } else {
             window->status = present ? "Detecting the USB drive..." : "Waiting for a USB drive...";
             if ((!host_resumed || !(host_state & 1U) || host_state != attempted_state) &&
-                (resume_attempts < 4 || resume_result == -51) &&
+                (quiet_reconnect || resume_attempts < 4 || resume_result == -51) &&
                 (int32_t)(now - resume_after) >= 0 && (presence & USB_AUTO_ADAPTER) &&
                 (window->preconnected || !present || now - present_since >= 1000U)) {
                 bool trace_recovery = resume_attempts == 0 || resume_result != -51 ||
@@ -628,7 +628,7 @@ static void connect_native(void *context)
                 resume_result = native_usb_ui_resume_host();
                 ++resume_attempts;
                 host_resumed = resume_result == 0;
-                resume_after = monotonic_clock_now_ms() + 250U;
+                resume_after = monotonic_clock_now_ms() + (quiet_reconnect && resume_result != -51 ? 1000U : 250U);
                 window->guard_error = native_usb_ui_reassert();
                 render_window(window, true);
                 /* Lock contention performs no recovery operation. Keep trying

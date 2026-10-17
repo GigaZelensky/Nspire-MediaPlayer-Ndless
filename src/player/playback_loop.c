@@ -407,7 +407,7 @@ int play_movie(
     loading_progress_tick(&loading_progress, false);
     flush_queued_history_save(&g_pending_history_save, "loading");
     loading_progress_tick(&loading_progress, false);
-    flush_queued_theme_save("loading");
+    flush_queued_preferences_save("loading");
     loading_progress_tick(&loading_progress, false);
     /* Resolve portable writer bindings while Loading is still visible, before
      * any playback deadline. D only allocates/starts its journal afterward.

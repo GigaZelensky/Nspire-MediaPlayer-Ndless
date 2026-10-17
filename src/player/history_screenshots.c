@@ -4,6 +4,8 @@
 #include "media_browser.h"
 #include <errno.h>
 
+static bool audio_preferences_loaded, pending_audio_save;
+
 void strip_filename(char *path)
 {
     char *slash = strrchr(path, '/');
@@ -54,6 +56,7 @@ static void history_store_init_defaults(HistoryStore *history)
     memset(history, 0, sizeof(*history));
     history_entry_init_defaults(&history->default_settings);
     history->theme_id = UI_THEME_AMBER;
+    history->audio_volume = 20;
 }
 
 void apply_history_entry_subtitle_track(const HistoryEntry *entry, Movie *movie)
@@ -185,6 +188,17 @@ static bool history_parse_clock_line(const char *line, unsigned *value, bool *ke
     return true;
 }
 
+static bool history_parse_audio_line(const char *line,unsigned *volume,bool *muted)
+{
+    if(strncmp(line,"@audio\t",7) || line[7]<'0' || line[7]>'9')return false;
+    char *end;
+    unsigned long value=strtoul(line+7,&end,10);
+    if(value>100 || *end!='\t')return false;
+    const char *flag=end+1;
+    if((*flag!='0' && *flag!='1') || flag[1+strspn(flag+1," \t\r\n")])return false;
+    *volume=(unsigned)value;*muted=*flag=='1';return true;
+}
+
 bool load_history_store_from_path(const char *history_path, HistoryStore *history)
 {
     FILE *file;
@@ -221,6 +235,11 @@ bool load_history_store_from_path(const char *history_path, HistoryStore *histor
         HistoryEntry entry;
 
         history_entry_init_defaults(&entry);
+        if (version >= 5 && strncmp(line,"@audio\t",7)==0) {
+            if(history_parse_audio_line(line,&history->audio_volume,&history->audio_muted))
+                history->has_audio_preference=true;
+            continue;
+        }
         if (version >= 5 && strncmp(line, "@clock\t", 7) == 0) {
             if (history_parse_clock_line(line, &history->clock_mhz, &history->clock_keep_after_exit))
                 history->has_clock_preference = true;
@@ -346,6 +365,12 @@ bool save_history_store_to_path(const char *history_path, const HistoryStore *hi
     fprintf(file, "@theme\t%u\n", (unsigned) ui_theme_clamp((int) history->theme_id));
     if (history->has_clock_preference)
         fprintf(file, "@clock\t%u\t%u\n", history->clock_mhz, history->clock_keep_after_exit ? 1U : 0U);
+    /* Current app-wide audio wins over an older picker/history snapshot.
+     * A Lite build preserves stored Full settings without activating audio. */
+    if(audio_preferences_loaded || history->has_audio_preference)
+        fprintf(file,"@audio\t%u\t%u\n",
+            audio_preferences_loaded?g_audio_volume:history->audio_volume,
+            (audio_preferences_loaded?g_audio_muted:history->audio_muted)?1U:0U);
     fprintf(
         file,
         "@settings\t%u\t%u\t%u\t%u\t%u\t%d\t%u\t%d\t%d\n",
@@ -380,6 +405,7 @@ bool save_history_store_to_path(const char *history_path, const HistoryStore *hi
     }
     bool ok = !ferror(file);
     if (fclose(file)) ok = false;
+    if(ok && audio_preferences_loaded)pending_audio_save=false;
     return ok;
 }
 
@@ -437,18 +463,29 @@ bool history_save_clock_preference(const char *app_path, unsigned mhz, bool keep
     return ok;
 }
 
-void ui_load_theme(void)
+void load_app_preferences(void)
 {
     char path[MAX_PATH_LEN];
     HistoryStore history;
     if (player_data_path(HISTORY_FILE_NAME, path, sizeof(path)) &&
         load_history_store_from_path(path, &history)) {
         ui_set_theme(history.theme_id);
+        if(NDMEDIA_AUDIO) {
+            g_audio_volume=history.audio_volume;g_audio_muted=history.audio_muted;
+            audio_preferences_loaded=true;pending_audio_save=false;
+        }
         free_history_store(&history);
     }
 }
 
-static bool ui_write_theme(void)
+void history_set_audio_preference(unsigned volume,bool muted)
+{
+    if(volume>100)volume=100;
+    if(g_audio_volume!=volume || g_audio_muted!=muted)pending_audio_save=true;
+    g_audio_volume=volume;g_audio_muted=muted;audio_preferences_loaded=true;
+}
+
+static bool write_app_preferences(void)
 {
     char path[MAX_PATH_LEN];
     HistoryStore history;
@@ -465,24 +502,24 @@ void ui_queue_theme_save(void)
     g_pending_theme_save = true;
 }
 
-void flush_queued_theme_save(const char *reason)
+void flush_queued_preferences_save(const char *reason)
 {
     uint32_t start_ms;
     uint32_t elapsed_ms;
 
-    if (!g_pending_theme_save) {
+    if (!g_pending_theme_save && !pending_audio_save) {
         return;
     }
 
     start_ms = monotonic_clock_now_ms();
-    bool saved = ui_write_theme();
+    bool saved = write_app_preferences();
     elapsed_ms = monotonic_clock_now_ms() - start_ms;
     debug_tracef(
-        "theme queued flush reason=%s ms=%lu",
+        "preferences queued flush reason=%s ms=%lu",
         reason ? reason : "unknown",
         (unsigned long) elapsed_ms
     );
-    if (saved) g_pending_theme_save = false;
+    if (saved) {g_pending_theme_save = false;pending_audio_save=false;}
 }
 
 int history_find_entry_index(const HistoryStore *history, const char *movie_path)
