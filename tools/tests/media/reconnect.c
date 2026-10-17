@@ -38,6 +38,8 @@ static LoadingProgress *retry_progress;
 static unsigned recovery_saves;
 static unsigned native_polls;
 static unsigned retry_feedback,session_restart_marks;
+static uint32_t manual_release_ms;
+static unsigned slow_retry_draws;
 static void usb_browser_request_session_restart(void){++session_restart_marks;}
 typedef struct {bool cancelled;} UsbConnectWindow;
 static bool render_retry(UsbConnectWindow *window);
@@ -98,10 +100,15 @@ static bool usb_browser_recovery_poll(SDL_Surface *s){(void)s;++native_polls;ret
 static bool usb_browser_connect(SDL_Surface *s,const Fonts *f,PointerState *p,
     void (*backdrop)(SDL_Surface *,void *,uint32_t),void *context)
 {(void)s;(void)f;(void)p;(void)context;assert(!current && quiet_reconnect && retry_progress && !backdrop);
+ if(scenario>=14 && source_retries==1)assert(manual_release_ms && clock_ms-manual_release_ms<=16U);
  UsbConnectWindow window={0};assert(render_retry(&window));++source_retries;clock_ms+=100;
  if(scenario>=14 && source_retries==1) {
   for(unsigned i=0;i<30 && !window.cancelled;++i){clock_ms+=16;render_retry(&window);}
   assert(window.cancelled);
+ }
+ if(scenario>=14 && source_retries==2) {
+  for(unsigned i=0;i<160;++i){clock_ms+=16;assert(render_retry(&window) && !window.cancelled);}
+  assert(clock_ms-manual_release_ms>2500U);
  }
  if(window.cancelled){last_connection_cancelled=true;return false;}
  if(scenario==6){last_connection_cancelled=true;return false;}mounted=source_retries>=2;return mounted;}
@@ -120,8 +127,11 @@ static int nSDL_GetStringWidth(void *font,const char *s){(void)font;return (int)
 static void draw_ui_label(SDL_Surface *s,const Fonts *f,int x,int y,const char *text){(void)s;(void)f;(void)y;assert(x>=30 && x+(int)strlen(text)*6<=290);}
 static unsigned ui_transition_update(UiTransition *t,bool active,uint32_t now,unsigned ms){(void)t;(void)now;(void)ms;return active?255:0;}
 static unsigned ui_transition_update_press_ex(UiTransition *t,bool active,uint32_t now,unsigned a,unsigned b){(void)b;return ui_transition_update(t,active,now,a);}
-static void ui_transition_begin_press_release(UiTransition *t,uint32_t now){(void)t;(void)now;}
-static void draw_prompt_button(SDL_Surface *s,const Fonts *f,const SDL_Rect *r,const char *text,unsigned a,unsigned b){(void)s;(void)f;(void)a;(void)b;assert((!strcmp(text,"Cancel") || !strcmp(text,"Retry") || !strcmp(text,"Retrying")) && r->y==154);if(!strcmp(text,"Retrying"))++retry_feedback;}
+static void ui_transition_begin_press_release(UiTransition *t,uint32_t now){(void)t;manual_release_ms=now;}
+static void draw_prompt_button(SDL_Surface *s,const Fonts *f,const SDL_Rect *r,const char *text,unsigned a,unsigned b){(void)s;(void)f;(void)a;(void)b;
+ bool retrying=strlen(text)==8 && text[0]=='R';
+ assert((!strcmp(text,"Cancel") || !strcmp(text,"Retry") || retrying) && r->y==154);if(retrying)++retry_feedback;
+ if(scenario>=14 && source_retries==2 && r->x==80){assert(retrying);++slow_retry_draws;}}
 static void draw_cursor(SDL_Surface *s,int x,int y){(void)s;(void)x;(void)y;}
 static void present_screen(SDL_Surface *s){(void)s;}
 static void save_recovery(const MusicUi *ui,int result,AudioPlayback *audio,unsigned manual_retries){(void)audio;assert(ui->reconnect_max_ms==clock_ms);assert(manual_retries==(scenario>=14?1U:0U));if(result<=0)++recovery_saves;}
@@ -133,7 +143,7 @@ int main(void)
         clock_ms=closes=quiet_closes=opens=source_retries=frames=discovery=0;
         cancel_at=scenario==1?200:scenario==4 || scenario==12?1000:0;
         recovery_saves=0;pointer=(PointerState){0};retry_progress=NULL;
-        native_polls=retry_feedback=session_restart_marks=0;
+        native_polls=retry_feedback=session_restart_marks=slow_retry_draws=0;manual_release_ms=0;
         mounted=scenario!=2 && scenario!=6 && scenario!=11 && scenario<14;quiet_reconnect=last_connection_cancelled=false;attempt_failures=scenario==0?2:0;
         original=(AudioPlayback){.live=true,.failed=true,.retry=true,.rate=44100,.position=44100};
         current=&original;AudioPlayback *audio=&original;
@@ -153,7 +163,7 @@ int main(void)
             if(scenario==10)assert(opens==1 && discovery && !source_retries);
             if(scenario==11)assert(source_retries==2 && discovery);
             if(scenario==13)assert(opens==1 && native_polls>=6 && !discovery);
-            if(scenario>=14)assert(source_retries==2 && opens==1 && !recovery_saves && retry_feedback);
+            if(scenario>=14)assert(source_retries==2 && opens==1 && !recovery_saves && retry_feedback && slow_retry_draws>=160);
         }
         if(scenario==12)assert(!opens && !source_retries && discovery);
         if(audio)audio_playback_close(audio);
@@ -161,6 +171,6 @@ int main(void)
         assert(recovery_saves==(result<=0));
         assert(session_restart_marks==1U+(scenario>=14?1U:0U));
     }
-    puts("PASS music reconnect: adapter-only wake, native child recovery, saved position/rate, quiet failures, remount, pause, cancellation and pointer/Enter retry during USB scan");
+    puts("PASS music reconnect: adapter-only wake, native child recovery, saved position/rate, quiet failures, remount, pause, cancellation, immediate pointer/Enter retry and pending feedback through a slow USB scan");
     return 0;
 }

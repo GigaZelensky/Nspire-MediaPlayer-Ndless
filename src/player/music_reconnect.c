@@ -12,8 +12,7 @@ typedef struct {
     PointerState *pointer;
     UiTransition hover[2],press[2];
     unsigned captured,manual_retries;
-    uint32_t retry_feedback_until;
-    bool cancelled,retry_requested,keyboard_capture,previous_key;
+    bool cancelled,retry_requested,retry_in_progress,keyboard_capture,previous_key;
 } MusicReconnectView;
 
 static bool recovery_cancelled(void *context)
@@ -46,7 +45,6 @@ static void recovery_draw(void *context,uint32_t now)
             if(view->captured==1) {
                 view->retry_requested=true;
                 ++view->manual_retries;
-                view->retry_feedback_until=now+750U;
             }
             else view->cancelled=true;
         }
@@ -72,7 +70,7 @@ static void recovery_draw(void *context,uint32_t now)
         uint8_t hover=ui_transition_update(view->hover+i,hot==i+1,now,UI_HOVER_ANIM_MS);
         uint8_t press=ui_transition_update_press_ex(view->press+i,view->captured==i+1,now,
             UI_PRESS_ANIM_MS,PICKER_PRESS_RELEASE_ANIM_MS);
-        bool retrying=view->manual_retries && (int32_t)(now-view->retry_feedback_until)<0;
+        bool retrying=view->retry_requested || view->retry_in_progress;
         draw_prompt_button(screen,view->fonts,buttons+i,i?"Cancel":retrying?"Retrying":"Retry",hover,press);
     }
     if(pointer->visible)draw_cursor(screen,pointer->x,pointer->y);
@@ -167,6 +165,7 @@ int music_wait_for_audio(SDL_Surface *screen,const Fonts *fonts,const char *path
         if(!present_since)present_since=now;
         if(now-present_since<250U){player_delay_ms(16);continue;}
         audio_playback_discard_retry(*audio);*audio=NULL;
+        view.retry_in_progress=true;
         ++ui->reconnect_attempts;
         bool source_ready=!usb_path(path) || usb_storage_mounted();
         if(!source_ready) {
@@ -210,10 +209,12 @@ retry_now:
             view.retry_requested=false;
             audio_playback_discard_retry(*audio);*audio=NULL;
             usb_browser_request_session_restart();
-            retry_at=monotonic_clock_now_ms();backoff=500;
+            view.retry_in_progress=true;
+            native_after=retry_at=monotonic_clock_now_ms();backoff=500;
             loading.last_draw_ms=0;
             continue;
         }
+        view.retry_in_progress=false;
         now=monotonic_clock_now_ms();
         retry_at=now+backoff;
         if(backoff<1000)backoff*=2;
