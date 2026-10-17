@@ -43,8 +43,14 @@ with tempfile.TemporaryDirectory(prefix='ndvideo-usb-restart-') as temporary:
     owner_call='((int (*)(void))(uintptr_t)request)()'
     assert resume.count(owner_call)==1, 'Native owner request boundary changed; review fixture redirection.'
     resume=resume.replace(owner_call, 'request_owner_session()')
+    end_call='((int (*)(unsigned))(uintptr_t)request)(0U)'
+    assert resume.count(end_call)==1, 'Native owner END boundary changed; review fixture redirection.'
+    resume=resume.replace(end_call, 'end_owner_session(0U)')
+    poll_call='((int (*)(uint32_t))(uintptr_t)request)(session_trace[0])'
+    assert resume.count(poll_call)==1, 'Native input poll boundary changed; review fixture redirection.'
+    resume=resume.replace(poll_call, 'poll_owner_session(session_trace[0])')
     fixture=(root/'tools/tests/usb/native_restart.c').read_text().replace(
-        '/* PRODUCTION_NATIVE_RESTART */', session+'\n'+root_port+'\n'+ '\n'.join(function(source,name) for name in (
+        '/* PRODUCTION_NATIVE_RESTART */', function(source,'native_usb_ui_request_session_restart')+'\n'+session+'\n'+function(source,'native_session_poll')+'\n'+root_port+'\n'+ '\n'.join(function(source,name) for name in (
             'cold_start_check','cold_advance_idle'))+'\n'+resume)
     (work/'restart.c').write_text(fixture)
     subprocess.run([gcc,'-std=c99','-O2','-Wall','-Wextra','-Werror',str(work/'restart.c'),'-o',str(work/'restart.exe')],check=True)
@@ -73,12 +79,13 @@ typedef struct { bool cancelled,preconnected,timed_out,connected,audio_only; int
 static unsigned kernel_policy=7,now_ms,resume_attempts;static int resume_result;
 static bool standby_was_outer,native_clock,player_timer=true,audio_mode,tree_busy,lease,host_running=true;
 static unsigned native_waits;
-static unsigned soft_refusals;
+static unsigned soft_refusals,owner_pending;
+static bool publish_after_pending;
 static unsigned candidate,candidate_total=1,candidate_available=1;
 static bool accepting,late_child,quiet_reconnect;
 static unsigned late_attachments;
 static uint32_t os_counter;
-enum {USB_AUTO_UNKNOWN=255,USB_AUTO_ADAPTER=1};
+enum {USB_AUTO_UNKNOWN=255,USB_AUTO_ADAPTER=1,NATIVE_USB_SESSION_PENDING=-70};
 static void prepare_progress(void) {}
 static bool native_usb_ui_clock(const volatile uint32_t **p,uint32_t *hz,void (*f)(void),void *c) {*p=&os_counter;*hz=50;return true;}
 static bool monotonic_clock_enter_native(const volatile uint32_t *p,uint32_t hz) {assert(player_timer);assert(!native_clock);native_clock=true;return true;}
@@ -119,6 +126,8 @@ static void usb_fs_set_progress(void (*f)(void *),void *p) {}
 static bool usb_volume_mount(int *e) {assert(kernel_policy==7 && !native_clock && player_timer && lease && host_running);return true;}
 static int native_usb_ui_resume_host(void) {
  if(soft_refusals){--soft_refusals;return -28;}
+ if(owner_pending){--owner_pending;return NATIVE_USB_SESSION_PENDING;}
+ if(publish_after_pending && !candidate_available)candidate_available=1;
  if(quiet_reconnect && !candidate_available)candidate_available=1;
  return tree_busy?-51:0;}
 static int native_usb_ui_reassert(void) {return 0;}
@@ -152,6 +161,14 @@ int main(void) {
  w=(UsbConnectWindow){.preconnected=true};connect_native(&w);
  assert(w.connected && resume_attempts==6 && !soft_refusals && !w.timed_out && !w.guard_error);
  quiet_reconnect=false;
+ candidate=0;candidate_available=0;candidate_total=1;owner_pending=6;publish_after_pending=true;
+ w=(UsbConnectWindow){.preconnected=true};connect_native(&w);
+ assert(w.connected && resume_attempts==7 && !owner_pending && !w.timed_out && !w.guard_error);
+ candidate=0;candidate_available=0;owner_pending=100;publish_after_pending=false;
+ unsigned pending_started=now_ms;
+ w=(UsbConnectWindow){.preconnected=true};connect_native(&w);
+ assert(!w.connected && w.timed_out && !w.guard_error && resume_attempts>4 &&
+        now_ms-pending_started<9000 && !native_clock && kernel_policy==7 && player_timer);
  return 0;}
 '''
 with tempfile.TemporaryDirectory() as tmp:
@@ -160,7 +177,7 @@ with tempfile.TemporaryDirectory() as tmp:
  subprocess.run([str(exe)],check=True,timeout=10)
 print('PASS production connection retires native policy and reclaims disturbed app timer before filesystem mount')
 print('PASS hub discovery: empty reader first, flash attached on a later scheduler tick, and bounded no-media timeout')
-print('PASS background recovery keeps retrying soft native refusals once per second beyond the initial scan budget')
+print('PASS background recovery retries soft refusals; queued native owner work outlives the wake budget while the connection deadline stays bounded')
 clock=(root/'src/player/platform_debug.c').read_text().split('bool monotonic_clock_restore_player_timer(void)',1)[1].split('bool monotonic_clock_try_init_hw_timer(void)',1)[0]
 clock='bool monotonic_clock_restore_player_timer(void)'+clock
 fixture='''#include <assert.h>

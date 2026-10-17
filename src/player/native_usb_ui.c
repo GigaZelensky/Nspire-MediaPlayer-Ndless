@@ -35,6 +35,12 @@ static int session_result;
 static const char *session_stage = "not requested";
 static uint32_t session_trace[9];
 static uint32_t session_phy_before[10],session_phy_after[10];
+static bool session_restart_requested;
+static unsigned session_ends, session_polls;
+void native_usb_ui_request_session_restart(void)
+{
+    session_restart_requested=true;
+}
 static bool memory(uint32_t at, unsigned bytes);
 static bool route_layout_valid(void);
 static uint32_t original_input, original_tracking, original_display, original_busy, original_cursor;
@@ -107,7 +113,7 @@ static uint32_t resume_method(uint32_t device, unsigned role)
  * not its raw VBUS callback: the owner retains its fault policy, event queue,
  * power-valid wait and root-port reset/start ordering. No OS addresses or
  * device IDs are assumed. Caller holds global USB while inspecting identity. */
-static uint32_t native_session_request(const UsbHostTree *tree)
+static uint32_t native_session_request(const UsbHostTree *tree,bool ending)
 {
     if (api.classic_cx) return 0;
     const PortableView *v = portable_reader_platform_view(&mapping);
@@ -139,7 +145,7 @@ static uint32_t native_session_request(const UsbHostTree *tree)
         !v->allow_span(v->context,request+0x30U,4,PORTABLE_CODE) ||
         !v->allow_span(v->context,mode+0x40U,4,PORTABLE_CODE)) return 0;
     uint32_t policy=WORD(request+0x30U);
-    if (!memory(policy,8) || WORD(mode+0x40U)!=policy ||
+    if (!memory(policy,12) || WORD(mode+0x40U)!=policy ||
         WORD(engine+0x44U)!=policy || WORD(policy+4)!=engine ||
         *(const volatile uint8_t *)(uintptr_t)policy>1) return 0;
     uint32_t semaphore=WORD(engine+0x68U),head=WORD(engine+0x6cU),tail=WORD(engine+0x70U);
@@ -150,7 +156,32 @@ static uint32_t native_session_request(const UsbHostTree *tree)
     session_trace[2]=WORD(engine+4);session_trace[3]=WORD(engine+8);
     session_trace[4]=WORD(engine+0x0cU);session_trace[5]=head;session_trace[6]=tail;
     session_trace[7]=policy;session_trace[8]=*(const volatile uint8_t *)(uintptr_t)policy;
+    if (ending) {
+        /* Match the native END ABI (argument0), including its enabled-host
+         * policy check. A no-op is not evidence that power has fallen. */
+        request=code_branch(notify+0x18U);
+        if (session_trace[8]!=1 || !WORD(policy+8U) ||
+            !native_usb_ui_role_matches(v,request,UI_OTG_SESSION_END) ||
+            !v->allow_span(v->context,request+0x24U,4,PORTABLE_CODE) ||
+            WORD(request+0x24U)!=policy) return 0;
+    }
     return request;
+}
+
+/* The native event1 thunk refreshes actual controller inputs before running
+ * the owner's current phase. Bind it beside START's event8 thunk and prove
+ * both enter the same native queue. It never synthesizes a connection. */
+static uint32_t native_session_poll(uint32_t start)
+{
+    const PortableView *v=portable_reader_platform_view(&mapping);
+    if (!v) return 0;
+    uint32_t event8=code_branch(start+0x14U);
+    if (event8<v->code_begin || v->code_end<16U || event8>v->code_end-16U ||
+        !v->allow_span(v->context,event8,16,PORTABLE_CODE) ||
+        WORD(event8)!=0xe3a01008U || (WORD(event8+4U)&0xff000000U)!=0xea000000U ||
+        !native_usb_ui_role_matches(v,event8+8U,UI_OTG_INPUT_POLL)) return 0;
+    uint32_t queue=code_branch(event8+4U);
+    return queue && code_branch(event8+12U)==queue ? event8+8U : 0;
 }
 
 static bool resume_tree(UsbHostTree *tree, uint32_t *resume)
@@ -697,8 +728,8 @@ void native_usb_ui_debug(FILE *file)
         (unsigned long)async_details[9],(unsigned long)async_details[10],(unsigned long)async_details[11],
         (unsigned long)async_details[12],(unsigned long)async_details[13],(unsigned long)async_details[14],
         (unsigned long)async_details[15]);
-    fprintf(file,"usb_ui_session stage=%s requests=%u result=%d engine=%08lx flags=%08lx/%08lx/%08lx "
-        "handler=%08lx head=%08lx tail=%08lx policy=%08lx mode=%lu\n",session_stage,session_requests,session_result,
+    fprintf(file,"usb_ui_session stage=%s requests=%u ends=%u polls=%u restart=%u result=%d engine=%08lx flags=%08lx/%08lx/%08lx "
+        "handler=%08lx head=%08lx tail=%08lx policy=%08lx mode=%lu\n",session_stage,session_requests,session_ends,session_polls,session_restart_requested,session_result,
         (unsigned long)session_trace[0],(unsigned long)session_trace[1],(unsigned long)session_trace[2],
         (unsigned long)session_trace[3],(unsigned long)session_trace[4],(unsigned long)session_trace[5],
         (unsigned long)session_trace[6],(unsigned long)session_trace[7],(unsigned long)session_trace[8]);
@@ -992,8 +1023,30 @@ static int resume_host(bool retain_bus)
         result=-54;session_stage="session identity";
         if ((WORD(registers.otg)&0x300000U) ||
             (status&(0x4000U|0x8000U)) || native_usb_ui_bus_is_leased()) goto done;
-        uint32_t request=native_session_request(&tree);
+        uint32_t request=native_session_request(&tree,false);
         if (!request) goto done;
+        const PortableView *v=portable_reader_platform_view(&mapping);
+        uint32_t handler=session_trace[4];
+        /* The owner keeps a node linked while executing it. Never put START
+         * behind a queued END: it would skip the owner's real VBUS-fall wait.
+         * Native phase recognition also protects a newly opened application. */
+        if (session_trace[5]) {
+            result=NATIVE_USB_SESSION_PENDING;session_stage="native queue pending";goto done;
+        }
+        bool falling=native_usb_ui_role_matches(v,handler,UI_OTG_WAIT_VFALL);
+        bool idle=native_usb_ui_role_matches(v,handler,UI_OTG_A_IDLE);
+        bool polling=falling || (idle && ((WORD(registers.otg)&0x40000U) || (WORD(registers.port)&1U)));
+        bool ending=!polling && session_restart_requested && !(WORD(registers.port)&1U) &&
+            native_usb_ui_role_matches(v,handler,UI_OTG_WAIT_BCON);
+        if (polling) {
+            session_stage="native input poll identity";
+            request=native_session_poll(request);
+            if (!request) goto done;
+        } else if (ending) {
+            session_stage="native stop identity";
+            request=native_session_request(&tree,true);
+            if (!request) goto done;
+        }
         native_usb_ui_bus_phy(session_phy_before);
         /* Hardware schedule transitions can finish after the initial sample.
          * Keep the cold/quiescent proof valid up to the owner-call boundary. */
@@ -1003,16 +1056,34 @@ static int resume_host(bool retain_bus)
             ((session_phy_before[1]&64U) && !cold_advance_idle(&tree,session_phy_before[2]))) {
             result=-28;session_stage="session state changed";goto done;
         }
+        /* A physical attachment can change while interrupts are masked.
+         * Re-evaluate rather than dropping a newly connected root, or
+         * shortcutting the powered-down idle boundary with stale samples. */
+        if ((ending && (session_phy_before[3]&1U)) ||
+            (!polling && !ending && idle &&
+             ((session_phy_before[4]&0x40000U) || (session_phy_before[3]&1U)))) {
+            result=NATIVE_USB_SESSION_PENDING;session_stage="session inputs changed";goto done;
+        }
         ((int (*)(uint32_t))(uintptr_t)api.function[UI_SEM_GIVE])(tree_lock);
         native_critical_enter();tree_locked=false;
-        session_stage="native session request";
+        session_stage=polling?"native input poll":ending?"native session end":"native session request";
         ++session_requests;
         native_critical_leave(0);
-        session_result=((int (*)(void))(uintptr_t)request)();
+        session_result=polling?((int (*)(uint32_t))(uintptr_t)request)(session_trace[0]):
+            ending?((int (*)(unsigned))(uintptr_t)request)(0U):
+            ((int (*)(void))(uintptr_t)request)();
         native_critical_enter();
         native_usb_ui_bus_phy(session_phy_after);
         session_stage=session_result?"native request refused":"native request accepted";
-        result=session_result;
+        if (!session_result) {
+            if (ending) ++session_ends;
+            if (polling) ++session_polls;
+            /* START during another native transition does not complete a
+             * requested restart. Coalesce it until END, a proved powered-down
+             * A_IDLE start, or a connected running root consumes the intent. */
+            else if (ending || idle) session_restart_requested=false;
+        }
+        result=session_result?session_result:NATIVE_USB_SESSION_PENDING;
         /* Accepted/queued is not connected or ready. The caller services OS
          * work and rechecks fresh MMIO/native state before any bus lease. */
         goto done;
@@ -1024,6 +1095,7 @@ static int resume_host(bool retain_bus)
      * new child. Only inspect an empty root or rebind unclaimed storage. */
     if (!WORD(tree.handle + 32) && (WORD(registers.command) & 1U) &&
         !(WORD(registers.command + 4) & 0x1000U)) {
+        if ((WORD(registers.port)&0x85U)==5U) session_restart_requested=false;
         result = enumerate_empty_root(&tree, &registers);
         if (!result && (WORD(registers.port) & 1U) &&
             portable_reader_platform_refresh(&mapping)) reprobe_storage(&tree);

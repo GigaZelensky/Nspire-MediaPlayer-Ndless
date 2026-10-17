@@ -37,7 +37,8 @@ static bool quiet_reconnect;
 static LoadingProgress *retry_progress;
 static unsigned recovery_saves;
 static unsigned native_polls;
-static unsigned retry_feedback;
+static unsigned retry_feedback,session_restart_marks;
+static void usb_browser_request_session_restart(void){++session_restart_marks;}
 typedef struct {bool cancelled;} UsbConnectWindow;
 static bool render_retry(UsbConnectWindow *window);
 static void native_critical_enter(void){}
@@ -132,7 +133,7 @@ int main(void)
         clock_ms=closes=quiet_closes=opens=source_retries=frames=discovery=0;
         cancel_at=scenario==1?200:scenario==4 || scenario==12?1000:0;
         recovery_saves=0;pointer=(PointerState){0};retry_progress=NULL;
-        native_polls=retry_feedback=0;
+        native_polls=retry_feedback=session_restart_marks=0;
         mounted=scenario!=2 && scenario!=6 && scenario!=11 && scenario<14;quiet_reconnect=last_connection_cancelled=false;attempt_failures=scenario==0?2:0;
         original=(AudioPlayback){.live=true,.failed=true,.retry=true,.rate=44100,.position=44100};
         current=&original;AudioPlayback *audio=&original;
@@ -158,6 +159,7 @@ int main(void)
         if(audio)audio_playback_close(audio);
         assert(!current && frames && ui.reconnect_max_ms==clock_ms && !quiet_reconnect && !retry_progress);
         assert(recovery_saves==(result<=0));
+        assert(session_restart_marks==1U+(scenario>=14?1U:0U));
     }
     puts("PASS music reconnect: adapter-only wake, native child recovery, saved position/rate, quiet failures, remount, pause, cancellation and pointer/Enter retry during USB scan");
     return 0;

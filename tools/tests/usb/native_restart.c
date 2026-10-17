@@ -18,20 +18,25 @@ typedef struct {uint32_t bus,handle,hub_state,hub,hcd,hub_owner,otg;} UsbHostTre
 typedef struct {uint32_t command,port,otg,role_mask;} UsbRegisters;
 enum {UI_SEM_TAKE,UI_SEM_GIVE,UI_HCD_CONTROL,UI_HCD_CORE_CONTROL,UI_EHCI_START,UI_IRQ_REGISTER,
       UI_HUB_RESUME,UI_HUB_EXPLORE,UI_PORT_RESET,UI_OTG_ATTACH,UI_OTG_ENGINE_CREATE,
-      UI_OTG_APP_MODE,UI_OTG_APP_NOTIFY,UI_OTG_SESSION_REQUEST,UI_FUNCTIONS};
+      UI_OTG_APP_MODE,UI_OTG_APP_NOTIFY,UI_OTG_SESSION_REQUEST,UI_OTG_SESSION_END,
+      UI_OTG_A_IDLE,UI_OTG_WAIT_BCON,UI_OTG_WAIT_VFALL,UI_OTG_INPUT_POLL,UI_FUNCTIONS};
+enum {NATIVE_USB_SESSION_PENDING=-70};
 static struct {bool classic_cx;uint32_t bsd_locks,bsd_mode;uintptr_t function[UI_FUNCTIONS];} api;
 static unsigned mapping,mask,borrow_lock_stage,starts,stops,enumerations,reprobes;
 static PortableView view;
-static unsigned session_requests,session_helper_calls,tree_gives,usb_gives,lease_attempts;
+static unsigned session_requests,session_helper_calls,session_start_calls,session_end_calls;
+static unsigned session_ends,session_polls,session_poll_calls,tree_takes,tree_gives,usb_gives,lease_attempts;
+static bool session_restart_requested;
 static int session_result,session_error;
 static const char *session_stage;
 static uint32_t session_trace[9],denied_code,bad_branch;
 static unsigned bad_role;
 static uint8_t session_expected[0x8000];
-static bool check_session_snapshot;
+static bool check_session_snapshot,mismatched_poll_queue;
 static bool app_bus_leased,helper_yields_usb;
 static bool resolved,tree_valid,code_valid;
 static bool schedule_changed_before_request,explore_suspends;
+static uint32_t port_rises_at_sample,otg_rises_at_sample;
 static unsigned port_resets,resumes,enumeration_count;
 static int enumeration_result,explore_error;
 static uint32_t session_phy_before[10],session_phy_after[10];
@@ -59,10 +64,16 @@ static uint32_t base;
 #define PERIODIC (base+0x2000)
 #define OTG (base+0x1c80)
 #define OTG_ATTACH (base+0x4000)
+#define A_IDLE (base+0x4780)
+#define WAIT_BCON (base+0x47a0)
+#define WAIT_VFALL (base+0x47c0)
 #define ENGINE_CREATE (base+0x4800)
 #define APP_MODE (base+0x4900)
 #define APP_NOTIFY (base+0x4a00)
 #define SESSION_REQUEST (base+0x4b00)
+#define EVENT8 (base+0x4b40)
+#define EVENT_QUEUE (base+0x4860)
+#define SESSION_END (base+0x4b80)
 #define ENGINE_TABLE (base+0x4c00)
 #define ENGINE (base+0x4d00)
 #define POLICY (base+0x4e00)
@@ -98,7 +109,12 @@ static bool native_usb_ui_role_matches(const PortableView *v,uint32_t address,un
         (address==ENGINE_CREATE && role==UI_OTG_ENGINE_CREATE) ||
         (address==APP_MODE && role==UI_OTG_APP_MODE) ||
         (address==APP_NOTIFY && role==UI_OTG_APP_NOTIFY) ||
-        (address==SESSION_REQUEST && role==UI_OTG_SESSION_REQUEST));
+        (address==SESSION_REQUEST && role==UI_OTG_SESSION_REQUEST) ||
+        (address==SESSION_END && role==UI_OTG_SESSION_END) ||
+        (address==A_IDLE && role==UI_OTG_A_IDLE) ||
+        (address==WAIT_BCON && role==UI_OTG_WAIT_BCON) ||
+        (address==WAIT_VFALL && role==UI_OTG_WAIT_VFALL) ||
+        (address==EVENT8+8 && role==UI_OTG_INPUT_POLL));
 }
 static uint32_t code_branch(uint32_t address)
 {
@@ -111,6 +127,10 @@ static uint32_t code_branch(uint32_t address)
     if(address==EXPLORE+408)return RESET_PORT;
     if(address==OTG_ATTACH+0x13c)return ENGINE_CREATE;
     if(address==APP_NOTIFY+0x5c)return SESSION_REQUEST;
+    if(address==APP_NOTIFY+0x18)return SESSION_END;
+    if(address==SESSION_REQUEST+0x14)return EVENT8;
+    if(address==EVENT8+4)return EVENT_QUEUE;
+    if(address==EVENT8+12)return mismatched_poll_queue?ENGINE_CREATE:EVENT_QUEUE;
     return 0;
 }
 static int resume_existing(uint32_t hcd) {
@@ -132,7 +152,7 @@ static int take(uint32_t lock,unsigned timeout)
 {
     assert(mask==0xc0 && !timeout && (lock==USB_LOCK || lock==TREE_LOCK));
     if(!WORD(lock+24))return -51;
-    --WORD(lock+24);return 0;
+    --WORD(lock+24);if(lock==TREE_LOCK)++tree_takes;return 0;
 }
 static int give(uint32_t lock)
 {
@@ -140,9 +160,9 @@ static int give(uint32_t lock)
     if(lock==TREE_LOCK)++tree_gives;else ++usb_gives;
     ++WORD(lock+24);return 0;
 }
-static int request_owner_session(void)
+static int owner_session_call(unsigned operation)
 {
-    assert(!mask && !WORD(USB_LOCK+24) && WORD(TREE_LOCK+24)==1 && tree_gives==session_helper_calls+1);
+    assert(!mask && !WORD(USB_LOCK+24) && WORD(TREE_LOCK+24)==1 && tree_gives==tree_takes);
     assert(!starts && !stops && !enumerations && !port_resets && !lease_attempts);
     if(check_session_snapshot) {
         unsigned offset=USB_LOCK-base+24;
@@ -150,6 +170,7 @@ static int request_owner_session(void)
         assert(!memcmp(arena+offset+4,session_expected+offset+4,0x8000-offset-4));
     }
     ++session_helper_calls;
+    if(operation==2)++session_poll_calls;else if(operation==1)++session_end_calls;else ++session_start_calls;
     /* The real helper may give/reacquire USB while its native queue drains.
      * The caller must have released TREE before permitting that schedule. */
     if(helper_yields_usb) {
@@ -159,6 +180,11 @@ static int request_owner_session(void)
     }
     return session_error;
 }
+static int request_owner_session(void){return owner_session_call(0);}
+static int end_owner_session(unsigned argument)
+{assert(argument==0);return owner_session_call(1);}
+static int poll_owner_session(uint32_t engine)
+{assert(engine==ENGINE);return owner_session_call(2);}
 static int control(uint32_t hcd,unsigned command,unsigned argument)
 {
     (void)hcd;(void)argument;
@@ -192,7 +218,9 @@ static bool retain_bus_lease(uint32_t first,uint32_t second)
 static void native_usb_ui_bus_phy(uint32_t out[10])
 {
     if(schedule_changed_before_request)WORD(MMIO+4)|=0x8000;
+    WORD(MMIO+0x20)|=port_rises_at_sample;WORD(MMIO+0x24)|=otg_rises_at_sample;
     memset(out,0,10*sizeof(*out));out[0]=1;out[1]=WORD(MMIO);out[2]=WORD(MMIO+4);
+    out[3]=WORD(MMIO+0x20);out[4]=WORD(MMIO+0x24);
 }
 /* PRODUCTION_NATIVE_RESTART */
 static void reset(bool run)
@@ -201,12 +229,14 @@ static void reset(bool run)
     borrow_lock_stage=starts=stops=enumerations=reprobes=0;
     port_resets=resumes=enumeration_count=0;enumeration_result=explore_error=0;
     retain_allowed=false;
-    session_requests=session_helper_calls=tree_gives=usb_gives=lease_attempts=0;
+    session_requests=session_helper_calls=tree_takes=tree_gives=usb_gives=lease_attempts=0;
+    session_start_calls=session_end_calls=session_ends=session_polls=session_poll_calls=0;session_restart_requested=false;
     session_result=session_error=0;session_stage="not requested";memset(session_trace,0,sizeof(session_trace));
-    denied_code=bad_branch=0;bad_role=~0U;check_session_snapshot=false;
+    denied_code=bad_branch=0;bad_role=~0U;check_session_snapshot=mismatched_poll_queue=false;
     app_bus_leased=helper_yields_usb=false;
     view=(PortableView){&mapping,allow_span,OTG_ATTACH,ENGINE_TABLE};
     schedule_changed_before_request=explore_suspends=false;
+    port_rises_at_sample=otg_rises_at_sample=0;
     api.classic_cx=false;api.bsd_locks=LOCKS;api.bsd_mode=MODE;arena[0x1901]=1;
     api.function[UI_SEM_TAKE]=(uintptr_t)take;api.function[UI_SEM_GIVE]=(uintptr_t)give;
     api.function[UI_HCD_CONTROL]=(uintptr_t)control;
@@ -216,7 +246,10 @@ static void reset(bool run)
     WORD(OTG+0x0c)=ENGINE;WORD(ENGINE+0x0c)=ENGINE_CREATE;WORD(ENGINE+0x10)=ENGINE_TABLE;WORD(ENGINE+0x14)=OTG;
     WORD(ENGINE+0x28)=APP_MODE;WORD(ENGINE+0x2c)=APP_NOTIFY;
     WORD(SESSION_REQUEST+0x30)=WORD(APP_MODE+0x40)=WORD(ENGINE+0x44)=POLICY;
-    WORD(POLICY)=1;WORD(POLICY+4)=ENGINE;
+    WORD(POLICY)=1;WORD(POLICY+4)=ENGINE;WORD(POLICY+8)=1;
+    WORD(SESSION_END+0x24)=POLICY;
+    WORD(EVENT8)=0xe3a01008;WORD(EVENT8+4)=0xea000000;
+    WORD(EVENT8+8)=0xe3a01001;WORD(EVENT8+12)=0xea000000;
     WORD(ENGINE+0x68)=ENGINE_SEM;WORD(ENGINE_SEM+12)=0x53454d41;WORD(ENGINE_SEM+24)=1;
     WORD(ENGINE+0x70)=ENGINE+0x6c;
     WORD(LOCKS+4)=USB_LOCK;WORD(LOCKS+8)=TREE_LOCK;
@@ -247,7 +280,7 @@ int main(void)
     for(unsigned running=0;running<2;++running) {
         reset(running);if(running)WORD(MMIO+4)=0;
         memcpy(session_expected,arena,sizeof(session_expected));check_session_snapshot=true;
-        assert(!resume_host(false));
+        assert(resume_host(false)==NATIVE_USB_SESSION_PENDING);
         assert(!starts && !stops && !enumerations && !reprobes &&
             session_requests==1 && session_helper_calls==1 && !lease_attempts &&
             !WORD(BUS+604) && !WORD(BUS+1772));unlocked();
@@ -278,7 +311,7 @@ int main(void)
      * retired all children and IRQ state, but IAAD survives with ASS/PSS=0. */
     reset(true);WORD(MMIO)|=64;WORD(MMIO+4)=8;
     WORD(ADVANCE_EVENT+24)=0x12345678; /* A real pending flag stays untouched. */
-    assert(!resume_host(false) && !starts && !stops && !enumerations && session_helper_calls==1);
+    assert(resume_host(false)==NATIVE_USB_SESSION_PENDING && !starts && !stops && !enumerations && session_helper_calls==1);
     assert(session_phy_before[1]==0x80071 && session_phy_after[1]==0x80071 &&
         WORD(ADVANCE_EVENT+24)==0x12345678);unlocked();
     for(unsigned event_case=0;event_case<4;++event_case) {
@@ -320,7 +353,7 @@ int main(void)
                 WORD(MMIO+0x24)=session_otg[physical];WORD(MMIO+0x20)=session_port[physical];
                 helper_yields_usb=yield!=0;check_session_snapshot=true;
                 memcpy(session_expected,arena,sizeof(session_expected));
-                assert(!resume_host(retaining!=0));
+                assert(resume_host(retaining!=0)==NATIVE_USB_SESSION_PENDING);
                 assert(session_requests==1 && session_helper_calls==1 && !session_result &&
                     !strcmp(session_stage,"native request accepted"));
                 assert(!starts && !stops && !enumerations && !port_resets && !reprobes &&
@@ -345,7 +378,7 @@ int main(void)
      * own semaphore/queue decides whether to drain or append. */
     reset(false);WORD(MMIO+0x24)=0x12ea0;WORD(MMIO+0x20)=0;
     WORD(ENGINE+0x6c)=QUEUE_ITEM;WORD(ENGINE+0x70)=QUEUE_ITEM+8;
-    assert(!resume_host(false) && session_helper_calls==1 && session_trace[5]==QUEUE_ITEM);
+    assert(resume_host(false)==NATIVE_USB_SESSION_PENDING && !session_helper_calls && session_trace[5]==QUEUE_ITEM);
     unlocked();
     for(unsigned invalid=0;invalid<56;++invalid) {
         reset(false);WORD(MMIO+0x24)=0x12ea0;WORD(MMIO+0x20)=0;
@@ -408,13 +441,14 @@ int main(void)
         case 55:view.code_end=2;break;
         }
         memcpy(session_expected,arena,sizeof(session_expected));
-        assert(resume_host(true)<0 && !starts && !stops && !session_requests &&
+        int refusal=resume_host(true);
+        assert(refusal<0 && refusal!=NATIVE_USB_SESSION_PENDING && !starts && !stops && !session_requests &&
             !session_helper_calls && !lease_attempts && !enumerations && !port_resets);
         assert(!memcmp(arena,session_expected,sizeof(session_expected)));unlocked();
     }
     reset(false);WORD(MMIO+0x24)=0x12ea0;WORD(MMIO+0x20)=0;
     WORD(POLICY)=0;WORD(ENGINE_SEM+24)=0;
-    assert(!resume_host(true) && session_helper_calls==1 && session_trace[8]==0 &&
+    assert(resume_host(true)==NATIVE_USB_SESSION_PENDING && session_helper_calls==1 && session_trace[8]==0 &&
         !WORD(ENGINE_SEM+24) && !lease_attempts);unlocked();
     /* The same under-construction child guard protects a powered cold root,
      * not merely a dropped-session binding. Do not overwrite live EP0 work. */
@@ -425,27 +459,153 @@ int main(void)
      * Neither another poll nor a freshly opened app may shortcut that owner
      * with a second HCD18. Keep its queue intact until it publishes the host. */
     reset(false);WORD(MMIO+0x24)=0x12ea0;WORD(MMIO+0x20)=0;
-    assert(!resume_host(true) && session_helper_calls==1 && !starts && !lease_attempts);unlocked();
+    assert(resume_host(true)==NATIVE_USB_SESSION_PENDING && session_helper_calls==1 && !starts && !lease_attempts);unlocked();
     WORD(MMIO+0x24)=0x8e0010;WORD(MMIO+0x20)=3;
     WORD(ENGINE+0x6c)=QUEUE_ITEM;WORD(ENGINE+0x70)=QUEUE_ITEM+8;
-    assert(!resume_host(true) && session_helper_calls==2 && !starts && !lease_attempts);unlocked();
+    assert(resume_host(true)==NATIVE_USB_SESSION_PENDING && session_helper_calls==1 && !starts && !lease_attempts);unlocked();
     assert(WORD(ENGINE+0x6c)==QUEUE_ITEM && WORD(ENGINE+0x70)==QUEUE_ITEM+8);
     /* Emulate new application statics without erasing native engine state. */
-    session_requests=session_helper_calls=tree_gives=usb_gives=0;
+    session_requests=session_helper_calls=tree_takes=tree_gives=usb_gives=0;
     session_result=0;memset(session_trace,0,sizeof(session_trace));
-    assert(!resume_host(true) && session_requests==1 && session_helper_calls==1 &&
+    assert(resume_host(true)==NATIVE_USB_SESSION_PENDING && !session_requests && !session_helper_calls &&
         !starts && !stops && !lease_attempts && !WORD(BUS+604) && !WORD(BUS+1772));unlocked();
     /* The owner, outside the app function, completes reset/start/publication. */
     WORD(MMIO)=0x80031;WORD(MMIO+4)=0xc000;WORD(MMIO+0x20)=0xd;
     WORD(BUS+604)=IRQ;WORD(BUS+1772)=WORD(HUB_STATE+36)=1;
     WORD(ENGINE+0x6c)=0;WORD(ENGINE+0x70)=ENGINE+0x6c;
-    retain_allowed=true;
-    assert(!resume_host(true) && !starts && !stops && session_helper_calls==1 &&
-        enumerations==1 && reprobes==1 && lease_attempts==1 && app_bus_leased &&
+    retain_allowed=true;native_usb_ui_request_session_restart();
+    assert(!resume_host(true) && !starts && !stops && !session_helper_calls &&
+        enumerations==1 && reprobes==1 && lease_attempts==1 && app_bus_leased && !session_restart_requested &&
         !WORD(USB_LOCK+24) && !WORD(TREE_LOCK+24) && mask==0x80);
     native_critical_enter();give(TREE_LOCK);give(USB_LOCK);native_critical_leave(0x80);
     app_bus_leased=false;unlocked();
     puts("PASS repeated polls and application reopen defer a power-ready cold owner; only fresh native publication permits the app bus lease");
+    /* A physical connection or A-session validity can rise after binding
+     * while IRQs remain masked. Fresh PHY input must defer END/idle START,
+     * preserving the retry intent without dropping a new connection. */
+    for(unsigned input=0;input<3;++input) {
+        reset(false);WORD(MMIO)=0x80b00;WORD(MMIO+4)=0x1000;WORD(MMIO+0x20)=0;
+        WORD(ENGINE+0xc)=input?A_IDLE:WAIT_BCON;
+        WORD(MMIO+0x24)=input?0x12ea0:0x8e0010;
+        native_usb_ui_request_session_restart();
+        if(input==2)otg_rises_at_sample=0x40000;else port_rises_at_sample=1;
+        assert(resume_host(true)==NATIVE_USB_SESSION_PENDING && session_restart_requested &&
+            !session_requests && !session_helper_calls && !session_ends && !session_polls &&
+            !starts && !stops && !lease_attempts && !strcmp(session_stage,"session inputs changed"));
+        assert((input==2?(session_phy_before[4]&0x40000U):(session_phy_before[3]&1U)) &&
+            tree_gives==1 && usb_gives==1);unlocked();
+    }
+    puts("PASS fresh physical CONNECT/A-session changes defer native END or idle START without consuming restart intent");
+    /* Captured wait-bcon failure: START was accepted but no device connected.
+     * Retry marks a CPU intent only, then the existing owner accepts END(0).
+     * Its queued END and VBUS-fall state must finish before another START. */
+    reset(false);WORD(MMIO)=0x80b00;WORD(MMIO+4)=0x1000;
+    WORD(MMIO+0x20)=0x80a;WORD(ENGINE+0xc)=WAIT_BCON;
+    WORD(ENGINE)=0x4a;WORD(ENGINE+4)=0x00300000;WORD(ENGINE+8)=8;
+    memcpy(session_expected,arena,sizeof(session_expected));check_session_snapshot=true;
+    for(unsigned mark=0;mark<3;++mark)native_usb_ui_request_session_restart();
+    assert(session_restart_requested && !session_requests && !session_helper_calls &&
+        !memcmp(arena,session_expected,sizeof(session_expected)));
+    helper_yields_usb=true;
+    assert(resume_host(true)==NATIVE_USB_SESSION_PENDING && session_ends==1 &&
+        session_end_calls==1 && !session_start_calls && !session_restart_requested && !lease_attempts);
+    assert(!memcmp(arena,session_expected,sizeof(session_expected)));unlocked();
+    check_session_snapshot=false;
+    WORD(ENGINE+0x6c)=QUEUE_ITEM;WORD(ENGINE+0x70)=QUEUE_ITEM+8;
+    assert(resume_host(true)==NATIVE_USB_SESSION_PENDING && session_end_calls==1 &&
+        !session_start_calls && !strcmp(session_stage,"native queue pending"));unlocked();
+    /* Reopening clears app statics, while the native END node remains. */
+    session_requests=session_helper_calls=session_start_calls=session_end_calls=session_ends=session_polls=session_poll_calls=0;
+    tree_takes=tree_gives=usb_gives=0;session_restart_requested=false;helper_yields_usb=false;
+    assert(resume_host(false)==NATIVE_USB_SESSION_PENDING && !session_helper_calls &&
+        !strcmp(session_stage,"native queue pending"));unlocked();
+    WORD(ENGINE+0x6c)=0;WORD(ENGINE+0x70)=ENGINE+0x6c;WORD(ENGINE+0xc)=WAIT_VFALL;
+    WORD(MMIO+0x24)=0x12ea0;WORD(MMIO+0x20)=0;
+    native_usb_ui_request_session_restart();
+    assert(resume_host(true)==NATIVE_USB_SESSION_PENDING && session_poll_calls==1 && session_polls==1 &&
+        !session_start_calls && !session_end_calls && session_restart_requested);unlocked();
+    WORD(ENGINE+0xc)=A_IDLE;WORD(MMIO+0x24)|=0x40000;
+    assert(resume_host(true)==NATIVE_USB_SESSION_PENDING && session_poll_calls==2 && session_polls==2 &&
+        !session_start_calls && !session_end_calls && session_restart_requested);unlocked();
+    WORD(MMIO+0x24)&=~0x40000U;WORD(MMIO+0x20)=1;
+    assert(resume_host(true)==NATIVE_USB_SESSION_PENDING && session_poll_calls==3 && session_polls==3 &&
+        !session_start_calls && !session_end_calls && session_restart_requested);unlocked();
+    WORD(MMIO+0x20)=0;
+    assert(resume_host(true)==NATIVE_USB_SESSION_PENDING && session_start_calls==1 &&
+        !session_end_calls && !session_restart_requested && !starts && !stops && !lease_attempts);unlocked();
+    /* A subsequent explicit Retry while native power-fall was pending was
+     * consumed by START, so it cannot immediately END the new wait-bcon. */
+    WORD(ENGINE+0xc)=WAIT_BCON;
+    assert(resume_host(false)==NATIVE_USB_SESSION_PENDING && session_start_calls==2 && !session_end_calls);unlocked();
+    for(unsigned invalid=0;invalid<9;++invalid) {
+        reset(false);WORD(MMIO+0x20)=0;WORD(ENGINE+0xc)=WAIT_BCON;
+        native_usb_ui_request_session_restart();
+        switch(invalid) {
+        case 0:WORD(POLICY)=0;break;
+        case 1:WORD(POLICY+8)=0;break;
+        case 2:bad_branch=APP_NOTIFY+0x18;break;
+        case 3:bad_role=UI_OTG_SESSION_END;break;
+        case 4:WORD(SESSION_END+0x24)=POLICY+4;break;
+        case 5:denied_code=SESSION_END+0x24;break;
+        case 6:WORD(HUB_INFO+56)=QUEUE_ITEM;break;
+        case 7:WORD(HEAD)=HEAD+0x82;break;
+        case 8:WORD(BUS+52+8)=QUEUE_ITEM;break;
+        }
+        int refusal=resume_host(true);
+        assert(refusal<0 && refusal!=NATIVE_USB_SESSION_PENDING && !session_helper_calls &&
+            !session_ends && session_restart_requested && !starts && !stops);unlocked();
+    }
+    for(unsigned error=0;error<2;++error) {
+        reset(false);WORD(MMIO+0x20)=0;WORD(ENGINE+0xc)=WAIT_BCON;
+        native_usb_ui_request_session_restart();session_error=error? -51:5;
+        assert(resume_host(true)==session_error && session_end_calls==1 && !session_start_calls &&
+            !session_ends && session_restart_requested);unlocked();
+        session_error=0;
+        assert(resume_host(true)==NATIVE_USB_SESSION_PENDING && session_end_calls==2 &&
+            session_ends==1 && !session_restart_requested && !session_start_calls);unlocked();
+    }
+    /* START in an unidentified transition can be accepted as a native no-op.
+     * Keep the user's restart intent until a known wait-bcon END consumes it. */
+    reset(false);WORD(MMIO+0x20)=0;native_usb_ui_request_session_restart();
+    assert(resume_host(true)==NATIVE_USB_SESSION_PENDING && session_start_calls==1 &&
+        session_restart_requested && !session_end_calls && !session_poll_calls);unlocked();
+    WORD(ENGINE+0xc)=WAIT_BCON;
+    assert(resume_host(true)==NATIVE_USB_SESSION_PENDING && session_end_calls==1 &&
+        session_ends==1 && !session_restart_requested && !session_poll_calls);unlocked();
+    /* Queue serialization prevents real-input refresh from running in the
+     * middle of native END execution, including after application reopen. */
+    reset(false);WORD(ENGINE+0xc)=WAIT_VFALL;WORD(ENGINE+0x6c)=QUEUE_ITEM;
+    WORD(ENGINE+0x70)=QUEUE_ITEM+8;native_usb_ui_request_session_restart();
+    assert(resume_host(true)==NATIVE_USB_SESSION_PENDING && !session_helper_calls &&
+        !session_polls && session_restart_requested);unlocked();
+    for(unsigned invalid=0;invalid<9;++invalid) {
+        reset(false);WORD(ENGINE+0xc)=WAIT_VFALL;native_usb_ui_request_session_restart();
+        switch(invalid) {
+        case 0:bad_branch=SESSION_REQUEST+0x14;break;
+        case 1:WORD(EVENT8)^=1;break;
+        case 2:WORD(EVENT8+4)=0;break;
+        case 3:bad_role=UI_OTG_INPUT_POLL;break;
+        case 4:denied_code=EVENT8;break;
+        case 5:bad_branch=EVENT8+4;break;
+        case 6:bad_branch=EVENT8+12;break;
+        case 7:view.code_end=EVENT8+12;break;
+        case 8:mismatched_poll_queue=true;break;
+        }
+        int refusal=resume_host(true);
+        assert(refusal<0 && refusal!=NATIVE_USB_SESSION_PENDING && !session_helper_calls &&
+            !session_polls && session_restart_requested && !starts && !stops);unlocked();
+    }
+    for(unsigned error=0;error<2;++error) {
+        reset(false);WORD(ENGINE+0xc)=WAIT_VFALL;native_usb_ui_request_session_restart();
+        session_error=error? -51:5;
+        assert(resume_host(true)==session_error && session_poll_calls==1 && !session_polls &&
+            !session_start_calls && !session_end_calls && session_restart_requested);unlocked();
+        session_error=0;
+        assert(resume_host(true)==NATIVE_USB_SESSION_PENDING && session_poll_calls==2 &&
+            session_polls==1 && session_restart_requested && !session_start_calls && !session_end_calls);unlocked();
+    }
+    puts("PASS native event1 refresh is authenticated against START's queue, serializes with END, preserves restart intent and never bypasses real power fall");
+    puts("PASS Retry coalesces CPU intent into authenticated native END(0); queued END, native power-fall, app reopen and real idle gates prevent premature START");
     /* Already-running root changes must still dispatch explore(1), never
      * reset a disconnected port or treat the owner-queued cold path as ready. */
     {

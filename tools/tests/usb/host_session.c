@@ -7,7 +7,10 @@
 #include "usb_autoconnect.h"
 #include "usb_host_session.h"
 static uint32_t regs[64],gate,clock_gate,irq,clock_ms;
-static unsigned waits,claims,releases,ready_after,mask,native_ready_after;
+static unsigned waits,claims,releases,ready_after,mask,native_ready_after,wake_calls;
+static int wake_status;
+static uint32_t cancel_after;
+enum {NATIVE_USB_SESSION_PENDING=-70};
 static bool native_lease,cancelled,stuck,repair_native,drop_native_on_claim;
 static uint32_t native_state[8];
 static uint32_t *test_register(uint32_t address)
@@ -46,19 +49,20 @@ static int native_usb_ui_wait(void)
     return 0;
 }
 static int native_usb_ui_reassert(void){return 0;}
-static int native_usb_ui_resume_host_lease(void){return 0;}
+static int native_usb_ui_resume_host_lease(void)
+{assert(!native_lease);++wake_calls;return wake_status;}
 static void app_task_io_pause_service(bool pause){(void)pause;}
 static uint32_t native_usb_ui_bus_irq_mask(void){return 256;}
 static void native_usb_ui_debug(FILE *file){(void)file;}
 static uint32_t now(void){return ++clock_ms;}
-static bool progress(void *context){(void)context;return !cancelled;}
+static bool progress(void *context){(void)context;return !cancelled && (!cancel_after || clock_ms<cancel_after);}
 /* PRODUCTION_HOST_SESSION */
 static void reset(uint32_t command,unsigned turns)
 {
     memset(regs,0,sizeof(regs));regs[0]=0x01000010;regs[4]=command;
     regs[5]=0xc000;regs[12]=5;regs[32]=2U<<22;
     gate=0xffffffff;clock_gate=0xffebffff;irq=256;mask=0;
-    clock_ms=waits=claims=releases=0;ready_after=turns;
+    clock_ms=waits=claims=releases=wake_calls=0;wake_status=0;cancel_after=0;ready_after=turns;
     native_lease=leased=cancelled=stuck=repair_native=drop_native_on_claim=false;
     native_ready_after=0;
     memset(native_state,0,sizeof(native_state));
@@ -109,6 +113,31 @@ int main(void)
     assert(usb_host_session_prepare(now,progress,NULL,message,sizeof(message)));
     assert(waits==1 && claims==1 && native_lease);
     usb_host_session_release();
+    /* Queued native OTG work owns its own timer/state progression. Pending
+     * reports do not exhaust the four actual wake attempts, but the overall
+     * wall-clock deadline and user cancellation remain authoritative. */
+    reset(0x80031,1);native_state[4]=native_state[5]=0;
+    repair_native=true;native_ready_after=400;wake_status=NATIVE_USB_SESSION_PENDING;message[0]=0;
+    assert(usb_host_session_prepare(now,progress,NULL,message,sizeof(message)));
+    assert(wake_calls>4 && host_wakes==wake_calls && claims==1 && native_lease &&
+        waits==native_ready_after && host_elapsed<8000);
+    usb_host_session_release();assert(gate==0xffffffff);
+    reset(0x80031,1);native_state[4]=native_state[5]=0;
+    wake_status=NATIVE_USB_SESSION_PENDING;message[0]=0;
+    assert(!usb_host_session_prepare(now,progress,NULL,message,sizeof(message)));
+    assert(wake_calls>4 && host_wakes==wake_calls && !claims && !leased && !native_lease &&
+        host_elapsed>=8000 && host_elapsed<8100 && waits<1000 && gate==0xffffffff);
+    reset(0x80031,1);native_state[4]=native_state[5]=0;
+    wake_status=NATIVE_USB_SESSION_PENDING;cancel_after=3000;message[0]=0;
+    assert(!usb_host_session_prepare(now,progress,NULL,message,sizeof(message)));
+    assert(wake_calls>4 && !claims && !leased && !native_lease &&
+        clock_ms>=cancel_after && clock_ms<cancel_after+100 && !strcmp(message,"Cancelled") && gate==0xffffffff);
+    reset(0x80031,1);native_state[4]=native_state[5]=0;
+    wake_status=-28;message[0]=0;
+    assert(!usb_host_session_prepare(now,progress,NULL,message,sizeof(message)));
+    assert(wake_calls==4 && !claims && !leased && !native_lease &&
+        host_elapsed>=8000 && host_elapsed<8100 && gate==0xffffffff);
+    puts("PASS queued native OTG work preserves the wake budget while real refusals, deadline and cancellation stay bounded");
     puts("PASS MMIO-ready host waits for authenticated native active/IRQ and consistent resumed state, rechecks after claim, and accepts a coherent empty bus");
     puts("PASS shared host session waits for native doorbell/reset completion, releases an old lease, and bounds cancellation/stuck hardware");
     return 0;

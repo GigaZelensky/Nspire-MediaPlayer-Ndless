@@ -16,6 +16,10 @@ int native_usb_ui_poll(void);
  * sequence for a verified cold CX II root. A queued request is not readiness;
  * callers recheck current native/MMIO state before borrowing the bus. */
 int native_usb_ui_resume_host(void);
+enum { NATIVE_USB_SESSION_PENDING = -70 };
+/* CPU-only intent, coalesced by the native owner at a quiescent root.
+ * Does not access the OS mapping or perform hardware I/O. */
+void native_usb_ui_request_session_restart(void);
 /* Read-only candidate discovery. The controller authenticates its own
  * resident callbacks before reusing a binding from a previous app launch. */
 bool native_usb_ui_storage_binding(uint32_t *owner, uint32_t *device, uint32_t *interface);

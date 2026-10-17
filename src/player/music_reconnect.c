@@ -134,6 +134,7 @@ int music_wait_for_audio(SDL_Surface *screen,const Fonts *fonts,const char *path
     /* Save the original failure once, before retry objects/cleanup can replace
      * its evidence. Failed background attempts close quietly until cancellation. */
     audio_playback_close(*audio);*audio=NULL;
+    usb_browser_request_session_restart();
     for(;;) {
         uint32_t now=monotonic_clock_now_ms();
         if(isKeyPressed(KEY_NSPIRE_ESC))break;
@@ -208,6 +209,7 @@ retry_now:
         if(view.retry_requested) {
             view.retry_requested=false;
             audio_playback_discard_retry(*audio);*audio=NULL;
+            usb_browser_request_session_restart();
             retry_at=monotonic_clock_now_ms();backoff=500;
             loading.last_draw_ms=0;
             continue;

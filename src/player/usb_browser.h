@@ -12,6 +12,7 @@ void usb_browser_idle_discovery(SDL_Surface *screen, uint32_t now);
 /* Failed audio must be suspended first. Service native USB workers even when
  * the upstream hub is present and the picker/storage scan is already done. */
 bool usb_browser_recovery_poll(SDL_Surface *screen);
+void usb_browser_request_session_restart(void);
 void usb_browser_debug(FILE *file);
 void usb_browser_save_exit_audit(void);
 void usb_browser_shutdown(SDL_Surface *, const Fonts *);

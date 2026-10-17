@@ -193,7 +193,7 @@ bool usb_host_session_prepare(uint32_t (*now)(void), bool (*progress)(void *), v
             reassert_result = native_usb_ui_reassert();
             /* NU_UNAVAILABLE is a lock-contention result, not a hardware wake.
              * Don't spend every wake attempt while native teardown is busy. */
-            if (wake_result != -51)
+            if (wake_result != -51 && wake_result != NATIVE_USB_SESSION_PENDING)
                 ++resumes;
             resume_after = now() + 500U;
             sample("guarded host start/resume");

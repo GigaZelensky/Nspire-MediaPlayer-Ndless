@@ -293,6 +293,10 @@ bool usb_browser_recovery_poll(SDL_Surface *screen)
     raw_player_native_released();
     return discovery_result==0;
 }
+void usb_browser_request_session_restart(void)
+{
+    native_usb_ui_request_session_restart();
+}
 void usb_browser_debug(FILE *file)
 {
     if (file) fprintf(file, "usb_connect preconnected=%u stage=%s auto_state=%u auto_candidate=%u resume_attempts=%u resume_result=%d\n",
@@ -617,7 +621,8 @@ static void connect_native(void *context)
         } else {
             window->status = present ? "Detecting the USB drive..." : "Waiting for a USB drive...";
             if ((!host_resumed || !(host_state & 1U) || host_state != attempted_state) &&
-                (quiet_reconnect || resume_attempts < 4 || resume_result == -51) &&
+                (quiet_reconnect || resume_attempts < 4 || resume_result == -51 ||
+                 resume_result == NATIVE_USB_SESSION_PENDING) &&
                 (int32_t)(now - resume_after) >= 0 && (presence & USB_AUTO_ADAPTER) &&
                 (window->preconnected || !present || now - present_since >= 1000U)) {
                 bool trace_recovery = resume_attempts == 0 || resume_result != -51 ||
