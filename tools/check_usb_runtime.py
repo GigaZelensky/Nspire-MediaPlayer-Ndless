@@ -30,6 +30,15 @@ with tempfile.TemporaryDirectory(prefix='ndvideo-usb-lease-') as temporary:
     (work/'lease.c').write_text(fixture)
     subprocess.run([gcc,'-std=c99','-O2','-Wall','-Wextra','-Werror',str(work/'lease.c'),'-o',str(work/'lease.exe')],check=True)
     subprocess.run([str(work/'lease.exe')],check=True,timeout=10)
+with tempfile.TemporaryDirectory(prefix='ndvideo-usb-restart-') as temporary:
+    work=Path(temporary)
+    source=(root/'src/player/native_usb_ui.c').read_text()
+    fixture=(root/'tools/tests/usb/native_restart.c').read_text().replace(
+        '/* PRODUCTION_NATIVE_RESTART */', '\n'.join(function(source,name) for name in (
+            'cold_start_check','resume_host')))
+    (work/'restart.c').write_text(fixture)
+    subprocess.run([gcc,'-std=c99','-O2','-Wall','-Wextra','-Werror',str(work/'restart.c'),'-o',str(work/'restart.exe')],check=True)
+    subprocess.run([str(work/'restart.exe')],check=True,timeout=10)
 with tempfile.TemporaryDirectory(prefix='ndvideo-usb-attach-') as temporary:
     work=Path(temporary)
     source=(src/'usb_controller.c').read_text()

@@ -128,7 +128,7 @@ static int cold_start_check(const UsbHostTree *tree)
      * peripheral, with no registered HCD interrupt and no suspend flag. The
      * resume method cannot start that bus. Control 18 registers its interrupt
      * and starts the existing schedules; it does not allocate a second bus. */
-    if (api.classic_cx || WORD(tree->bus + 604) || WORD(tree->handle + 32) ||
+    if (api.classic_cx || WORD(tree->bus + 604) || WORD(tree->bus + 1772) || WORD(tree->handle + 32) ||
         WORD(tree->hub_state + 36)) return -31;
     /* bus+1744 is the native free-transfer pool, not an active-transfer list.
      * Cached objects there are valid even before the controller starts. */
@@ -152,7 +152,7 @@ static int cold_start_check(const UsbHostTree *tree)
     uint32_t periodic = WORD(dma + 4), async = WORD(head + 76);
     if ((periodic & 4095U) || (async & 31U) ||
         !memory(periodic, count * 4) || !memory(async, 64) ||
-        WORD(head) != (async | 2U) || !(WORD(head + 16) & 1U) ||
+        WORD(head) != (async | 2U) || WORD(head + 68) || !(WORD(head + 16) & 1U) ||
         (WORD(head + 24) & 0x80U)) return -35;
     /* Never start over a child device or a linked asynchronous transfer. */
     bool root_found = false;
@@ -875,9 +875,16 @@ static int resume_host(bool retain_bus)
         goto done;
     }
     result = -29;
-    if ((cold || WORD(tree.handle + 32)) &&
+    /* Native control 19 unregisters the HCD and clears its active flag, but
+     * leaves USBCMD.RUN and the schedule registers intact. Its matching
+     * control 18 republishes the existing schedules and starts the host.
+     * cold_start_check already proves no IRQ, active hub, child or linked
+     * async queue survives. Requiring HALTED here would strand that normal
+     * stopped-driver state forever. A suspended live bus still needs the
+     * separate halt/saved-command checks before its resume method runs. */
+    if (!cold && WORD(tree.handle + 32) &&
         ((WORD(registers.command) & 1U) || !(WORD(registers.command + 4) & 0x1000U) ||
-         (!cold && !(WORD(tree.bus + 648) & 1U)))) goto done;
+         !(WORD(tree.bus + 648) & 1U))) goto done;
     stage = cold ? "start existing EHCI host" : "resume existing EHCI host";
     if (cold) { ++start_count; start_cleanup_result = 0; }
     native_critical_leave(0);
