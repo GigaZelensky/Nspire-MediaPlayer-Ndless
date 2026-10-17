@@ -11,7 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def function(source, name):
-    match = re.search(r'(?m)^(?:static )?(?:bool|void|int|uint32_t|uint64_t|size_t) ' + name + r'\(', source)
+    # Skip forward declarations; only extract a definition with a body.
+    match = re.search(r'(?m)^(?:static )?(?:bool|void|int|uint32_t|uint64_t|size_t) ' + name +
+                      r'\([^;{}]*\)\s*(?=\{)', source)
     if not match:
         raise ValueError(name)
     brace = source.index('{', match.end())

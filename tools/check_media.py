@@ -72,7 +72,7 @@ def check(work):
     playback = work / "playback.c"
     source = (ROOT / "src/audio/audio_playback.c").read_text()
     playback_functions="\n".join(function(source,name) for name in (
-            "record_elapsed", "capture_transfer_fault", "audio_playback_suspend", "audio_playback_pause", "audio_playback_seek",
+            "record_elapsed", "capture_transfer_fault", "pump_audio", "audio_playback_pump", "periodic_pump", "audio_playback_suspend", "audio_playback_pause", "audio_playback_seek",
             "audio_playback_retry", "audio_playback_can_reconnect", "audio_playback_cancelled", "audio_playback_active", "audio_playback_source_lost",
             "audio_playback_position", "audio_playback_snapshot", "audio_playback_info", "audio_playback_mute", "tick_audio", "audio_playback_tick"))
     playback_functions+="\n"+"\n".join(function(adapter,name) for name in (

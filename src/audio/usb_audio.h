@@ -25,10 +25,17 @@ bool usb_audio_quiesce(UsbAudio *);
 bool usb_audio_start(UsbAudio *u, AudioBuffer *s, uint64_t position, unsigned rate_num,
                      unsigned rate_den, unsigned volume);
 bool usb_audio_service(UsbAudio *u);
+/* Foreground only, after usb_storage_quiescent(): a bounded read-only device
+ * reply check. Never call from the storage periodic-service callback. */
+bool usb_audio_check_health(UsbAudio *u);
 uint64_t usb_audio_position(UsbAudio *u);
 void usb_audio_volume(UsbAudio *u, unsigned volume);
 const char *usb_audio_error(const UsbAudio *u);
 /* Last transfer failure remains available after the USB owner is closed. */
 const char *usb_audio_transfer_fault(void);
+/* Passive snapshot at close; no control request and no per-frame logging. */
+void usb_audio_capture_stream(UsbAudio *);
+const char *usb_audio_last_stream(void);
+const char *usb_audio_last_control(void);
 void usb_audio_describe(const UsbAudio *u, char *text, size_t capacity);
 #endif

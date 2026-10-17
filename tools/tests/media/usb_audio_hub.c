@@ -26,6 +26,10 @@ static size_t allocation_bytes;
 static unsigned clock_ms, scenario, resumes, suspends, alternate, rate, configuration;
 static unsigned state_reads;
 static unsigned alternate_queries;
+static unsigned start_polls,illegal_async_disables;
+static uint32_t previous_command,previous_status;
+static bool leaf_present=true;
+static unsigned live_queries,periodic_drops;
 static unsigned hub_address[2], link_port[2], leaf_address, hubs;
 static bool suspended[2], originally_suspended[2], fail_resume, cancel_after_resume;
 static bool resume_pending[2], status_failed_once;
@@ -93,16 +97,30 @@ void usb_test_poll(void)
         }
     }
     uint32_t command=usb_test_registers[4];
+    if(live_queries && !(command&PSE))++periodic_drops;
+    bool private_queue=dma(usb_test_registers[10],sizeof(Qh));
+    if(private_queue && (previous_command&ASE) && !(previous_status&ASS) &&
+       !(command&ASE) && (command&RUN))++illegal_async_disables;
+    bool delayed=private_queue && (command&ASE) && scenario>=30 && scenario<=32;
+    if(delayed)++start_polls;
+    previous_command=command;
     usb_test_registers[5]&=~(ASS|PSS|HALTED);
-    if(!(command&RUN)){usb_test_registers[5]|=HALTED;return;}
-    if(command&ASE)usb_test_registers[5]|=ASS;
+    if(!(command&RUN)){
+        if(scenario!=32 || !private_queue)usb_test_registers[5]|=HALTED;
+        previous_status=usb_test_registers[5];return;
+    }
+    bool async_ready=!delayed || (scenario==30 && start_polls>=8);
+    if((command&ASE) && async_ready)usb_test_registers[5]|=ASS;
     if(command&PSE)usb_test_registers[5]|=PSS;
+    previous_status=usb_test_registers[5];
+    if(!async_ready)return;
     if(!(command&ASE) || !dma(usb_test_registers[10],sizeof(Qh)))return;
     Qh *qh=(Qh *)(uintptr_t)usb_test_registers[10];
     unsigned address=qh->info1&127;
     int hub=hub_index(address);
     bool leaf=address==leaf_address;
     if(!leaf && hub<0)return;
+    if(leaf && !leaf_present)return;
     if((leaf && (suspended[0] || (hubs==2 && suspended[1]))) ||
        (hub==1 && suspended[0]))return;
     check(((qh->info1>>12)&3)==(leaf?0U:2U),"wrong speed");
@@ -150,12 +168,14 @@ void usb_test_poll(void)
         }
     } else if(setup[0]==0x23 && request==8 && !length) {
         check(!leaf,"TT clear sent to audio endpoint");
+        if(scenario==33)ok=false;
     } else if(request==6 && value==0x100 && setup[0]==0x80) {
         uint8_t descriptor[]={18,1,0,2,0,0,0,64,0xac,5,0x0b,0x11,0,1,0,0,0,1};
         if(!leaf){descriptor[4]=9;descriptor[6]=scenario%2?2:1;}
         check(length==8 || length==18,"bad device descriptor request");
         memcpy(payload,descriptor,length);
-        if(leaf && scenario==11)ok=false;
+        if(leaf && (command&PSE))++live_queries;
+        if(leaf && (scenario==11 || scenario==33))ok=false;
     } else if(request==6 && value==0x200 && setup[0]==0x80) {
         check(length<=sizeof(config),"bad configuration size");memcpy(payload,config,length);
         if(leaf && scenario==12 && length>32)payload[32]=3; /* IEEE float, no supported PCM. */
@@ -181,6 +201,7 @@ void usb_test_poll(void)
     q->token&=~0x80U;
     if(!ok){data->token=(data->token&~0x80U)|0x40U;return;}
     if(length)data->token&=~(0x80U|0x7fff0000U);
+    if(length && scenario==34)data->token|=1U<<16;
     status->token&=~0x80U;
 }
 static uint32_t now(void)
@@ -215,7 +236,9 @@ static bool device_state(void *unused,uint8_t address,int iface,UsbDeviceState *
 static void reset(unsigned mode)
 {
     scenario=mode;clock_ms=resumes=suspends=alternate=state_reads=alternate_queries=0;rate=44100;
+    start_polls=illegal_async_disables=0;previous_command=previous_status=0;
     configuration=mode==17 || mode==24?0:1;
+    leaf_present=true;live_queries=periodic_drops=0;
     memset(resume_pending,0,sizeof(resume_pending));status_failed_once=false;
     hubs=mode==0?1:2;
     hub_address[0]=mode%2?73:2;hub_address[1]=mode%2?7:100;
@@ -236,6 +259,82 @@ static void reset(unsigned mode)
 }
 int main(void)
 {
+    for(unsigned mode=0;mode<4;++mode) {
+        reset(3);
+        const char *message=NULL;UsbAudio *u=usb_audio_open(now,&message);
+        check(u && allocation,"health owner setup");
+        int16_t pcm[20000*2]={0};
+        AudioBuffer buffer={.pcm=pcm,.sample_count=20000,.sample_rate=48000,.channels=2};
+        check(usb_audio_start(u,&buffer,0,1,1,20),"health audio start");
+        u->health_at=clock_ms;
+        uint32_t list=usb_test_registers[9],async=usb_test_registers[10];
+        check(usb_audio_check_health(u) && u->health_checks==1 && !u->health_errors,"healthy DAC reply rejected");
+        check(live_queries && !periodic_drops && usb_test_registers[9]==list &&
+              usb_test_registers[10]==async && (usb_test_registers[4]&PSE),"health stopped/replaced the audio schedule");
+        check(usb_audio_check_health(u) && u->health_checks==1,"descriptor query ran per audio tick");
+        if(mode==0) {
+            u->health_at=clock_ms;usb_test_registers[4]|=ASE;usb_test_registers[5]|=ASS;
+            check(usb_audio_check_health(u) && u->health_checks==1,"health stole an occupied asynchronous schedule");
+            usb_test_registers[4]&=~ASE;usb_test_registers[5]&=~ASS;
+        } else {
+            leaf_present=false;u->health_at=clock_ms;
+            /* A hub can keep accepting isochronous OUT while its DAC is gone.
+             * Successful retirements must not substitute for a device reply. */
+            for(unsigned i=0;i<LEAD;++i)u->sitd[i].state=0;
+            check(usb_audio_service(u),"phantom ISO completion fixture failed");
+            check(usb_audio_check_health(u) && u->health_errors==1 && u->health_failures==1,
+                  "one missing reply did not get a bounded retry");
+            check((usb_test_registers[4]&PSE) && !u->unsafe_dma,"first health timeout disrupted audio/DMA");
+            u->health_at=clock_ms;
+            if(mode==1) {
+                check(!usb_audio_check_health(u) && u->health_failures==2 &&
+                      strstr(usb_audio_error(u),"stopped responding"),"vanished DAC kept playing forever");
+            } else {
+                leaf_present=true;
+                if(mode==3)u->vendor^=1; /* A different device reused the address. */
+                bool ok=usb_audio_check_health(u);
+                check(mode==2 ? ok && !u->health_failures : !ok,"transient/reused-address handling");
+            }
+        }
+        leaf_present=true;live_queries=0;
+        check(usb_audio_close(u) && !allocation,"health cleanup leaked its schedule");
+    }
+    puts("PASS live DAC reply checks: phantom ISO success, occupied async queue, transient loss, address reuse, periodic continuity and rate limiting");
+    for(unsigned mode=30;mode<=32;++mode) {
+        reset(mode);
+        const char *message=NULL;
+        UsbAudio *u=usb_session_open(now,&message);
+        check(u && allocation,"control-handshake owner allocation");
+        u->address=hub_address[0];u->max_control=64;u->high_speed=true;
+        uint8_t descriptor[8];
+        bool result=control(u,0x80,6,0x100,0,descriptor,sizeof(descriptor),20);
+        check(!illegal_async_disables,"ASE toggled before its start was acknowledged");
+        if(mode==30) {
+            check(result && start_polls>=8,"delayed asynchronous start was not awaited");
+            check(usb_audio_close(u),"delayed-start cleanup");
+        } else {
+            check(!result && strstr(usb_audio_last_control(),"start not acknowledged"),"missing start-phase fault snapshot");
+            if(mode==32) {
+                check(u->unsafe_dma && allocation,"unhalted DMA was released");
+                check(!usb_audio_close(u) && allocation,"retry freed a quarantined live queue");
+                scenario=3;
+            } else check(!u->unsafe_dma && (usb_test_registers[5]&HALTED),"unacknowledged start did not halt first");
+            check(usb_audio_close(u) && !allocation,"halted control queue did not clean up");
+        }
+    }
+    reset(33);
+    { const char *message=NULL;UsbAudio *u=usb_audio_open(now,&message);
+      check(!u && !allocation && tt_clear_errors,"failed TT cleanup fixture did not run");
+      check(strstr(usb_audio_transfer_fault(),"type=80 req=06"),"TT cleanup overwrote the original descriptor failure"); }
+    reset(34);
+    { const char *message=NULL;UsbAudio *u=usb_session_open(now,&message);check(u!=NULL,"short-IN owner");
+      u->address=hub_address[0];u->max_control=64;u->high_speed=true;u->format.endpoint=1;
+      usb_audio_capture_stream(u);
+      check(strstr(usb_audio_last_stream(),"scheduled=0") && strstr(usb_audio_last_stream(),"token=00000000"),"read uninitialized stream descriptors");
+      uint8_t descriptor[8];check(!control(u,0x80,6,0x100,0,descriptor,8,20),"short IN accepted");
+      check(strstr(usb_audio_last_control(),"phase=transfer"),"short-IN pre-stop state missing");
+      check(usb_audio_close(u),"short-IN cleanup"); }
+    puts("PASS asynchronous start acknowledgement, delayed start, halt/quarantine, and original fault preservation");
     check(volume_gain_q15(0)==0 && volume_gain_q15(100)==32768 && volume_gain_q15(150)==32768,
         "volume endpoints or upper clamp changed");
     check(volume_gain_q15(5)==82 && volume_gain_q15(50)==8192,"quiet volume taper missing");

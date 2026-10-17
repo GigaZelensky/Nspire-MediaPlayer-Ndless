@@ -46,6 +46,8 @@ extern uint32_t audio_native_usb_irq_mask(void);
 #define CONTROL_UNDO_MAX 24U
 static char last_probe[180] = "No USB audio device probed";
 static char last_transfer_fault[256] = "none";
+static char last_control_state[768] = "none";
+static char last_stream_state[512] = "not captured";
 static unsigned tt_clears, tt_clear_errors;
 /* Bounded setup evidence only: no per-packet/per-frame logging. Retained after
  * the owner is freed so a failed open can explain its discovery decision. */
@@ -157,7 +159,9 @@ struct UsbAudio {
     unsigned volume,gain_q15;
     bool owned, running, configured, alternate_set, unsafe_dma, high_speed;
     bool closing;
-    bool last_control_stalled;
+    bool last_control_stalled, clearing_tt, health_check;
+    uint32_t health_at, health_checks, health_errors, health_max_ms;
+    unsigned health_failures;
     bool root_high_speed, low_speed, tt_multi;
     uint8_t tt_hub, tt_port, parent, port_number;
     uint8_t address, max_control, previous_configuration, previous_alternate;
@@ -248,8 +252,34 @@ static bool wait_status(UsbAudio *u, uint32_t mask, uint32_t value)
     u->error = "USB controller timeout";
     return false;
 }
+static void io_barrier(void)
+{
+#ifdef NDVIDEO_USB_AUDIO_TEST
+    usb_test_poll();
+#else
+    unsigned zero=0;
+    __asm__ volatile("mcr p15,0,%0,c7,c10,4" ::"r"(zero):"memory");
+#endif
+}
+static bool halt_schedule(UsbAudio *u)
+{
+    /* ASE may still be in transition if its start was never acknowledged.
+     * Halt first, rather than toggle it again or free reachable descriptors. */
+    CMD &= ~RUN;
+    io_barrier();
+    if(!wait_status(u,HALTED,HALTED)) {u->unsafe_dma=true;return false;}
+    CMD &= ~(ASE|PSE);
+    io_barrier();
+    if(!wait_status(u,ASS|PSS,0)) {u->unsafe_dma=true;return false;}
+    return true;
+}
 static bool stop_schedules(UsbAudio *u)
 {
+    if(u->unsafe_dma) {
+        if(!halt_schedule(u))return false;
+        u->unsafe_dma=false;
+        return true;
+    }
     CMD &= ~(ASE | PSE);
     if (wait_status(u, ASS | PSS, 0))
         return true;
@@ -285,14 +315,25 @@ static void qtd_init(Qtd *q, void *buffer, unsigned length, unsigned pid, unsign
         q->buffer[i] = (uint32_t)((a + 4096 * i) & ~(uintptr_t)4095);
 }
 
-/* Control requests are used only while our periodic schedule is stopped.
+/* Setup/teardown controls run with the periodic schedule stopped. The one
+ * live exception is a read-only device-descriptor health query, issued by the
+ * foreground owner only after storage has released its asynchronous queue.
  * A short IN goes directly to the status stage, never to uninitialized data. */
 static bool control(UsbAudio *u, unsigned type, unsigned request, unsigned value, unsigned index,
                     void *data, unsigned length, unsigned timeout)
 {
     u->last_control_stalled = false;
-    if (!connected() || length > 4096 || u->running || u->unsafe_dma)
+    bool live = u->running;
+    bool health = u->health_check && type == 0x80 && request == 6 &&
+                  value == 0x100 && index == 0 && length == 18;
+    if (!connected() || length > 4096 || (live && !health) || u->unsafe_dma)
         return false;
+    /* EHCI 4.8: publish the list only after both enable and status are zero. */
+    if((CMD&ASE) || (STS&ASS)) {
+        u->error="USB control schedule is still active";
+        return false;
+    }
+    uint32_t initial_command=CMD,initial_status=STS,initial_frame=FRINDEX;
     uint8_t *setup = u->control, *payload = u->control + 4096;
     bool input = (type & 0x80) != 0;
     setup[0] = (uint8_t)type;
@@ -323,10 +364,14 @@ static bool control(UsbAudio *u, unsigned type, unsigned request, unsigned value
     dma_clean(u->qtd, 3 * sizeof(Qtd));
     dma_clean(u->qh, sizeof(Qh));
     ASYNC = (uint32_t)(uintptr_t)u->qh;
-    CMD = (CMD & ~(ASE | PSE | (1U << 6))) | RUN | ASE;
+    io_barrier();
+    CMD = (CMD & ~(ASE | (live ? 0U : PSE) | (1U << 6))) | RUN | ASE;
+    io_barrier();
     uint32_t start = u->now_ms();
+    bool started=wait_status(u,ASS,ASS);
+    uint32_t started_status=STS,started_frame=FRINDEX;
     bool ok = false;
-    for (unsigned guard = 0; guard < 2000000; ++guard) {
+    for (unsigned guard = 0; started && guard < 2000000; ++guard) {
         if (!probe_tick(u))
             break;
         dma_invalidate(u->qtd, 3 * sizeof(Qtd));
@@ -340,16 +385,39 @@ static bool control(UsbAudio *u, unsigned type, unsigned request, unsigned value
         if ((uint32_t)(u->now_ms() - start) >= timeout || !connected() || (STS & (1U << 4)))
             break;
     }
-    CMD &= ~ASE;
-    if (!wait_status(u, ASS, 0)) {
-        stop_schedules(u);
-        return false;
+    if(ok && length) {
+        dma_invalidate(u->qtd,3*sizeof(Qtd));
+        ok=!(u->qtd[1].token&(0xfcU|0x7fff0000U));
+    }
+    if(!ok && !u->clearing_tt) {
+        dma_invalidate(u->qh,sizeof(*u->qh));
+        dma_invalidate(u->qtd,3*sizeof(Qtd));
+        snprintf(last_control_state,sizeof(last_control_state),
+            "phase=%s initial_cmd=%08lx initial_sts=%08lx initial_fr=%08lx "
+            "start_sts=%08lx start_fr=%08lx live_cmd=%08lx live_sts=%08lx live_fr=%08lx "
+            "list=%08lx expected=%08lx current=%08lx next=%08lx alt=%08lx overlay=%08lx "
+            "q0=%08lx q1=%08lx q2=%08lx",
+            started?"transfer":"start not acknowledged",(unsigned long)initial_command,
+            (unsigned long)initial_status,(unsigned long)initial_frame,(unsigned long)started_status,
+            (unsigned long)started_frame,(unsigned long)CMD,(unsigned long)STS,(unsigned long)FRINDEX,
+            (unsigned long)ASYNC,(unsigned long)(uintptr_t)u->qh,(unsigned long)u->qh->current,
+            (unsigned long)u->qh->overlay.next,(unsigned long)u->qh->overlay.alt,
+            (unsigned long)u->qh->overlay.token,(unsigned long)u->qtd[0].token,
+            (unsigned long)u->qtd[1].token,(unsigned long)u->qtd[2].token);
+    }
+    if(!started) {
+        if(!halt_schedule(u))return false;
+        u->error="USB control schedule did not start";
+    } else {
+        CMD &= ~ASE;
+        io_barrier();
+        if (!wait_status(u, ASS, 0)) {
+            stop_schedules(u);
+            return false;
+        }
     }
     if (ok && length) {
-        dma_invalidate(u->qtd, 3 * sizeof(Qtd));
-        /* All requests here require exactly the requested length. */
-        ok = !(u->qtd[1].token & (0x7cU | 0x7fff0000U));
-        if (ok && input) {
+        if (input) {
             dma_invalidate(payload, length);
             memcpy(data, payload, length);
         }
@@ -364,7 +432,8 @@ static bool control(UsbAudio *u, unsigned type, unsigned request, unsigned value
             if ((token & 0xfcU) == 0x40U && (token & (3U << 10))) stalled = true;
         }
         dma_invalidate(u->qh, sizeof(Qh));
-        snprintf(last_transfer_fault, sizeof(last_transfer_fault),
+        if(!u->clearing_tt) {
+          snprintf(last_transfer_fault, sizeof(last_transfer_fault),
                  "control addr=%u type=%02x req=%02x value=%04x index=%04x len=%u "
                  "ep0=%u tt=%u/%u q0=%08lx q1=%08lx q2=%08lx overlay=%08lx sts=%08lx ms=%lu",
                  u->address, type, request, value, index, length, u->max_control,
@@ -372,10 +441,11 @@ static bool control(UsbAudio *u, unsigned type, unsigned request, unsigned value
                  (unsigned long)u->qtd[1].token, (unsigned long)u->qtd[2].token,
                  (unsigned long)u->qh->overlay.token, (unsigned long)STS,
                  (unsigned long)(u->now_ms() - start));
-        if (active_probe)
-            snprintf(active_probe->fault, sizeof(active_probe->fault), "%s", last_transfer_fault);
+          if (active_probe)
+              snprintf(active_probe->fault, sizeof(active_probe->fault), "%s", last_transfer_fault);
+        }
     }
-    if (!ok && u->tt_hub && !u->unsafe_dma && connected()) {
+    if (!ok && started && !live && u->tt_hub && !u->unsafe_dma && connected()) {
         /* A cancelled/failed split can leave the hub's TT buffer occupied.
          * Clear both endpoint-zero directions after proving our QH stopped.
          * Target the HS translator itself, so these requests cannot recurse. */
@@ -389,6 +459,7 @@ static bool control(UsbAudio *u, unsigned type, unsigned request, unsigned value
         u->low_speed = false;
         u->tt_hub = u->tt_port = 0;
         u->closing = true;
+        u->clearing_tt = true;
         ++tt_clears;
         bool first = control(u, 0x23, 8, (address << 4) | 0x8000, selector, NULL, 0, 100);
         bool second = control(u, 0x23, 8, address << 4, selector, NULL, 0, 100);
@@ -401,6 +472,7 @@ static bool control(UsbAudio *u, unsigned type, unsigned request, unsigned value
         u->tt_hub = hub;
         u->tt_port = port;
         u->closing = closing;
+        u->clearing_tt = false;
     }
     u->last_control_stalled = stalled;
     return ok;
@@ -408,10 +480,13 @@ static bool control(UsbAudio *u, unsigned type, unsigned request, unsigned value
 
 #include "usb_audio_topology.inc"
 #include "usb_audio_controls.inc"
+#include "usb_audio_health.inc"
 
 static UsbAudio *usb_session_open(uint32_t (*now_ms)(void), const char **status)
 {
     strcpy(last_transfer_fault, "none");
+    strcpy(last_control_state,"none");
+    strcpy(last_stream_state,"not captured");
     topology_count = 0;
     topology_restore_errors = 0;
     hub_wake_count = hub_wake_dropped = 0;
@@ -571,7 +646,6 @@ bool usb_audio_quiesce(UsbAudio *u)
     if (!u || !u->owned)
         return false;
     stage_event("USB quiesce schedules");
-    u->unsafe_dma = false;
     bool safe = stop_schedules(u);
     u->running = false;
     return safe;
@@ -631,7 +705,6 @@ bool usb_audio_close(UsbAudio *u)
         return true;
     if (u->owned) {
         u->closing = true;
-        u->unsafe_dma = false;
         stage_event("USB stop schedules");
         bool safe = stop_schedules(u);
         u->running = false;

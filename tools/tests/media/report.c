@@ -50,6 +50,8 @@ static void usb_audio_hub_debug(FILE *f) {fputs("hub evidence\n",f);}
 static void audio_decoder_debug(void *d,FILE *f) {(void)d;(void)f;}
 static void usb_host_session_debug(FILE *f) {(void)f;}
 static void usb_audio_topology_debug(FILE *f) {(void)f;}
+static const char *usb_audio_last_stream(void) {return "captured stream";}
+static const char *usb_audio_last_control(void) {return "captured control";}
 #define fopen report_open
 #define fclose report_close
 /* PRODUCTION_REPORT */

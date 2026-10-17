@@ -70,7 +70,11 @@ static const char *audio_decoder_error(void *d) { (void)d; return "decoder failu
 static uint32_t monotonic_clock_now_ms(void) { return 0; }
 static bool progress(void *a) { (void)a; return true; }
 static bool usb_path(const char *path){return !strncmp(path,"usb:",4);}
-void audio_playback_pump(AudioPlayback *a) { (void)a; }
+static bool storage_idle=true,health_ok=true;
+static unsigned health_calls;
+static bool usb_storage_quiescent(void) {return storage_idle;}
+static bool usb_audio_service(UsbAudio *u) {(void)u;return true;}
+static bool usb_audio_check_health(UsbAudio *u) {(void)u;++health_calls;return health_ok;}
 static void context(const Movie *m) {(void)m;}
 static bool usb_audio_start(UsbAudio *u, AudioBuffer *b, uint64_t p, unsigned n,
                             unsigned d, unsigned v)
@@ -164,6 +168,19 @@ int main(void)
     assert(!audio_playback_snapshot(&a,samples,8) && !a.buffer.failed);
     a.running=false;assert(!audio_playback_snapshot(&a,samples,8));
     for(unsigned i=0;i<16;++i)assert(!samples[i]);
+    a.running=true;a.failed=false;a.usb=&device;a.transfer_fault[0]=0;
+    unsigned probes_before=health_calls;
+    storage_idle=false;audio_playback_pump(&a);
+    assert(a.running && health_calls==probes_before);
+    storage_idle=true;periodic_pump(&a);
+    assert(a.running && health_calls==probes_before);
+    audio_playback_pump(&a);
+    assert(a.running && health_calls==probes_before+1);
+    health_ok=false;transfer_fault="live device probe timeout";
+    audio_playback_pump(&a);
+    assert(a.failed && !a.running && a.usb_failed && a.position==device.position);
+    assert(strstr(a.transfer_fault,"live device probe timeout"));
+    puts("PASS live health queries run only at a quiescent foreground boundary; loss preserves position/fault and triggers recovery");
     puts("PASS playback retains headset for pause/seek/rate changes; native suspend closes; pause failure cleans up");
     return 0;
 }

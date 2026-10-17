@@ -1,6 +1,34 @@
 /* One OUT iTD and optional feedback iTD per USB frame. High-speed endpoints
  * use multiple microframe transactions. Fractional rates and feedback share
  * a rational sample accumulator; video uses positions of transmitted samples. */
+void usb_audio_capture_stream(UsbAudio *u)
+{
+    if(!u || !u->format.endpoint)return;
+    unsigned slot=(u->checked-u->start)&(RING-1);
+    bool scheduled=u->next>u->start;
+    uint32_t token=0;
+    if(scheduled && u->tt_hub) {
+        dma_invalidate(u->sitd+slot,sizeof(Sitd));
+        token=u->sitd[slot].state;
+    } else if(scheduled) {
+        dma_invalidate(u->itd+slot,sizeof(Itd));
+        token=u->itd[slot].transaction[0];
+    }
+    snprintf(last_stream_state,sizeof(last_stream_state),
+        "running=%u scheduled=%u frame=%lu start=%lu checked=%lu next=%lu generated=%llu "
+        "cmd=%08lx sts=%08lx frindex=%08lx periodic=%08lx expected=%08lx "
+        "async=%08lx port=%08lx otg=%08lx token=%08lx address=%u tt=%u/%u "
+        "health_checks=%lu health_errors=%lu health_failures=%u health_max_ms=%lu",
+        u->running,scheduled,(unsigned long)u->frame,(unsigned long)u->start,(unsigned long)u->checked,
+        (unsigned long)u->next,(unsigned long long)(u->generated_position>>32),
+        (unsigned long)CMD,(unsigned long)STS,(unsigned long)FRINDEX,(unsigned long)PERIODIC,
+        (unsigned long)(uintptr_t)u->list,(unsigned long)ASYNC,(unsigned long)PORT,
+        (unsigned long)OTG,(unsigned long)token,u->address,u->tt_hub,u->tt_port,
+        (unsigned long)u->health_checks,(unsigned long)u->health_errors,u->health_failures,
+        (unsigned long)u->health_max_ms);
+}
+const char *usb_audio_last_stream(void) {return last_stream_state;}
+const char *usb_audio_last_control(void) {return last_control_state;}
 uint64_t usb_audio_position(UsbAudio *u)
 {
     if (!u || !u->running)
@@ -236,6 +264,8 @@ bool usb_audio_start(UsbAudio *u, AudioBuffer *s, uint64_t position, unsigned nu
             return false;
     u->last_frame = u->list_bias = (FRINDEX >> 3) & 2047;
     u->last_ms = u->now_ms();
+    u->health_at = u->last_ms + 1000U;
+    u->health_failures = 0;
     u->frame = 0;
     u->start = u->checked = START_DELAY;
     u->next = START_DELAY + LEAD;

@@ -48,6 +48,7 @@ struct AudioPlayback {
 static AudioPlayback *current_audio;
 static unsigned remembered_volume=20;
 static bool remembered_mute;
+static void pump_audio(AudioPlayback *, bool check_health);
 
 
 static void record_elapsed(uint32_t *maximum, uint32_t start)
@@ -59,7 +60,9 @@ static void record_elapsed(uint32_t *maximum, uint32_t start)
 static void periodic_pump(void *context)
 {
     AudioPlayback *a = context;
-    audio_playback_pump(a);
+    /* Storage owns the asynchronous queue here. Only feed the independent
+     * audio ring; live device queries belong to the foreground idle boundary. */
+    pump_audio(a, false);
 }
 
 static void notice(AudioPlayback *a, const char *text)
@@ -206,6 +209,7 @@ static bool hardware_close(AudioPlayback *a)
 {
     if (!a->usb)
         return true;
+    usb_audio_capture_stream(a->usb);
     raw_player_before_read();
     if (a->running)
         a->position = usb_audio_position(a->usb);
@@ -365,6 +369,8 @@ static void save_report(AudioPlayback *a, const char *event)
                 a->failed, a->text, a->hardware_stage ? a->hardware_stage : "not entered", a->hardware_result);
             if (*a->transfer_fault)
                 fprintf(file,"audio_primary_transfer_fault=%s\n",a->transfer_fault);
+            fprintf(file,"usb_stream_before_close=%s\nusb_control_before_stop=%s\n",
+                usb_audio_last_stream(),usb_audio_last_control());
             fprintf(file,"audio_source errno=%d cursor=%llu bytes=%llu\n",a->source_error,
                 (unsigned long long)a->cursor,(unsigned long long)a->bytes);
             fprintf(file,"audio_path=%s\n",a->source_path);
@@ -478,10 +484,11 @@ bool audio_playback_retry(AudioPlayback *a, uint32_t frame)
 }
 
 
-void audio_playback_pump(AudioPlayback *a)
+static void pump_audio(AudioPlayback *a, bool check_health)
 {
     if (!a || !a->running) return;
-    if (!usb_audio_service(a->usb)) {
+    if (!usb_audio_service(a->usb) ||
+        (check_health && usb_storage_quiescent() && !usb_audio_check_health(a->usb))) {
         capture_transfer_fault(a);
         a->position = usb_audio_position(a->usb);
         notice(a, usb_audio_error(a->usb));
@@ -489,6 +496,8 @@ void audio_playback_pump(AudioPlayback *a)
         a->running = false;
     }
 }
+void audio_playback_pump(AudioPlayback *a)
+{ pump_audio(a, true); }
 
 static void tick_audio(AudioPlayback *a, bool paused, unsigned num, unsigned den)
 {
@@ -724,6 +733,8 @@ void audio_playback_debug(const AudioPlayback *a, FILE *file)
             *a->transfer_fault ? a->transfer_fault : usb_audio_transfer_fault());
     fprintf(file,"audio_hardware stage=%s result=%d source_errno=%d usb_failed=%u\n",
         a->hardware_stage?a->hardware_stage:"not entered",a->hardware_result,a->source_error,a->usb_failed);
+    fprintf(file,"usb_stream_before_close=%s\nusb_control_before_stop=%s\n",
+        usb_audio_last_stream(),usb_audio_last_control());
     audio_decoder_debug(a->decoder, file);
     usb_host_session_debug(file);
     usb_audio_topology_debug(file);
