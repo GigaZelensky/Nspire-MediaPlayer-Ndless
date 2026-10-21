@@ -1,4 +1,5 @@
 #include "usb_host_session.h"
+#include "usb_phase_timing.h"
 #include "player/app_task_io.h"
 #include "player/native_usb_ui.h"
 #include "player/native_interrupts.h"
@@ -8,6 +9,9 @@
 
 #define WORD(address) (*(volatile uint32_t *)(uintptr_t)(address))
 static bool leased;
+#if NDVIDEO_USB_TIMINGS
+static bool claim_capture_recorded;
+#endif
 static uint32_t saved_gate;
 typedef struct {
     const char *stage;
@@ -88,8 +92,14 @@ static int claim_ready(void)
         }
         return 0;
     }
+#if NDVIDEO_USB_TIMINGS
+    if(!claim_capture_recorded && !native_usb_ui_bus_is_leased()) {
+        native_usb_ui_queue_capture("lease_before_claim",NULL);claim_capture_recorded=true;
+    }
+#endif
     lock_result = native_usb_ui_bus_is_leased() ? 0 : native_usb_ui_bus_acquire();
     sample("native schedule lease");
+    if(!lock_result)native_usb_ui_queue_capture("lease_claimed",NULL);
     if (lock_result)
         return 0;
     if (ready())
@@ -117,9 +127,15 @@ void usb_host_session_release(void)
 bool usb_host_session_prepare(uint32_t (*now)(void), bool (*progress)(void *), void *context,
                             char *message, size_t capacity)
 {
+    UsbPhaseTimingToken timing=usb_phase_timing_begin(USB_PHASE_OWNERSHIP);
+#if NDVIDEO_USB_TIMINGS
+    claim_capture_recorded=false;
+#endif
     if (leased) {
         sample("existing app bus lease");
-        if (usb_host_session_active() && ready()) return true;
+        if (usb_host_session_active() && ready()) {
+            usb_phase_timing_end(USB_PHASE_OWNERSHIP,timing,0);return true;
+        }
         /* Let the native worker finish a pending queue unlink/advance before
          * reusing its schedule. Waiting while holding the tree lease prevents
          * that worker from completing. Never clear its doorbell ourselves. */
@@ -132,7 +148,7 @@ bool usb_host_session_prepare(uint32_t (*now)(void), bool (*progress)(void *), v
     cleanup_changes=0;cleanup_signature=cleanup_last_ms=0;cleanup_known=false;
     if (!nspire_is_cx2() || !usb_registers_current(&registers)) {
         snprintf(message, capacity, "Shared USB session needs a CX II");
-        return false;
+        usb_phase_timing_end(USB_PHASE_OWNERSHIP,timing,-1);return false;
     }
     sample("before bus access");
     unsigned mask = native_critical_enter();
@@ -162,7 +178,9 @@ bool usb_host_session_prepare(uint32_t (*now)(void), bool (*progress)(void *), v
             break;
         }
         native_critical_enter();
+        UsbPhaseTimingToken wait_timing=usb_phase_timing_begin(USB_PHASE_ENUMERATION);
         wait_result = native_usb_ui_wait();
+        usb_phase_timing_end(USB_PHASE_ENUMERATION,wait_timing,wait_result);
         native_critical_enter();
         reassert_result = native_usb_ui_reassert();
         sample("native enumeration wait");
@@ -176,7 +194,7 @@ bool usb_host_session_prepare(uint32_t (*now)(void), bool (*progress)(void *), v
             app_task_io_pause_service(true);
             host_elapsed = now() - started;
             native_critical_leave(0);
-            return true;
+            usb_phase_timing_end(USB_PHASE_OWNERSHIP,timing,0);return true;
         }
         if (claimed < 0) {
             snprintf(message, capacity, "USB connection changed before probe");
@@ -188,7 +206,9 @@ bool usb_host_session_prepare(uint32_t (*now)(void), bool (*progress)(void *), v
             s->presence != USB_AUTO_UNKNOWN && (s->presence & USB_AUTO_ADAPTER)) {
             native_critical_enter();
             ++host_wakes;
+            UsbPhaseTimingToken wake_timing=usb_phase_timing_begin(USB_PHASE_HOST_WAKE);
             wake_result = native_usb_ui_resume_host_lease();
+            usb_phase_timing_end(USB_PHASE_HOST_WAKE,wake_timing,wake_result);
             native_critical_enter();
             reassert_result = native_usb_ui_reassert();
             /* NU_UNAVAILABLE is a lock-contention result, not a hardware wake.
@@ -206,7 +226,7 @@ bool usb_host_session_prepare(uint32_t (*now)(void), bool (*progress)(void *), v
                     app_task_io_pause_service(true);
                     host_elapsed = now() - started;
                     native_critical_leave(0);
-                    return true;
+                    usb_phase_timing_end(USB_PHASE_OWNERSHIP,timing,0);return true;
                 }
                 if (claimed < 0) {
                     snprintf(message, capacity, "USB connection changed before probe");
@@ -232,7 +252,7 @@ bool usb_host_session_prepare(uint32_t (*now)(void), bool (*progress)(void *), v
             snprintf(message, capacity, "USB attached but not enabled. Wake %d", wake_result);
     }
     usb_host_session_release();
-    return false;
+    usb_phase_timing_end(USB_PHASE_OWNERSHIP,timing,-1);return false;
 }
 void usb_host_session_debug(FILE *file)
 {

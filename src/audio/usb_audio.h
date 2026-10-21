@@ -38,4 +38,5 @@ void usb_audio_capture_stream(UsbAudio *);
 const char *usb_audio_last_stream(void);
 const char *usb_audio_last_control(void);
 void usb_audio_describe(const UsbAudio *u, char *text, size_t capacity);
+uint32_t usb_audio_output_key(const UsbAudio *);
 #endif

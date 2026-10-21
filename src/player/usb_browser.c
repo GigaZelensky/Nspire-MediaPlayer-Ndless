@@ -14,6 +14,7 @@
 #include "../storage/usb/usb_fs_worker.h"
 #include "../storage/usb/usb_controller.h"
 #include "../storage/usb/usb_host_session.h"
+#include "../storage/usb/usb_phase_timing.h"
 #include "../sram.h"
 #include "media_browser.h"
 #include <errno.h>
@@ -35,6 +36,16 @@ static int discovery_result;
 static int discovery_prepared;
 static bool last_attachment_ready;
 static uint32_t last_connection_ms;
+static bool clock_bindings_ok,clock_timer_rearmed,clock_entry_ok;
+static uint32_t clock_binding_hz;
+static uintptr_t clock_binding_counter;
+static UsbPhaseTimingToken library_ready_timing;
+void usb_browser_library_presented(void)
+{
+    if(!library_ready_timing.generation)return;
+    usb_phase_timing_end(USB_PHASE_LIBRARY_READY,library_ready_timing,0);
+    library_ready_timing=(UsbPhaseTimingToken){0,0};
+}
 static struct {
     uint32_t samples, unknown, insertions, cap, identity, otg, port;
     uint32_t attempt_cap, attempt_identity, attempt_otg, attempt_port;
@@ -56,6 +67,7 @@ static bool io_progress(void *context)
 static void io_native(void *context)
 {
     UsbIoTransition *operation=context;
+    UsbPhaseTimingToken timing=usb_phase_timing_begin(USB_PHASE_IO_PREPARE);
     unsigned mask=native_critical_enter(),policy=0;
     const volatile uint32_t *counter;uint32_t hz;
     bool clock=false,enabled=false;
@@ -70,6 +82,7 @@ done:
     native_critical_enter();
     if(clock)monotonic_clock_leave_native();
     if(enabled)TCT_Local_Control_Interrupts(policy);
+    usb_phase_timing_end(USB_PHASE_IO_PREPARE,timing,operation->ok?0:-1);
     native_critical_leave(mask);
 }
 void usb_browser_release_io(void)
@@ -166,9 +179,13 @@ static uint32_t host_connection_state(void)
     if (!usb_registers_current(&r) || !usb_registers_valid(&r)) return 0;
     /* Ignore interrupt/status-change bits: retry for actual run, halt, connect,
      * enable or suspend transitions, not for routine interrupt traffic. */
-    return (*(const volatile uint32_t *)(uintptr_t)r.command & 3U) |
+    return (*(const volatile uint32_t *)(uintptr_t)r.command & (3U|64U)) |
         ((*(const volatile uint32_t *)(uintptr_t)(r.command + 4) & 0x1000U) >> 10) |
         ((*(const volatile uint32_t *)(uintptr_t)r.port & 0x85U) << 8);
+}
+static bool host_storage_ready(uint32_t state)
+{
+    return (state & (3U|4U|64U|(0x85U<<8)))==(1U|(5U<<8));
 }
 void usb_browser_note_disconnect(void)
 {
@@ -183,6 +200,7 @@ static bool discovery_progress(void *context)
 }
 static void discovery_native(void *context)
 {
+    UsbPhaseTimingToken timing=usb_phase_timing_begin(USB_PHASE_DISCOVERY);
     unsigned mask = native_critical_enter();
     const volatile uint32_t *counter;
     uint32_t hz;
@@ -214,6 +232,7 @@ done:
     }
     if(native_clock){performance_clock_start();monotonic_clock_leave_native();}
     monotonic_clock_restore_player_timer();
+    usb_phase_timing_end(USB_PHASE_DISCOVERY,timing,discovery_result);
     native_critical_leave(mask);
 }
 bool usb_browser_auto_pending(uint32_t now)
@@ -232,7 +251,10 @@ bool usb_browser_auto_pending(uint32_t now)
     if(ready && !last_attachment_ready)usb_auto_connect_removed(&auto_connection,presence,now);
     last_attachment_ready=ready;
     bool pending = usb_auto_connect_poll(&auto_connection, presence, now, usb_storage_mounted());
-    if (pending) ++detection.insertions;
+    if (pending) {
+        ++detection.insertions;
+        if(!library_ready_timing.generation)library_ready_timing=usb_phase_timing_begin(USB_PHASE_LIBRARY_READY);
+    }
     return pending;
 }
 void usb_browser_idle_discovery(SDL_Surface *screen, uint32_t now)
@@ -245,7 +267,11 @@ void usb_browser_idle_discovery(SDL_Surface *screen, uint32_t now)
         /* Read-only resolution uses the validated current mapping (including
          * the native SRAM clone). It neither invokes OS functions nor drains
          * metadata jobs; a suspended native writer is allowed to finish first. */
-        if (!storage_native_active()) discovery_prepared = native_usb_ui_prepare_step();
+        if (!storage_native_active()) {
+            UsbPhaseTimingToken timing=usb_phase_timing_begin(USB_PHASE_RESOLVE);
+            discovery_prepared = native_usb_ui_prepare_step();
+            usb_phase_timing_end(USB_PHASE_RESOLVE,timing,discovery_prepared<0?discovery_prepared:0);
+        }
         /* One bounded slice per picker frame. Return to input/rendering even
          * when this slice just finished preparation. */
         return;
@@ -315,7 +341,10 @@ void usb_browser_debug(FILE *file)
                       (unsigned long)detection.attempt_port);
     if (file) fprintf(file, "usb_discovery prepared=%d turns=%u result=%d\n", discovery_prepared, discovery_turns, discovery_result);
     if(file)fprintf(file,"usb_last_connection_ms=%lu\n",(unsigned long)last_connection_ms);
+    if(file)fprintf(file,"usb_clock_prepare bindings=%u timer_rearmed=%u entered=%u counter=%08lx hz=%lu\n",
+        clock_bindings_ok,clock_timer_rearmed,clock_entry_ok,(unsigned long)clock_binding_counter,(unsigned long)clock_binding_hz);
     if(file)usb_host_session_debug(file);
+    usb_phase_timing_debug(file);
 }
 typedef struct {
     SDL_Surface *screen;
@@ -329,6 +358,9 @@ typedef struct {
     bool timed_out, preconnected, checkpoint_enabled, checkpoint_started, audio_only;
     uint8_t last_mix,closing_mix;
     const char *line1, *line2, *status;
+    const char *painted_line1,*painted_line2,*painted_status;
+    bool painted,draw_dirty;
+    uint8_t painted_hover,painted_press;
     int guard_error;
 } UsbConnectWindow;
 static void connection_checkpoint(UsbConnectWindow *window, const char *stage, bool fresh)
@@ -376,12 +408,16 @@ static bool render_retry(UsbConnectWindow *window)
     native_critical_enter();
     return true;
 }
+static bool connection_repaint_due(const UsbConnectWindow *window,bool force,uint32_t now,
+                                   uint8_t mix,uint8_t hover,uint8_t press)
+{
+    bool changing=mix!=window->last_mix || hover!=window->painted_hover || press!=window->painted_press;
+    if(!force && window->painted && now-window->last_draw<16U)return false;
+    return force || !window->painted || window->draw_dirty || changing || now-window->last_draw>=180U;
+}
 static void render_window(UsbConnectWindow *window, bool force)
 {
     uint32_t now = monotonic_clock_now_ms();
-    if (!force && window->last_draw && now - window->last_draw < 16U)
-        return;
-    window->last_draw = now;
     if (render_retry(window))return;
     PointerState *pointer = window->pointer;
     pointer_update(pointer);
@@ -391,7 +427,6 @@ static void render_window(UsbConnectWindow *window, bool force)
     uint32_t age=now-window->opened;
     uint8_t mix=window->closing?window->closing_mix*(255U-ui_ease_out_cubic(now-window->closed,160))/255U:
         age<120U?0:ui_ease_out_cubic(age-120U,120);
-    window->last_mix=mix;
     SDL_Rect panel = {30, 60 + (255 - mix) * 12 / 255, 260, 128},
              button = {124, panel.y + 94, 72, 23};
     bool hot = pointer->visible && rect_contains_point(&button, pointer->x, pointer->y);
@@ -415,6 +450,20 @@ static void render_window(UsbConnectWindow *window, bool force)
     uint8_t press = ui_transition_update_press_ex(
         &window->press, !window->closing && (window->armed || window->armed_pointer), now,
         UI_PRESS_ANIM_MS, PICKER_PRESS_RELEASE_ANIM_MS);
+    /* Poll keys/cancel on every native/FS service turn, even with a stopped
+     * UI clock. Repaint only changed pixels/animation or the 180 ms spinner.
+     * Full picker composition and LCD transfers must not tax every USB wait. */
+    window->draw_dirty=window->draw_dirty || pointer->moved || pointer->press_edge ||
+        pointer->release_edge || window->painted_line1!=window->line1 ||
+        window->painted_line2!=window->line2 || window->painted_status!=window->status;
+    /* Input helpers can change the CPU mask. The old always-painted callback
+     * returned with both sources excluded; the fast path must do so as well. */
+    native_critical_enter();
+    if(!connection_repaint_due(window,force,now,mix,hover,press))return;
+    window->painted=true;window->draw_dirty=false;window->last_draw=now;window->last_mix=mix;
+    window->painted_hover=hover;window->painted_press=press;
+    window->painted_line1=window->line1;window->painted_line2=window->line2;window->painted_status=window->status;
+    UsbPhaseTimingToken drawing=usb_phase_timing_begin(USB_PHASE_DIALOG_DRAW);
     if (window->backdrop)
         window->backdrop(window->screen, window->backdrop_context,
                          window->closing ? now - window->closed : 0);
@@ -453,13 +502,14 @@ static void render_window(UsbConnectWindow *window, bool force)
     if (pointer->visible)
         draw_cursor(window->screen, pointer->x, pointer->y);
     present_screen(window->screen);
+    usb_phase_timing_end(USB_PHASE_DIALOG_DRAW,drawing,0);
     native_critical_enter();
 }
 static void progress(void *context)
 {
     /* The worker bounds callback frequency, including when its timer stalls.
      * Do not skip input polling just because UI time stopped advancing. */
-    render_window(context, true);
+    render_window(context, false);
 }
 static bool prepare_progress(void *context)
 {
@@ -480,8 +530,21 @@ static void connect_native(void *context)
      * interrupts or yield. A fresh insertion may already have OS USB work
      * pending: restore its clock/policy BEFORE any of those calls, not just
      * before our explicit enumeration wait. No display/file ownership yet. */
-    if (!native_usb_ui_clock(&os_counter, &os_hz, prepare_progress, window) ||
-        !monotonic_clock_enter_native(os_counter, os_hz)) {
+    UsbPhaseTimingToken resolve_timing=usb_phase_timing_begin(USB_PHASE_RESOLVE);
+    clock_bindings_ok=native_usb_ui_clock(&os_counter,&os_hz,prepare_progress,window);
+    clock_binding_counter=(uintptr_t)os_counter;clock_binding_hz=os_hz;
+    clock_timer_rearmed=clock_entry_ok=false;
+    if(clock_bindings_ok) {
+        (void)monotonic_clock_now_ticks();
+        /* Resolution may have polled native input. No endpoints/I/O exist at
+         * this boundary, so restore our authenticated timer before lending
+         * its OS entry snapshot to the native scheduler. */
+        clock_timer_rearmed=monotonic_clock_restore_player_timer();
+        clock_entry_ok=clock_timer_rearmed && monotonic_clock_enter_native(os_counter,os_hz);
+    }
+    bool clock_ready=clock_bindings_ok && clock_entry_ok;
+    usb_phase_timing_end(USB_PHASE_RESOLVE,resolve_timing,clock_ready?0:-23);
+    if (!clock_ready) {
         window->guard_error = -23;
         goto done;
     }
@@ -490,7 +553,9 @@ static void connect_native(void *context)
     native_enabled = true;
     if (!native_usb_ui_active())
         standby_was_outer = player_standby_guard_active();
+    UsbPhaseTimingToken ui_timing=usb_phase_timing_begin(USB_PHASE_NATIVE_UI);
     window->guard_error = native_usb_ui_acquire(prepare_progress, window);
+    usb_phase_timing_end(USB_PHASE_NATIVE_UI,ui_timing,window->guard_error);
     if (window->guard_error) {
         connection_checkpoint(window, "native UI reservation failed", true);
         debug_tracef("USB UI refused stage=%s error=%d", native_usb_ui_stage(),
@@ -501,7 +566,10 @@ static void connect_native(void *context)
     if (window->cancelled)
         goto done;
     connection_checkpoint(window, "before filesystem worker allocation", false);
-    if (!usb_fs_prepare()) {
+    UsbPhaseTimingToken worker_timing=usb_phase_timing_begin(USB_PHASE_FS_WORKER);
+    bool worker_ready=usb_fs_prepare();
+    usb_phase_timing_end(USB_PHASE_FS_WORKER,worker_timing,worker_ready?0:-25);
+    if (!worker_ready) {
         window->guard_error = -25;
         goto done;
     }
@@ -514,7 +582,9 @@ static void connect_native(void *context)
      * USB enumeration does not use it; do not delay the connection with that
      * separate firmware scan. Ordinary checkpoint writes stay synchronous. */
     if (window->cancelled) goto done;
+    UsbPhaseTimingToken registration_timing=usb_phase_timing_begin(USB_PHASE_DRIVER_REGISTER);
     bool prepared = usb_storage_prepare_connection();
+    usb_phase_timing_end(USB_PHASE_DRIVER_REGISTER,registration_timing,prepared?0:-1);
     if (!prepared)
         goto done;
     connection_checkpoint(window, "driver registered", false);
@@ -532,8 +602,11 @@ static void connect_native(void *context)
     while (!window->cancelled) {
         native_critical_enter();
         if (!usb_storage_driver_registered()) {
-            if (registrations++ >= 3 || !usb_storage_prepare_connection())
-                break;
+            if (registrations++ >= 3) break;
+            UsbPhaseTimingToken retry_timing=usb_phase_timing_begin(USB_PHASE_DRIVER_REGISTER);
+            bool registered=usb_storage_prepare_connection();
+            usb_phase_timing_end(USB_PHASE_DRIVER_REGISTER,retry_timing,registered?0:-1);
+            if (!registered) break;
             window->status = "Detecting the USB drive...";
         }
         uint32_t now = monotonic_clock_now_ms();
@@ -565,7 +638,7 @@ static void connect_native(void *context)
                     : "No USB drive detected. Check the adapter and drive, then press U to retry.", ENODEV);
             break;
         }
-        if (usb_storage_attachment_ready() && present) {
+        if (usb_storage_attachment_ready() && present && host_storage_ready(host_state)) {
             window->status = "Opening the USB drive...";
             { /* The completed native attachment callback is the readiness boundary. */
                 render_window(window, true);
@@ -574,7 +647,9 @@ static void connect_native(void *context)
                  * reads use our polled timer. Switch at each idle candidate
                  * boundary, including after an empty reader or bad volume. */
                 while(!window->cancelled && usb_storage_next_candidate()) {
+                    UsbPhaseTimingToken endpoint_timing=usb_phase_timing_begin(USB_PHASE_ENDPOINTS);
                     bool endpoints=usb_storage_prepare_endpoints();
+                    usb_phase_timing_end(USB_PHASE_ENDPOINTS,endpoint_timing,endpoints?0:-1);
                     native_critical_enter();
                     window->guard_error=native_usb_ui_reassert();
                     if(window->guard_error)break;
@@ -595,7 +670,13 @@ static void connect_native(void *context)
                         window->guard_error = -24;
                         break;
                     }
-                    if(endpoints && usb_storage_finish_connection()) {
+                    bool initialized=false;
+                    if(endpoints) {
+                        UsbPhaseTimingToken scsi_timing=usb_phase_timing_begin(USB_PHASE_SCSI);
+                        initialized=usb_storage_finish_connection();
+                        usb_phase_timing_end(USB_PHASE_SCSI,scsi_timing,initialized?0:-1);
+                    }
+                    if(initialized) {
                         window->status = "Reading folders...";
                         render_window(window, true);
                         int error = 0;
@@ -630,7 +711,9 @@ static void connect_native(void *context)
                 int previous_result = resume_result;
                 if (trace_recovery) connection_checkpoint(window, "before existing EHCI recovery", false);
                 attempted_state = host_state;
+                UsbPhaseTimingToken wake_timing=usb_phase_timing_begin(USB_PHASE_HOST_WAKE);
                 resume_result = native_usb_ui_resume_host();
+                usb_phase_timing_end(USB_PHASE_HOST_WAKE,wake_timing,resume_result);
                 ++resume_attempts;
                 host_resumed = resume_result == 0;
                 resume_after = monotonic_clock_now_ms() + (quiet_reconnect && resume_result != -51 ? 1000U : 250U);
@@ -648,13 +731,15 @@ static void connect_native(void *context)
                 sampled = true;
             }
         }
-        render_window(window, true);
+        render_window(window, false);
         /* A suspended preconnected host may have a worker holding the tree
          * lock. Polling interrupts leaves that worker blocked forever and
          * every guarded resume returns NU_UNAVAILABLE. At this native-clock,
          * native-mapping boundary yield a real scheduler tick, as the tested
          * audio host preparation does, before retrying ownership. */
+        UsbPhaseTimingToken wait_timing=usb_phase_timing_begin(USB_PHASE_ENUMERATION);
         window->guard_error = native_usb_ui_wait();
+        usb_phase_timing_end(USB_PHASE_ENUMERATION,wait_timing,window->guard_error);
         if (!window->guard_error)
             window->guard_error = native_usb_ui_reassert();
         if (window->guard_error)
@@ -708,6 +793,8 @@ bool usb_browser_connect(SDL_Surface *screen, const Fonts *fonts, PointerState *
     detection.attempt_port = detection.port;
     usb_auto_connect_acknowledge(&auto_connection, connection_presence(), monotonic_clock_now_ms());
     if (usb_storage_mounted()) return true;
+    if(!library_ready_timing.generation)library_ready_timing=usb_phase_timing_begin(USB_PHASE_LIBRARY_READY);
+    UsbPhaseTimingToken connection_timing=usb_phase_timing_begin(USB_PHASE_CONNECTION);
     raw_player_before_native();
     last_preconnected = host_device_present();
     UsbConnectWindow window = {.screen = screen,
@@ -791,6 +878,11 @@ bool usb_browser_connect(SDL_Surface *screen, const Fonts *fonts, PointerState *
     last_attachment_ready=usb_storage_attachment_ready();
     last_connection_ms=monotonic_clock_now_ms()-window.opened;
     last_connection_cancelled=window.cancelled;
+    if(!window.connected || window.cancelled) {
+        usb_phase_timing_end(USB_PHASE_LIBRARY_READY,library_ready_timing,-1);
+        library_ready_timing=(UsbPhaseTimingToken){0,0};
+    }
+    usb_phase_timing_end(USB_PHASE_CONNECTION,connection_timing,window.connected && !window.cancelled?0:-1);
     return window.connected && !window.cancelled;
 }
 int usb_browser_retry(SDL_Surface *screen,const Fonts *fonts,PointerState *pointer,

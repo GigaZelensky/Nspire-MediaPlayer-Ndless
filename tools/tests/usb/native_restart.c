@@ -37,7 +37,7 @@ static bool app_bus_leased,helper_yields_usb;
 static bool resolved,tree_valid,code_valid;
 static bool schedule_changed_before_request,explore_suspends;
 static uint32_t port_rises_at_sample,otg_rises_at_sample;
-static unsigned port_resets,resumes,enumeration_count;
+static unsigned port_resets,resumes,enumeration_count,cleanup_scans;
 static int enumeration_result,explore_error;
 static uint32_t session_phy_before[10],session_phy_after[10];
 static bool retain_allowed;
@@ -79,6 +79,7 @@ static uint32_t base;
 #define POLICY (base+0x4e00)
 #define ENGINE_SEM (base+0x4f00)
 #define QUEUE_ITEM (base+0x5000)
+#define ROOT_CHILD (base+0x6200)
 #define CORE 0x81000000U
 #define START 0x82000000U
 #define REGISTER_IRQ 0x83000000U
@@ -198,8 +199,19 @@ static int reset_port(uint32_t hub,unsigned port,void *status)
 {assert(!mask && hub==HUB && port==1 && status);++port_resets;WORD(MMIO+0x20)|=4;return 0;}
 static int explore_root(uint32_t hub,unsigned discover)
 {
-    assert(!mask && hub==HUB && discover==1 && !WORD(USB_LOCK+24) && !WORD(TREE_LOCK+24));
+    assert(!mask && hub==HUB && discover<=1 && !WORD(USB_LOCK+24) && !WORD(TREE_LOCK+24));
     ++enumerations;
+    if(!discover) {
+        ++cleanup_scans;
+        if(!explore_error) {
+            for(unsigned i=1;i<128;++i)
+                if(WORD(BUS+52+4*i)!=HUB)WORD(BUS+52+4*i)=0;
+            WORD(HUB_INFO+56)=0;
+        }
+        /* discover=0 skips the new-device path and leaves C_CONNECTION for
+         * the next ordinary native reset/discovery pass. */
+        return explore_error;
+    }
     /* Model only the witnessed native change acknowledgement, not attachment. */
     WORD(MMIO+0x20)&=~(2U|8U);
     if(explore_suspends) {
@@ -227,7 +239,7 @@ static void reset(bool run)
 {
     memset(arena,0,0x8000);resolved=tree_valid=code_valid=true;mask=0x80;
     borrow_lock_stage=starts=stops=enumerations=reprobes=0;
-    port_resets=resumes=enumeration_count=0;enumeration_result=explore_error=0;
+    port_resets=resumes=enumeration_count=cleanup_scans=0;enumeration_result=explore_error=0;
     retain_allowed=false;
     session_requests=session_helper_calls=tree_takes=tree_gives=usb_gives=lease_attempts=0;
     session_start_calls=session_end_calls=session_ends=session_polls=session_poll_calls=0;session_restart_requested=false;
@@ -268,6 +280,18 @@ static void reset(bool run)
 }
 static void unlocked(void)
 {assert(WORD(USB_LOCK+24)==1 && WORD(TREE_LOCK+24)==1 && mask==0x80);}
+static void populated_root(void)
+{
+    /* Captured failure: both the port child and bus slots remain populated.
+     * A mock with only bus slots set misses the old empty-port guard. */
+    WORD(HUB_INFO+56)=ROOT_CHILD;
+    for(unsigned slot=2;slot<=6;++slot) {
+        uint32_t child=ROOT_CHILD+(slot-2)*128;
+        WORD(BUS+52+slot*4)=child;WORD(child)=BUS;
+        *(uint8_t *)(uintptr_t)(child+8)=(uint8_t)slot;
+        *(uint8_t *)(uintptr_t)(child+10)=slot==2?1:2;
+    }
+}
 int main(void)
 {
 #ifdef _WIN32
@@ -618,8 +642,35 @@ int main(void)
         assert(!resume_host(false) && enumerations==2 && port_resets==1 && reprobes==1);unlocked();
     }
     reset(true);WORD(BUS+604)=IRQ;WORD(BUS+1772)=WORD(HUB_STATE+36)=1;
-    WORD(MMIO+0x20)=0x80a;WORD(BUS+52+8)=HUB+0x100;
-    assert(!resume_host(false) && !enumerations && !port_resets && !reprobes);unlocked();
+    WORD(MMIO+0x20)=0x80a;populated_root();
+    assert(resume_host(false)==NATIVE_USB_SESSION_PENDING && enumerations==1 && cleanup_scans==1 &&
+        !port_resets && !reprobes && !WORD(BUS+52+8));unlocked();
+    assert(!resume_host(false) && enumerations==2 && cleanup_scans==1 && !port_resets);unlocked();
+    /* A quick replug can already have CONNECT set while old children remain.
+     * Retire them first, then reset/discover only the now-empty root. */
+    reset(true);WORD(BUS+604)=IRQ;WORD(BUS+1772)=WORD(HUB_STATE+36)=1;
+    WORD(MMIO+0x20)=0x80b;populated_root();
+    assert(resume_host(false)==NATIVE_USB_SESSION_PENDING && cleanup_scans==1 && !port_resets && !reprobes);unlocked();
+    assert(!resume_host(false) && enumerations==2 && port_resets==1 && reprobes==1);unlocked();
+    reset(true);WORD(BUS+604)=IRQ;WORD(BUS+1772)=WORD(HUB_STATE+36)=1;
+    WORD(MMIO+0x20)=0x80b;populated_root();explore_error=5;
+    assert(resume_host(false)==5 && cleanup_scans==1 && !port_resets && !reprobes && WORD(BUS+52+8));unlocked();
+    reset(true);WORD(BUS+604)=IRQ;WORD(BUS+1772)=WORD(HUB_STATE+36)=1;
+    WORD(MMIO+0x20)=0x80d;populated_root();
+    assert(!resume_host(false) && !cleanup_scans && !enumerations && !port_resets && WORD(BUS+52+8));unlocked();
+    for(unsigned bad=0;bad<6;++bad) {
+        reset(true);WORD(BUS+604)=IRQ;WORD(BUS+1772)=WORD(HUB_STATE+36)=1;
+        WORD(MMIO+0x20)=0x80b;populated_root();
+        switch(bad) {
+        case 0:WORD(HUB_INFO+56)=0;break;
+        case 1:WORD(ROOT_CHILD)=BUS+4;break;
+        case 2:*(uint8_t *)(uintptr_t)(ROOT_CHILD+10)=2;break;
+        case 3:*(uint8_t *)(uintptr_t)(ROOT_CHILD+8)=127;break;
+        case 4:WORD(HUB_INFO+56)=ROOT_CHILD+1;break;
+        case 5:WORD(HUB_INFO+56)=base+0x8000;break;
+        }
+        assert(resume_host(false)==-42 && !enumerations && !port_resets && !reprobes);unlocked();
+    }
     reset(true);WORD(BUS+604)=IRQ;WORD(BUS+1772)=WORD(HUB_STATE+36)=1;
     WORD(MMIO+0x20)=0x80a;WORD(HUB_INFO+56)=HUB+0x100;
     assert(resume_host(false)==-42 && !enumerations && !port_resets);unlocked();
@@ -634,6 +685,6 @@ int main(void)
     WORD(MMIO+0x20)=0x80a;explore_suspends=true;
     assert(!resume_host(false) && enumerations==1 && WORD(HANDLE+32) && !WORD(MMIO));unlocked();
     assert(!resume_host(false) && resumes==1 && enumerations==1 && !WORD(HANDLE+32));unlocked();
-    puts("PASS disconnected root changes reach native explore(1), empty ports are not reset, later insertion can enumerate, and authentic suspended hosts wake without CONNECT");
+    puts("PASS changed root children retire through native explore(0) before reset/discovery; live children and owner failures stay intact; disconnected roots and suspended hosts recover without fabricated state");
     return 0;
 }

@@ -5,6 +5,7 @@
 #include "storage_activity.h"
 #include "storage_mutation.h"
 #include "movie_crypto_session.h"
+#include "header_diagnostic.h"
 #include "../storage/usb/usb_storage.h"
 #include "../platform/portable_reader_platform.h"
 #include "../storage/raw_file_reader.h"
@@ -347,6 +348,10 @@ static int read_raw_at(StorageReadStream *stream, uint64_t offset, void *destina
     int failure = EIO;
     uint32_t copied = 0, steps = 0, started = seconds();
     bool timed_out = false;
+#if NDMEDIA_HEADER_DIAGNOSTIC
+    unsigned diagnostic_stage=1;
+    bool diagnostic_ready=false,diagnostic_reused=false;
+#endif
     PortableStorageSnapshot *s = &scratch->snapshot;
     RawFileReader *r = &scratch->reader;
     uint32_t epoch = storage_mutation_epoch(), revision = storage_native_revision();
@@ -354,8 +359,12 @@ static int read_raw_at(StorageReadStream *stream, uint64_t offset, void *destina
      * Retain its metadata and reconstructed maps until native filesystem work
      * actually changes the view. All preceding requests finished quiescent. */
     if (scratch->owner == stream && epoch && revision && scratch->epoch == epoch &&
-        scratch->native_revision == revision)
+        scratch->native_revision == revision) {
+#if NDMEDIA_HEADER_DIAGNOSTIC
+        diagnostic_ready=diagnostic_reused=true;
+#endif
         goto read;
+    }
     scratch->owner = NULL;
     if (portable_reader_platform_capture(&platform, stream->native, 0, s) ||
         s->inode != stream->inode || s->file_bytes != stream->bytes)
@@ -367,6 +376,9 @@ static int read_raw_at(StorageReadStream *stream, uint64_t offset, void *destina
         scratch->clean[i] =
             (RawFileOverlay){s->clean[i].number, (const uint8_t *)(uintptr_t)s->clean[i].address};
     NandPageConfig config = {platform.kind, portable_reader_platform_bus(), s->spare};
+#if NDMEDIA_HEADER_DIAGNOSTIC
+    diagnostic_stage=2;
+#endif
     if (!raw_file_init(r, s->state_data, sizeof(s->state_data), s->state, s->block_count,
                        s->index_block, s->inode, config, s->layout, scratch->dirty,
                        s->dirty_count) ||
@@ -382,13 +394,22 @@ static int read_raw_at(StorageReadStream *stream, uint64_t offset, void *destina
     scratch->owner = stream;
     scratch->epoch = epoch;
     scratch->native_revision = revision;
+#if NDMEDIA_HEADER_DIAGNOSTIC
+    diagnostic_ready=true;
+#endif
 read:
     while (copied < bytes) {
         uint32_t count = bytes - copied;
         if (count > STREAM_CHUNK_BYTES)
             count = STREAM_CHUNK_BYTES;
+#if NDMEDIA_HEADER_DIAGNOSTIC
+        diagnostic_stage=3;
+#endif
         if (!raw_file_begin(r, (uint64_t)offset + copied, (uint8_t *)destination + copied, count))
             goto finished;
+#if NDMEDIA_HEADER_DIAGNOSTIC
+        diagnostic_stage=4;
+#endif
         while (r->status == RAW_FILE_PENDING || (r->nand.initialized && !r->nand.quiescent)) {
             uint32_t now = seconds();
             if (++steps >= STREAM_STEP_LIMIT || (uint32_t)(now - started) >= STREAM_CALL_SECONDS) {
@@ -403,6 +424,10 @@ read:
     }
     failure = 0;
 finished:
+#if NDMEDIA_HEADER_DIAGNOSTIC
+    header_diagnostic_storage(&platform,s,r,offset,bytes,failure?-1:(int)copied,
+        diagnostic_stage,diagnostic_ready,diagnostic_reused);
+#endif
     if (failure) {
         /* Preserve the controller's passive identification/error snapshot
          * before cancellation or closing the last stream clears its state. */

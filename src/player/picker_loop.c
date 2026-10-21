@@ -4,6 +4,7 @@
 #include "usb_browser.h"
 #include "../storage/usb/usb_storage.h"
 #include "../storage/usb/usb_fs_worker.h"
+#include "platform/battery_meter.h"
 
 typedef struct {
     const Fonts *fonts;
@@ -98,6 +99,9 @@ static void draw_folder_scan(void *context)
     view->previous_escape = escape;
     if (!view->refresh_only && now - view->started < 90U)
         return;
+    SDL_Rect old_clip;
+    SDL_GetClipRect(view->screen,&old_clip);
+    SDL_SetClipRect(view->screen,NULL);
     if(view->background)SDL_BlitSurface(view->background,NULL,view->screen,NULL);
     else {
         PointerState hidden=*view->pointer;hidden.visible=false;
@@ -111,6 +115,7 @@ static void draw_folder_scan(void *context)
     }
     if (view->pointer->visible)
         draw_cursor(view->screen, view->pointer->x, view->pointer->y);
+    SDL_SetClipRect(view->screen,&old_clip);
     present_screen(view->screen);
 }
 
@@ -134,6 +139,7 @@ int pick_movie(
     bool prev_c = false;
     bool prev_s = false;
     bool prev_u = false;
+    bool prev_r = false;
     bool prev_2 = false;
     bool prev_4 = false;
     bool prev_5 = false;
@@ -374,11 +380,21 @@ reload_directory:
         bool footer_input = clock_menu_consumed_input();
         if (footer_input) pointer_click = false;
         uint32_t now_ms = monotonic_clock_now_ms();
+        battery_meter_tick(now_ms,0,true);
         if (g_display_power_state.off_fade_active || g_display_power_state.idle_restore_active) {
             display_power_tick_transition(&g_display_power_state, now_ms);
             now_ms = monotonic_clock_now_ms();
         }
         bool ctrl_down = isKeyPressed(KEY_NSPIRE_CTRL) ? true : false;
+#if NDMEDIA_BATTERY_METER
+        if(key_pressed_edge(KEY_NSPIRE_R,&prev_r) && ctrl_down) {
+            battery_meter_reset();
+            queue_player_message("Battery learning reset",
+                "The OS battery level remains available.\nLearning will restart during normal playback.\nMedia, history and other settings are unchanged.");
+        }
+#else
+        (void)prev_r;
+#endif
         bool night_input = night_mode_poll(now_ms, !g_display_power_state.off);
         bool keypad_2_edge = key_pressed_edge(KEY_NSPIRE_2, &prev_2);
         bool keypad_4_edge = key_pressed_edge(KEY_NSPIRE_4, &prev_4);
@@ -547,6 +563,7 @@ reload_directory:
             : -1;
         if(resume_hovered_index>=0 && picker_row_reveal_mix(files+resume_hovered_index,now_ms)<128)
             resume_hovered_index=-1;
+        picker_navigation_focus_rows((!footer_input && !clock_menu_hovered()) || resume_hovered_index>=0,now_ms);
         tooltip_index = resume_hovered_index >= 0
             ? -1
             : picker_tooltip_hover_update(&tooltip_hover, hovered_index, &pointer, pointer_click, now_ms);

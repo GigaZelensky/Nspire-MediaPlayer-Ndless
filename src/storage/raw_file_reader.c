@@ -121,7 +121,7 @@ RawFileStatus raw_file_step(RawFileReader *r, uint32_t now, uint32_t timeout)
             unsigned kind =
                 r->source == 1U
                     ? (r->bytes == 2112U                             ? RAW_READ_FFX_HEADER
-                       : r->column == nand_page_tag_column(&r->nand) ? RAW_READ_FFX_TAG
+                       : r->column == r->loader.tag_column          ? RAW_READ_FFX_TAG
                                                                      : RAW_READ_FFX_BITMAP)
                     : (r->file.pending_metadata ? RAW_READ_REL_METADATA : RAW_READ_PAYLOAD);
             ++r->costs.physical[kind];

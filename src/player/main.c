@@ -5,13 +5,87 @@
 #include "performance_clock.h"
 #include "movie_crypto_session.h"
 #include "media_browser.h"
+#include "wallpaper_image.h"
 #include "media_files.h"
 #include "usb_browser.h"
 #include "native_screen_power.h"
 #include "../storage/usb/usb_storage.h"
+#include "../storage/usb/usb_phase_timing.h"
+#include "../platform/battery_diagnostics.h"
+#include "../platform/battery_calibration.h"
+#include "../platform/battery_gauge.h"
+#include "../platform/battery_meter.h"
+#if NDMEDIA_BATTERY_GAUGE_TEST
+#include "battery_gauge_profile.h"
+#endif
 #if NDVIDEO_CODEC_MODULES || NDVIDEO_AUDIO_MODULES
 #include "codecs/codec_module_api.h"
 #include "codec_module_manifest.h"
+#endif
+
+#if (NDVIDEO_USB_TIMINGS || NDVIDEO_BATTERY_TIMINGS) && !NDMEDIA_BATTERY_CALIBRATION
+static bool copy_previous_usb_report(const char *current,const char *previous)
+{
+    FILE *source=fopen(current,"rb");if(!source)return false;
+    FILE *target=fopen(previous,"wb");if(!target){fclose(source);return false;}
+    char block[1024];bool ok=true,complete=false;
+    for(unsigned i=0;i<128;++i) {
+        size_t bytes=fread(block,1,sizeof(block),source);
+        if(bytes && fwrite(block,1,bytes,target)!=bytes){ok=false;break;}
+        if(bytes<sizeof(block)){complete=feof(source) && !ferror(source);break;}
+    }
+    if(fclose(source)!=0)ok=false;
+    if(fclose(target)!=0)ok=false;
+    return ok && complete;
+}
+static void save_usb_phase_report(void)
+{
+    char path[MAX_PATH_LEN];
+    if (!player_data_prepare() ||
+        !player_data_path("ndmedia-usb-phases.log.tns",path,sizeof(path)))
+        return;
+    char previous[MAX_PATH_LEN];
+    bool previous_saved=false;
+    if(player_data_path("ndmedia-usb-phases-previous.log.tns",previous,sizeof(previous))) {
+        /* Keep one prior run so a failed reopen cannot erase the successful
+         * cold-connect measurements. Diagnostic builds only, bounded pair. */
+        previous_saved=copy_previous_usb_report(path,previous);
+    }
+    FILE *file=fopen(path,"wb");
+    if (!file) return;
+    fprintf(file,"nMedia USB phase test | %s %s\n"
+        "startup_scope=after SDL/clock initialization through first library screen\n"
+        "Nested phase times are inclusive; do not add them together.\n",__DATE__,__TIME__);
+    fprintf(file,"previous_run_preserved=%u\n",previous_saved);
+    usb_browser_debug(file);
+    battery_meter_debug(file);
+    battery_diagnostics_debug(file);
+    battery_gauge_debug(file);
+    fclose(file);
+}
+#endif
+
+#if NDMEDIA_BATTERY_CALIBRATION
+static bool save_battery_calibration_report(void)
+{
+    if(!battery_calibration_has_samples() && !battery_calibration_stopped())return false;
+    char path[MAX_PATH_LEN];
+    bool saved=false;
+    const char *name=NDMEDIA_BATTERY_LOAD_TEST?"nMedia-battery-load.csv.tns":"nMedia-battery-calibration.csv.tns";
+    if(player_data_prepare() && player_data_path(name,path,sizeof(path))) {
+        FILE *file=fopen(path,"wb");
+        if(file) {
+            bool complete=battery_calibration_report(file);
+            saved=fclose(file)==0 && complete;
+        }
+    }
+    if(!saved) {
+        queue_player_message("Battery calibration","The calibration report could not be saved.");
+    }
+    /* A saved unattended run must return to the OS event loop, not block in
+     * an OK dialog while low on battery. Let the OS own normal standby. */
+    return saved && battery_calibration_stopped();
+}
 #endif
 
 int main(int argc, char **argv)
@@ -54,6 +128,14 @@ int main(int argc, char **argv)
         return 1;
     }
     monotonic_clock_init();
+    battery_diagnostics_init();
+    battery_calibration_init();
+    battery_meter_init();
+#if NDMEDIA_BATTERY_GAUGE_TEST
+    (void)battery_gauge_init(&private_battery_profile);
+#endif
+    usb_phase_timing_init(monotonic_clock_now_ms);
+    UsbPhaseTimingToken startup_timing=usb_phase_timing_begin(USB_PHASE_APP_STARTUP);
     bool keep_clock;
     unsigned saved_clock = history_load_clock_preference(argv[0], &keep_clock);
     performance_clock_load(saved_clock, keep_clock);
@@ -98,6 +180,7 @@ int main(int argc, char **argv)
     uint32_t startup_now=monotonic_clock_now_ms();
     render_picker(screen,&fonts,NULL,0,0,0,0,0,0,0,0,-1,0,-1,0,-1,0,-1,-1,0,NULL,NULL,
         startup_now,startup_now,PICKER_EXIT_INACTIVE,0,"Loading library",0,true);
+    battery_meter_load();
     /* Native startup may reject an early transition or change the clock after
      * it. Reconcile once here, with genuine SRAM and before app I/O begins. */
     if (!performance_clock_startup_complete()) {
@@ -112,6 +195,7 @@ int main(int argc, char **argv)
         }
     }
 
+    usb_phase_timing_end(USB_PHASE_APP_STARTUP,startup_timing,0);
     while (1) {
         resume_without_prompt = false;
         picker_opened_loading = false;
@@ -172,6 +256,14 @@ int main(int argc, char **argv)
             resume_without_prompt,
             picker_opened_loading
         );
+#if NDMEDIA_BATTERY_CALIBRATION
+        /* Esc/error ends this separate run and saves even a partial curve.
+         * A stopped decoder must not sit in the library draining the battery. */
+        if(battery_calibration_active() &&
+            (result==PLAY_MOVIE_RESULT_EXIT || result==PLAY_MOVIE_RESULT_ERROR)) {
+            battery_calibration_abort();result=PLAY_MOVIE_RESULT_APP_EXIT;
+        }
+#endif
         /* D records one movie. Its saved log and journal must survive an
          * automatic switch to the next file in the directory. */
         debug_set_runtime_logging(false);
@@ -223,6 +315,8 @@ int main(int argc, char **argv)
     clear_movie_picker_cache(&g_previous_picker_cache);
     usb_browser_shutdown(screen, &fonts);
     media_browser_shutdown();
+    /* Settings are written only after all media/USB jobs have closed. */
+    (void)battery_meter_save();
 #if NDVIDEO_CODEC_MODULES || NDVIDEO_AUDIO_MODULES
     char module_shutdown_error[192] = {0};
     if (!codec_modules_shutdown())
@@ -231,9 +325,11 @@ int main(int argc, char **argv)
     night_mode_shutdown();
     playback_capture_release();
     release_debug_ring_storage();
+    save_loading_diagnostic();
     free_fonts(&fonts);
     storage_descriptors_shutdown();
     storage_read_stream_shutdown();
+    wallpaper_release();
     movie_crypto_clear();
     lcd_init(SCR_TYPE_INVALID);
     SDL_Quit();
@@ -252,6 +348,17 @@ int main(int argc, char **argv)
     }
     monotonic_clock_shutdown();
     usb_browser_save_exit_audit();
+#if (NDVIDEO_USB_TIMINGS || NDVIDEO_BATTERY_TIMINGS) && !NDMEDIA_BATTERY_CALIBRATION
+    save_usb_phase_report();
+#endif
+#if NDMEDIA_BATTERY_CALIBRATION
+    bool calibration_standby=save_battery_calibration_report();
+    if(calibration_standby) {
+        PlayerMessage ignored;
+        (void)take_player_message(&ignored);
+        return_home_after_exit=true;open_scratchpad_after_exit=false;suspend_after_exit=true;
+    }
+#endif
     show_pending_movie_error();
     /* Explicit Home/Scratchpad/standby navigation also belongs after cleanup. */
     if (return_home_after_exit) {

@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #define NDMEDIA_USB_STORAGE 1
 #include "usb_autoconnect.h"
+#include "usb_phase_timing.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -17,6 +18,7 @@ static unsigned native_critical_enter(void) { unsigned old = cpu_mask; cpu_mask 
 static void native_critical_leave(unsigned old) { cpu_mask = old; }
 static void test_barrier(void) { assert(cpu_mask == 0xc0); }
 static UsbAutoConnect auto_connection;
+static UsbPhaseTimingToken library_ready_timing;
 static bool last_attachment_ready, attachment_ready;
 static struct { uint32_t cap, identity, otg, port, samples, unknown, insertions; unsigned presence; } detection;
 uint32_t nspire_hardware_id(void) { return model; }

@@ -1,3 +1,4 @@
+#include "usb_phase_timing.h"
 /* Actual session claim loop, with deterministic controller/native worker state. */
 #include <assert.h>
 #include <stdbool.h>
@@ -56,6 +57,16 @@ static uint32_t native_usb_ui_bus_irq_mask(void){return 256;}
 static void native_usb_ui_debug(FILE *file){(void)file;}
 static uint32_t now(void){return ++clock_ms;}
 static bool progress(void *context){(void)context;return !cancelled && (!cancel_after || clock_ms<cancel_after);}
+#if NDVIDEO_USB_TIMINGS
+static unsigned queue_captures;
+void native_usb_ui_queue_capture(const char *stage,const UsbQueueTimingPrivate *private_state)
+{
+    assert(!private_state);
+    if(!strcmp(stage,"lease_before_claim"))assert(!native_lease);
+    else {assert(!strcmp(stage,"lease_claimed") && native_lease);}
+    ++queue_captures;
+}
+#endif
 /* PRODUCTION_HOST_SESSION */
 static void reset(uint32_t command,unsigned turns)
 {

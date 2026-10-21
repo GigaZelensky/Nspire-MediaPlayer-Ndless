@@ -28,6 +28,21 @@ def check(out):
     subprocess.run([*flags, str(tests / "music_effects.c"), str(ROOT / "src/player/music_visual.c"),
                     str(ROOT / "src/player/music_effects.c"), "-lm", "-o", str(effects)], check=True)
     subprocess.run([str(effects)], check=True)
+    # Compare the silence shortcut to the same production transform with the
+    # shortcut disabled, including all presets' evolving feedback state.
+    from check_usb_lifecycle import function as extract_function
+    visual_source = (ROOT / "src/player/music_visual.c").read_text()
+    reference = extract_function(visual_source, "music_visual_analyze")
+    assert reference.count("if (!(peak[0] | peak[1]))") == 1
+    reference = reference.replace("music_visual_analyze(", "reference_analyze(", 1)
+    reference = reference.replace("if (!(peak[0] | peak[1]))", "if (0)", 1)
+    silence_source = out / "music-silence.c"
+    silence_source.write_text(visual_source + "\n" + reference)
+    silence = out / "music-silence.exe"
+    subprocess.run([*flags, "-I", str(ROOT / "src/player"), str(tests / "music_silence.c"),
+                    str(silence_source), str(ROOT / "src/player/music_effects.c"),
+                    "-o", str(silence)], check=True)
+    subprocess.run([str(silence)], check=True, timeout=20)
     from check_audio_controls import function
     ui = (ROOT / "src/player/playback_ui.c").read_text()
     music = (ROOT / "src/player/music_ui.c").read_text()

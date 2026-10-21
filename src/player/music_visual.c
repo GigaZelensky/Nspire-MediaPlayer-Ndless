@@ -76,33 +76,40 @@ void music_visual_analyze(MusicVisual *v, size_t frames)
     v->onset=attack>v->onset?attack:v->onset*3/4;
     v->energy_mean=(v->energy_mean*15+instant+8)/16;
     v->balance=(int16_t)(((int)peak[1]-(int)peak[0])*255/32768);
-    for (unsigned i = 0; i < MUSIC_VIS_SAMPLES; ++i)
-    {
-        unsigned reversed = 0;
-        for (unsigned bit = 0; bit < 9; ++bit)
-            reversed = (reversed << 1) | ((i >> bit) & 1);
-        int32_t sample = ((int32_t)v->pcm[2 * i] + v->pcm[2 * i + 1]) / 2 - mean;
-        int window = (32767 - music_visual_sine(i + 128)) / 2;
-        /* One bit of headroom also bounds DC-rejected clipped input. */
-        v->real[reversed] = (sample * window) >> 16;
-        v->imag[reversed] = 0;
-    }
-    for (unsigned length = 2; length <= 512; length *= 2)
-    {
-        unsigned half = length / 2, step = 512 / length;
-        for (unsigned block = 0; block < 512; block += length)
-            for (unsigned j = 0; j < half; ++j)
-            {
-                int wr = music_visual_sine(j * step + 128), wi = -music_visual_sine(j * step);
-                unsigned a = block + j, b = a + half;
-                int tr = (v->real[b] * wr - v->imag[b] * wi) >> 15;
-                int ti = (v->real[b] * wi + v->imag[b] * wr) >> 15;
-                int ar = v->real[a], ai = v->imag[a];
-                v->real[a] = (ar + tr) / 2;
-                v->imag[a] = (ai + ti) / 2;
-                v->real[b] = (ar - tr) / 2;
-                v->imag[b] = (ai - ti) / 2;
-            }
+    /* Silence (including a paused snapshot) has an exactly zero transform.
+     * Keep every envelope/peak decay below, without recomputing its FFT. */
+    if (!(peak[0] | peak[1])) {
+        memset(v->real, 0, sizeof(v->real));
+        memset(v->imag, 0, sizeof(v->imag));
+    } else {
+        for (unsigned i = 0; i < MUSIC_VIS_SAMPLES; ++i)
+        {
+            unsigned reversed = 0;
+            for (unsigned bit = 0; bit < 9; ++bit)
+                reversed = (reversed << 1) | ((i >> bit) & 1);
+            int32_t sample = ((int32_t)v->pcm[2 * i] + v->pcm[2 * i + 1]) / 2 - mean;
+            int window = (32767 - music_visual_sine(i + 128)) / 2;
+            /* One bit of headroom also bounds DC-rejected clipped input. */
+            v->real[reversed] = (sample * window) >> 16;
+            v->imag[reversed] = 0;
+        }
+        for (unsigned length = 2; length <= 512; length *= 2)
+        {
+            unsigned half = length / 2, step = 512 / length;
+            for (unsigned block = 0; block < 512; block += length)
+                for (unsigned j = 0; j < half; ++j)
+                {
+                    int wr = music_visual_sine(j * step + 128), wi = -music_visual_sine(j * step);
+                    unsigned a = block + j, b = a + half;
+                    int tr = (v->real[b] * wr - v->imag[b] * wi) >> 15;
+                    int ti = (v->real[b] * wi + v->imag[b] * wr) >> 15;
+                    int ar = v->real[a], ai = v->imag[a];
+                    v->real[a] = (ar + tr) / 2;
+                    v->imag[a] = (ai + ti) / 2;
+                    v->real[b] = (ar - tr) / 2;
+                    v->imag[b] = (ai - ti) / 2;
+                }
+        }
     }
     static const uint16_t edges[25] = {1,  2,  3,  4,  5,  6,   7,   9,   11,  14,  18,  23, 29,
                                        37, 47, 59, 74, 92, 114, 140, 168, 195, 220, 240, 256};

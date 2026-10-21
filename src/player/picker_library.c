@@ -1,8 +1,17 @@
 #include "player_internal.h"
 #include "picker_navigation.h"
 #include "media_browser.h"
+#include "usb_browser.h"
 #include "media_files.h"
 #include "storage/usb/usb_storage.h"
+#include "platform/battery_gauge.h"
+#include "platform/battery_meter.h"
+
+static void library_label(SDL_Surface *s,const Fonts *f,int x,int y,const char *text,Uint16 color,uint8_t mix)
+{
+    draw_ui_label_tint(s,f,x+1,y+1,text,UI_COLOR_BLACK,mix);
+    draw_ui_label_tint(s,f,x,y,text,color,mix);
+}
 
 enum { LIBRARY_HOVER_SHIFT = 6 };
 
@@ -59,6 +68,20 @@ static const char *library_codec(const MovieFile *file)
     }
 }
 
+static void library_music_icon(SDL_Surface *screen,int x,int y,uint8_t hover)
+{
+    /* Joined notes, centered in the same 15x12 slot as video and folders. */
+    Uint16 c=library_icon_color(hover);
+    library_rect(screen,x+5,y+2,2,8,c);
+    library_rect(screen,x+11,y,2,8,c);
+    for(int column=0;column<8;++column)
+        library_rect(screen,x+5+column,y+2-column/3,1,2,c);
+    library_rect(screen,x+2,y+8,5,2,c);
+    library_rect(screen,x+3,y+7,4,4,c);
+    library_rect(screen,x+8,y+6,5,2,c);
+    library_rect(screen,x+9,y+5,4,4,c);
+}
+
 static void library_panel(SDL_Surface *screen, const SDL_Rect *rect, Uint16 color, uint8_t mix)
 {
     if (!mix)
@@ -80,9 +103,9 @@ static void library_separator(SDL_Surface *screen, const Fonts *fonts, int y, in
     int line_y = y + 7, left = 12 + x_offset, right = SCREEN_W - 12 + x_offset;
     SDL_Rect left_line = {left, line_y, text_x - 10 - left, 1},
              right_line = {text_x + width + 10, line_y, right - (text_x + width + 10), 1};
-    fill_rect_rgb565_mix(screen, &left_line, ui_theme()->row_divider, mix);
-    fill_rect_rgb565_mix(screen, &right_line, ui_theme()->row_divider, mix);
-    draw_ui_label_tint(screen, fonts, text_x, y + 3, "USB", picker_text_color(true), mix);
+    fill_rect_rgb565_mix(screen, &left_line, picker_text_color(true), mix);
+    fill_rect_rgb565_mix(screen, &right_line, picker_text_color(true), mix);
+    library_label(screen, fonts, text_x, y + 3, "USB", picker_text_color(true), mix);
 }
 
 static void library_footer(SDL_Surface *screen, const Fonts *fonts, const MovieFile *files,
@@ -92,7 +115,7 @@ static void library_footer(SDL_Surface *screen, const Fonts *fonts, const MovieF
     library_panel(screen, &panel, ui_theme()->footer_panel, mix);
     SDL_Rect accent = {8, 218 + offset, 304, 1};
     fill_rect_rgb565_mix(screen, &accent, ui_theme()->footer_accent_top, mix);
-    draw_ui_label_tint(screen, fonts, 12, 224 + offset,
+    library_label(screen, fonts, 12, 224 + offset,
                        "Made by GigaZelensky",
                        picker_text_color(false), mix);
     size_t items = count;
@@ -102,7 +125,7 @@ static void library_footer(SDL_Surface *screen, const Fonts *fonts, const MovieF
     char label[32];
     if(usb_items && !usb_storage_mounted())snprintf(label,sizeof(label),"USB offline");
     else snprintf(label, sizeof(label), "%lu %s", (unsigned long)items, items == 1 ? "item" : "items");
-    draw_ui_label_tint(screen, fonts, 212 - nSDL_GetStringWidth(fonts->white, label) / 2,
+    library_label(screen, fonts, 212 - nSDL_GetStringWidth(fonts->white, label) / 2,
                        224 + offset, label, picker_text_color(true), mix);
     clock_menu_draw_footer(screen, fonts, offset, mix);
 }
@@ -126,18 +149,24 @@ void render_picker(SDL_Surface *screen, const Fonts *fonts, MovieFile *files, si
         picker_intro_mix_for_transition(intro_started_ms, now_ms, 18, 180, exit_elapsed_ms);
     uint8_t footer_mix =
         picker_intro_mix_for_transition(intro_started_ms, now_ms, 100, 180, exit_elapsed_ms);
-    SDL_Rect background = {0, 0, SCREEN_W, SCREEN_H};
-    draw_vertical_gradient(screen, &background,
-                           rgb565_lerp(UI_COLOR_BLACK, UI_COLOR_BG_TOP, background_mix, 255),
-                           rgb565_lerp(UI_COLOR_BLACK, UI_COLOR_BG_BOTTOM, background_mix, 255));
+    draw_player_wallpaper(screen,background_mix);
     screenshot_set_protected_content(false);
 
     int header_offset = -picker_intro_offset(header_mix, 8);
     SDL_Rect header = {0, header_offset, SCREEN_W, 44};
-    library_panel(screen, &header, UI_COLOR_GUNMETAL, header_mix);
-    draw_ui_label_tint(screen, fonts,
+    library_panel(screen, &header, UI_COLOR_GUNMETAL, (unsigned)header_mix*150/255);
+    library_label(screen, fonts,
                        (SCREEN_W - nSDL_GetStringWidth(fonts->white, "nMedia Player")) / 2,
                        4 + header_offset, "nMedia Player", UI_COLOR_WHITE, header_mix);
+#if NDMEDIA_BATTERY_GAUGE_TEST
+    BatteryPowerInfo power;
+    if(battery_diagnostics_power(now_ms,&power) && (power.charging || power.checking)) {
+        draw_battery_power_glyph(screen,240,3+header_offset,header_mix,power.checking);
+        library_label(screen,fonts,252,4+header_offset,
+            power.charging?"Charging":"Power",UI_COLOR_WHITE,header_mix);
+    }
+#endif
+    draw_battery_meter(screen,fonts,SCREEN_W-8-battery_meter_width(fonts),4+header_offset,header_mix);
     picker_navigation_draw_shortcuts(screen, fonts, header_mix, header_offset);
     picker_navigation_draw(screen, fonts, header_mix, header_offset);
 
@@ -175,6 +204,7 @@ void render_picker(SDL_Surface *screen, const Fonts *fonts, MovieFile *files, si
         uint8_t hover =
             picker_row_selection_mix(index, selected, previous_selected, selection_anim_started_ms,
                                      now_ms, selected_start_mix, previous_start_mix);
+        hover=(unsigned)hover*picker_navigation_rows_mix(now_ms)/255;
         uint8_t pushed = pressed_row_index == (int)index ? press_mix : 0;
         uint8_t selection = (unsigned)hover * mix / 255U;
         int press_x = pressed_control_offset_x(pushed);
@@ -184,8 +214,7 @@ void render_picker(SDL_Surface *screen, const Fonts *fonts, MovieFile *files, si
             Uint16 base = pressed_control_base(ui_theme()->row_selected, pushed);
             draw_picker_selection_panel_mix(screen, &button, base, selection);
             draw_pressed_control_reflection(screen, &button, (unsigned)pushed * selection / 255U);
-            cut_rect_corners(screen, &button,
-                             picker_background_color_at_y_mix(button.y, background_mix));
+            restore_wallpaper_corners(screen,&button,background_mix);
         }
         SDL_Rect divider = picker_row_divider_rect(&row);
         if (index + 1 >= count || files[index + 1].kind != PICKER_SEPARATOR)
@@ -201,6 +230,9 @@ void render_picker(SDL_Surface *screen, const Fonts *fonts, MovieFile *files, si
         int size_width = 0;
         if (file->kind == PICKER_AUDIO || file->kind == PICKER_MOVIE) {
             format_file_size(file->file_bytes, size_label, sizeof(size_label));
+            /* Compact row labels; detailed hovers retain the IEC unit. */
+            char *binary_unit=strchr(size_label,'i');
+            if(binary_unit && binary_unit[1]=='B')memmove(binary_unit,binary_unit+1,strlen(binary_unit));
             size_width = nSDL_GetStringWidth(fonts->white, size_label) + 8;
             right -= size_width;
         }
@@ -215,10 +247,7 @@ void render_picker(SDL_Surface *screen, const Fonts *fonts, MovieFile *files, si
             if (file->kind == PICKER_FOLDER)
                 library_folder_icon(screen, 16 + content_offset, row.y + 5 + press_y, hover);
             else if (file->kind==PICKER_AUDIO) {
-                Uint16 c=library_icon_color(hover);
-                library_rect(screen,21+content_offset,row.y+5+press_y,2,9,c);
-                library_rect(screen,23+content_offset,row.y+5+press_y,6,2,c);
-                library_rect(screen,18+content_offset,row.y+12+press_y,5,3,c);
+                library_music_icon(screen,16+content_offset,row.y+5+press_y,hover);
             } else if (file->encrypted)
                 draw_lock_icon_tinted(screen, 16 + content_offset + (15 - 8) / 2,
                                row.y + 5 + press_y + (12 - 10) / 2, library_icon_color(hover), mix);
@@ -226,13 +255,13 @@ void render_picker(SDL_Surface *screen, const Fonts *fonts, MovieFile *files, si
                 library_movie_icon(screen, 17 + content_offset, row.y + 5 + press_y, hover);
         }
         bool unavailable=picker_codec_unavailable(file);
-        draw_ui_label_tint(screen, fonts, text_x, text_y, title,
+        library_label(screen, fonts, text_x, text_y, title,
             unavailable?UI_COLOR_UNSUPPORTED:picker_text_color(false), mix);
         if (size_width)
-            draw_ui_label_tint(screen, fonts, right + 8 + press_x, text_y, size_label,
+            library_label(screen, fonts, right + 8 + press_x, text_y, size_label,
                                picker_text_color(true), mix);
         if (file->kind == PICKER_FOLDER) {
-            draw_ui_label_tint(screen, fonts, 294 + offset + press_x, row.y + 6 + press_y, ">",
+            library_label(screen, fonts, 294 + offset + press_x, row.y + 6 + press_y, ">",
                                picker_text_color(true), mix);
             char count_text[64], fitted_count[64];
             if (!file->folder_count_valid)
@@ -251,7 +280,7 @@ void render_picker(SDL_Surface *screen, const Fonts *fonts, MovieFile *files, si
             uint8_t count_mix = file->folder_count_valid
                 ? ui_ease_out_cubic(now_ms - file->folder_count_ready_ms, 100U) : 255;
             copy_fitted_text(fonts->white, count_text, fitted_count, sizeof(fitted_count), text_width);
-            draw_ui_label_tint(screen, fonts, text_x, row.y + 16 + press_y, fitted_count,
+            library_label(screen, fonts, text_x, row.y + 16 + press_y, fitted_count,
                                picker_text_color(true), (unsigned)mix * count_mix / 255U);
         } else {
             char duration[24] = {0}, fitted[256], codec[32];
@@ -262,12 +291,12 @@ void render_picker(SDL_Surface *screen, const Fonts *fonts, MovieFile *files, si
                 format_clock(file->duration_ms, duration, sizeof(duration));
             const char *description = file->detail && *file->detail ? file->detail : duration;
             int codec_width=nSDL_GetStringWidth(fonts->white,codec);
-            draw_ui_label_tint(screen,fonts,text_x,row.y+16+press_y,codec,
+            library_label(screen,fonts,text_x,row.y+16+press_y,codec,
                 unavailable?UI_COLOR_UNSUPPORTED:picker_text_color(true),mix);
             int gap=nSDL_GetStringWidth(fonts->white,"    ");
             copy_fitted_text(fonts->white, description, fitted, sizeof(fitted),
                 text_width+size_width-codec_width-gap);
-            draw_ui_label_tint(screen, fonts, text_x+codec_width+gap, row.y + 16 + press_y, fitted,
+            library_label(screen, fonts, text_x+codec_width+gap, row.y + 16 + press_y, fitted,
                                picker_text_color(true), mix);
         }
         if (have_resume)
@@ -279,7 +308,7 @@ void render_picker(SDL_Surface *screen, const Fonts *fonts, MovieFile *files, si
     }
     SDL_SetClipRect(screen, &old_clip);
     if (!count && !loading_label)
-        draw_ui_label_tint(screen, fonts, 16, 76, "No media in this folder",
+        library_label(screen, fonts, 16, 76, "No media in this folder",
                            picker_text_color(false), header_mix);
     uint8_t scroll_mix =
         picker_intro_mix_for_transition(intro_started_ms, now_ms, 100, 200, exit_elapsed_ms);
@@ -316,6 +345,8 @@ void render_picker(SDL_Surface *screen, const Fonts *fonts, MovieFile *files, si
         SDL_Rect full = {0, 0, SCREEN_W, SCREEN_H};
         dim_rect_rgb565(screen, &full, (UI_LOADING_DIM_ALPHA * (int)loading_mix + 127) / 255);
         draw_loading_overlay_mix(screen, fonts, loading_label, loading_phase, loading_mix, true);
+    } else if(picker_navigation_draw_tooltip(screen,fonts,pointer)) {
+        /* The breadcrumb owns hover while the pointer is in the header. */
     } else if (resume_tooltip_index >= 0 && (size_t)resume_tooltip_index < count &&
                resume_tooltip_mix) {
         draw_resume_hover_tooltip(screen, fonts, files + resume_tooltip_index, pointer,
@@ -329,6 +360,13 @@ void render_picker(SDL_Surface *screen, const Fonts *fonts, MovieFile *files, si
     night_mode_draw_status(screen, fonts, NULL, now_ms);
     if (pointer && pointer->visible)
         draw_cursor(screen, pointer->x, pointer->y);
-    if (present_output)
+    if (present_output) {
         present_screen(screen);
+        if(!loading_label && !loading_mix && usb_storage_mounted()) {
+            bool usb_rows=usb_path(media_browser_directory());
+            for(size_t i=start;i<end && !usb_rows;++i)
+                usb_rows=files[i].kind==PICKER_SEPARATOR || usb_path(files[i].path);
+            if(usb_rows)usb_browser_library_presented();
+        }
+    }
 }

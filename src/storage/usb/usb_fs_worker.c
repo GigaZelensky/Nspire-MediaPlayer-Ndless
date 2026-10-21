@@ -1,6 +1,7 @@
 #include "usb_fs_worker.h"
 #include "usb_controller.h"
 #include "usb_storage.h"
+#include "usb_phase_timing.h"
 #include "../../player/native_interrupts.h"
 #include <stdlib.h>
 #include <string.h>
@@ -172,7 +173,9 @@ void usb_fs_wait(UsbFsJob *job)
                                   (uint32_t)(current - progress_last) >= 512U)) {
             services = 0;
             progress_last = current;
+            UsbPhaseTimingToken timing=usb_phase_timing_begin(USB_PHASE_FS_PROGRESS);
             progress_callback(progress_context);
+            usb_phase_timing_end(USB_PHASE_FS_PROGRESS,timing,0);
         }
     }
 }

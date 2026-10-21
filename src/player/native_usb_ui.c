@@ -1,5 +1,6 @@
 #include "native_usb_ui.h"
 #include "../storage/usb/usb_registers.h"
+#include "../storage/usb/usb_phase_timing.h"
 #include "native_usb_ui_resolver.h"
 #include "native_interrupts.h"
 #include "../platform/portable_reader_platform.h"
@@ -410,14 +411,17 @@ bool native_usb_ui_storage_binding(uint32_t *owner,uint32_t *device,uint32_t *in
 
 static int enumerate_empty_root(const UsbHostTree *tree, const UsbRegisters *registers)
 {
-    /* Resume scans with explore(hub, 0), which cannot consume a connection
-     * change or discover a new device. Service an otherwise empty root
-     * through its owner; never reset an existing child or another device. */
+    /* Resume scans with explore(hub, 0), which can retire changed children
+     * but cannot discover their replacements. Retire a changed subtree first,
+     * then service the empty root through its owner on a later turn. */
+    bool children=false;
     for (unsigned slot = 1; slot < 128; ++slot) {
         uint32_t child = WORD(tree->bus + 52 + slot * 4);
-        if (child && child != tree->hub) return 0;
+        if (child && child != tree->hub)children=true;
     }
     uint32_t port = WORD(registers->port);
+    bool physical_change=(port&2U) || ((port&8U) && !(port&4U));
+    if(children && !physical_change)return 0;
     /* A connected port can need discovery after its change was acknowledged.
      * A disconnected port can still have pending CONNECT/ENABLE changes:
      * ignoring those leaves the native hub's cached state stale on replug. */
@@ -430,13 +434,36 @@ static int enumerate_empty_root(const UsbHostTree *tree, const UsbRegisters *reg
     if (!native_usb_ui_role_matches(v, reset, UI_PORT_RESET)) return -41;
     uint32_t info = WORD(tree->hub + 96);
     if (!memory(info, 68) || WORD(info) != explore || WORD(info + 4) != tree->hub_state ||
-        *(const volatile uint8_t *)(uintptr_t)(info + 10) != 1 || WORD(info + 56) ||
+        *(const volatile uint8_t *)(uintptr_t)(info + 10) != 1 ||
         *(const volatile uint8_t *)(uintptr_t)(tree->hub_state + 25) != 1 ||
         *(const volatile uint8_t *)(uintptr_t)(tree->hub_state + 26) ||
         *(const volatile uint8_t *)(uintptr_t)(tree->hub_state + 32) != 1 ||
         WORD(tree->hub_state + 36) != 1) return -42;
+    uint32_t root_child=WORD(info+56);
+    if(children) {
+        /* A changed populated root is exactly what cleanup must retire.
+         * Authenticate the port child against its bus slot before allowing
+         * the owner to detach it; the empty-root path still requires NULL. */
+        if(!root_child || root_child==tree->hub || (root_child&3U) ||
+            !memory(root_child,112) || WORD(root_child)!=tree->bus ||
+            *(const volatile uint8_t *)(uintptr_t)(root_child+10)!=1U)return -42;
+        unsigned slot=*(const volatile uint8_t *)(uintptr_t)(root_child+8);
+        if(!slot || slot>=128 || WORD(tree->bus+52+slot*4)!=root_child)return -42;
+    } else if(root_child)return -42;
     ++enumeration_count;
     enumeration_result = 0;
+    if(children) {
+        /* The witnessed hub explorer's discover=0 path consumes real port
+         * changes and calls usb_disconnect_port, but skips new-device creation.
+         * Let the owner retire its subtree/pipes first. A later scheduler turn
+         * revalidates the now-empty root before reset/discovery; no live child
+         * is reset by the app and no change/advance completion is fabricated. */
+        stage="retire changed root-port children";
+        native_critical_leave(0);
+        enumeration_result=((int (*)(uint32_t, unsigned))(uintptr_t)explore)(tree->hub,0);
+        native_critical_enter();
+        return enumeration_result?enumeration_result:NATIVE_USB_SESSION_PENDING;
+    }
     stage = port & 1U ? "enumerate connected root port" : "process root-port changes";
     if ((port & 1U) && !(port & 4U)) {
         /* The OTG root port is reset by its owner during normal insertion;
@@ -681,6 +708,9 @@ void native_usb_ui_debug(FILE *file)
     native_critical_leave(saved);
     fprintf(file, "usb_ui stage=%s resolved=%u classic_cx=%u input=%u apd=%u busy=%u display=%u cursor=%u\n",
             stage, resolved, api.classic_cx, input_held, apd_held, busy_held, display_held, cursor_held);
+    fprintf(file,"usb_ui_clock counter=%08lx hz_address=%08lx hz=%lu counter_valid=%u\n",
+        (unsigned long)api.clock_counter,(unsigned long)api.clock_hz,
+        (unsigned long)(memory(api.clock_hz,4)?WORD(api.clock_hz):UINT32_MAX),memory(api.clock_counter,4));
     fprintf(file, "usb_ui_power known=%u state=%08lx apd_blocks=%lu original_apd_blocks=%lu "
             "event_bits=%lu original_event_bits=%lu tracking_bit=%lu original_tracking_bit=%lu "
             "timer1_control=%08lx timer1_source=%08lx\n",
@@ -1091,8 +1121,8 @@ static int resume_host(bool retain_bus)
     /* PORT_CONNECT may stay clear until a stopped/suspended host wakes.
      * A running empty root must also consume its pending disconnect changes;
      * returning success here would skip both operations indefinitely. */
-    /* A live host must not be resumed again while its worker enumerates a
-     * new child. Only inspect an empty root or rebind unclaimed storage. */
+      /* A live host must not be resumed again while its worker enumerates a
+       * new child. Inspect root changes or rebind unclaimed storage instead. */
     if (!WORD(tree.handle + 32) && (WORD(registers.command) & 1U) &&
         !(WORD(registers.command + 4) & 0x1000U)) {
         if ((WORD(registers.port)&0x85U)==5U) session_restart_requested=false;
@@ -1282,3 +1312,78 @@ int native_usb_ui_release(void)
 }
 
 #include "native_usb_bus.inc"
+
+#if NDVIDEO_USB_TIMINGS
+static uint32_t queue_timing_qtd(uint32_t next,bool *valid)
+{
+    *valid=false;
+    uint32_t at=next&~31U;
+    if((next&1U) || !at || !memory(at,32))return 0;
+    *valid=true;
+    return WORD(at+8U);
+}
+static void queue_timing_walk(UsbQueueTimingState *s,uint32_t node,bool free_list)
+{
+    for(unsigned i=0;node && i<16;++i) {
+        if((node&31U) || !memory(node,80)) {
+            s->flags|=free_list?USB_QUEUE_BAD_FREE:USB_QUEUE_BAD_LIVE;return;
+        }
+        if(free_list)++s->free_nodes;else ++s->live_nodes;
+        bool valid=false;
+        if(!free_list && node!=s->head && !s->first_qh) {
+            s->first_qh=node;s->first_info=WORD(node+4U);
+            s->first_token=WORD(node+24U);s->first_next=WORD(node+16U);
+            s->first_qtd_token=queue_timing_qtd(s->first_next,&valid);
+            if(valid)s->flags|=USB_QUEUE_FIRST_QTD_VALID;
+        }
+        if(s->async_list && WORD(node+76U)==(s->async_list&~31U)) {
+            s->flags|=free_list?USB_QUEUE_ANCHOR_FREE:USB_QUEUE_ANCHOR_LIVE;
+            s->anchor=node;s->anchor_info=WORD(node+4U);
+            s->anchor_token=WORD(node+24U);s->anchor_next=WORD(node+16U);
+            s->anchor_qtd_token=queue_timing_qtd(s->anchor_next,&valid);
+            if(valid)s->flags|=USB_QUEUE_ANCHOR_QTD_VALID;
+        }
+        uint32_t next=WORD(node+68U);
+        if(!free_list && next==s->head)return;
+        if(i==15 && next)s->flags|=free_list?USB_QUEUE_FREE_TRUNCATED:USB_QUEUE_LIVE_TRUNCATED;
+        node=next;
+    }
+}
+void native_usb_ui_queue_capture(const char *label,const UsbQueueTimingPrivate *private_state)
+{
+    if(!usb_phase_timing_enabled())return;
+    UsbQueueTimingState s={.usb_count=UINT32_MAX,.tree_count=UINT32_MAX,
+                          .event_flags=UINT32_MAX,.event_waiters=UINT32_MAX};
+    unsigned mask=native_critical_enter();
+    UsbHostTree tree;
+    if(!resolved || api.classic_cx || !portable_reader_platform_refresh(&mapping) || !host_tree(&tree))goto done;
+    /* Reuse the same authenticated, read-only observations as error reports.
+     * All CPU metadata reads share this IRQ exclusion; no semaphore is taken,
+     * cache line invalidated, W1C acknowledged, or peripheral ungated. */
+    uint32_t detail[16],native[8],phy[10];
+    native_usb_ui_bus_details(detail);native_usb_ui_bus_snapshot(native);native_usb_ui_bus_phy(phy);
+    if(!detail[0])goto done;
+    s.flags=USB_QUEUE_VALID;s.head=detail[6];s.head_pa=detail[7];
+    s.head_next=detail[11];s.free_head=detail[12];s.head_token=detail[9];
+    s.pending=detail[1];s.irq_mask=detail[2];s.event=detail[5];
+    if(native[0]) {
+        s.irq=native[4];s.active=native[5];s.suspended=native[2];s.bus_suspended=native[3];
+    }
+    if(phy[0]) {
+        s.flags|=USB_QUEUE_MMIO;s.command=phy[1];s.status=phy[2];s.port=phy[3];s.otg=phy[4];
+        s.async_list=detail[14];
+    }
+    if(memory(s.event,36) && WORD(s.event+12U)==0x45564e54U) {
+        s.event_flags=WORD(s.event+24U);s.event_waiters=WORD(s.event+28U);
+    }
+    if(memory(api.bsd_locks,12)) {
+        uint32_t first=WORD(api.bsd_locks+4U),second=WORD(api.bsd_locks+8U);
+        if(memory(first,40) && WORD(first+12U)==0x53454d41U)s.usb_count=WORD(first+24U);
+        if(memory(second,40) && WORD(second+12U)==0x53454d41U)s.tree_count=WORD(second+24U);
+    }
+    queue_timing_walk(&s,s.head,false);queue_timing_walk(&s,s.free_head,true);
+done:
+    usb_phase_timing_queue_state(label,&s,private_state);
+    native_critical_leave(mask);
+}
+#endif

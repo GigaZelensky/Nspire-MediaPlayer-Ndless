@@ -26,6 +26,7 @@ uint64_t audio_playback_position(const AudioPlayback *a){(void)a;return 0;}
 bool audio_playback_info(const AudioPlayback *a,AudioPlaybackInfo *i){(void)a;if(i)memset(i,0,sizeof(*i));return false;}
 size_t audio_playback_snapshot(const AudioPlayback *a,int16_t *s,size_t n){(void)a;if(s)memset(s,0,n*4);return 0;}
 bool audio_playback_level(const AudioPlayback *a,AudioPlaybackLevel *l){(void)a;if(l)memset(l,0,sizeof(*l));return false;}
+uint32_t audio_playback_output_key(const AudioPlayback *a){(void)a;return 0;}
 void audio_playback_set_volume(AudioPlayback *a,unsigned v){(void)a;(void)v;}
 void audio_playback_volume(AudioPlayback *a,int v){(void)a;(void)v;}
 void audio_playback_mute(AudioPlayback *a){(void)a;}

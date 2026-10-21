@@ -1,6 +1,7 @@
 #include "usb_storage.h"
 #include "usb_controller.h"
 #include "usb_fs_worker.h"
+#include "usb_phase_timing.h"
 #include "fatfs/ff.h"
 #include "fatfs/diskio.h"
 #include <errno.h>
@@ -137,7 +138,7 @@ DRESULT disk_ioctl(BYTE drive, BYTE command, void *data)
     }
     return RES_PARERR;
 }
-DRESULT disk_read(BYTE drive, BYTE *data, LBA_t sector, UINT count)
+static DRESULT disk_read_impl(BYTE drive, BYTE *data, LBA_t sector, UINT count)
 {
     uint32_t size = usb_controller_sector_size(), generation = usb_controller_generation();
     if (drive || !count || !data || !size ||
@@ -160,7 +161,10 @@ DRESULT disk_read(BYTE drive, BYTE *data, LBA_t sector, UINT count)
         /* Complete CBW/data/CSW even after cancellation: the next command must
          * start at a transaction boundary, never in the preceding data phase. */
         while (!(result = usb_controller_step(&request)))
-            usb_fs_yield();
+            /* Use the worker's tick/CPU budget, rather than making every
+             * quick transport poll wait for another picker frame. Ignore
+             * cancellation here until the already-started command drains. */
+            (void)ndvideo_usb_fs_poll();
         if (result < 0 || generation != usb_controller_generation())
             return RES_ERROR;
         data += amount * size;
@@ -170,6 +174,17 @@ DRESULT disk_read(BYTE drive, BYTE *data, LBA_t sector, UINT count)
             return RES_ERROR;
     }
     return RES_OK;
+}
+DRESULT disk_read(BYTE drive, BYTE *data, LBA_t sector, UINT count)
+{
+    UsbPhaseTimingToken timing=usb_phase_timing_begin(USB_PHASE_DISK_READ);
+    DRESULT result=disk_read_impl(drive,data,sector,count);
+#if NDVIDEO_USB_TIMINGS
+    usb_phase_timing_disk_read_end(timing,usb_controller_sector_size(),count,result);
+#else
+    (void)timing;
+#endif
+    return result;
 }
 
 static bool run_sync(UsbFsJob *job)
@@ -190,11 +205,17 @@ typedef struct {
 static void mount_job(void *argument)
 {
     MountJob *job = argument;
+    UsbPhaseTimingToken timing=usb_phase_timing_begin(USB_PHASE_MOUNT_FS);
     FRESULT r = f_mount(&volume, "0:", 1);
-    if (r == FR_OK)
+    usb_phase_timing_end(USB_PHASE_MOUNT_FS,timing,failure(r));
+    if (r == FR_OK) {
+        timing=usb_phase_timing_begin(USB_PHASE_MOUNT_SERIAL);
         r = f_getlabel("0:", NULL, &job->serial);
+        usb_phase_timing_end(USB_PHASE_MOUNT_SERIAL,timing,failure(r));
+    }
     DIR dir;
     if (r == FR_OK) {
+        timing=usb_phase_timing_begin(USB_PHASE_MOUNT_ROOT);
         media_folder="nMedia";
         r = f_opendir(&dir, "0:/nMedia");
         if(r==FR_NO_PATH || r==FR_NO_FILE) {
@@ -203,18 +224,20 @@ static void mount_job(void *argument)
         }
         if (r == FR_OK)
             f_closedir(&dir);
+        usb_phase_timing_end(USB_PHASE_MOUNT_ROOT,timing,failure(r));
     }
     job->job.error = failure(r);
 }
 bool usb_volume_mount(int *error)
 {
+    UsbPhaseTimingToken timing=usb_phase_timing_begin(USB_PHASE_MOUNT);
     if (error)
         *error = 0;
     usb_volume_unmount();
     if (!usb_controller_online()) {
         if (error)
             *error = ENODEV;
-        return false;
+        usb_phase_timing_end(USB_PHASE_MOUNT,timing,ENODEV);return false;
     }
     MountJob job = {0};
     job.job.run = mount_job;
@@ -233,6 +256,7 @@ bool usb_volume_mount(int *error)
                                      : "Could not read the USB filesystem.",
                                  job.job.error);
     }
+    usb_phase_timing_end(USB_PHASE_MOUNT,timing,ok?0:(job.job.error?job.job.error:EIO));
     return ok;
 }
 void usb_volume_unmount(void)
@@ -433,17 +457,30 @@ typedef struct {
 static void directory_job(void *argument)
 {
     DirectoryJob *job = argument;
+    enum UsbPhaseTimingPhase phase=job->operation?USB_PHASE_DIRECTORY_READ:USB_PHASE_DIRECTORY_OPEN;
+    UsbPhaseTimingToken timing=job->operation<2?usb_phase_timing_begin(phase):(UsbPhaseTimingToken){0,0};
     FRESULT r = job->operation == 0   ? f_opendir(&job->dir, job->path)
                 : job->operation == 1 ? f_readdir(&job->dir, &job->info)
                                       : f_closedir(&job->dir);
     job->job.error = failure(r);
+    if (job->operation == 0)
+        usb_phase_timing_directory_end(timing,job->path,job->job.error);
+    else
+        usb_phase_timing_end(phase,timing,job->job.error);
 }
 
 struct UsbDirectory {
     DirectoryJob work;
     uint32_t generation;
     bool submitted, opened, complete;
+    UsbPhaseTimingToken timing;
 };
+
+static void finish_directory_timing(UsbDirectory *cursor,int result)
+{
+    usb_phase_timing_end(USB_PHASE_FOLDER_SCAN,cursor->timing,result);
+    cursor->timing=(UsbPhaseTimingToken){0,0};
+}
 
 UsbDirectory *usb_directory_open(const char *path, int *error)
 {
@@ -458,6 +495,7 @@ UsbDirectory *usb_directory_open(const char *path, int *error)
         free(cursor);
         return NULL;
     }
+    cursor->timing=usb_phase_timing_begin(USB_PHASE_FOLDER_SCAN);
     cursor->generation = mounted_generation;
     cursor->work.job.run = directory_job;
     cursor->work.job.argument = &cursor->work;
@@ -473,6 +511,7 @@ int usb_directory_next(UsbDirectory *cursor, const char **name, bool *folder, in
     }
     if (!usb_storage_mounted() || cursor->generation != mounted_generation) {
         if (error) *error = ENODEV;
+        finish_directory_timing(cursor,ENODEV);
         return -1;
     }
     if (cursor->complete)
@@ -481,6 +520,7 @@ int usb_directory_next(UsbDirectory *cursor, const char **name, bool *folder, in
     if (!cursor->submitted) {
         if (!usb_fs_submit(&work->job)) {
             if (error) *error = work->job.error;
+            if(work->job.error)finish_directory_timing(cursor,work->job.error);
             return work->job.error ? -1 : 0;
         }
         cursor->submitted = true;
@@ -490,6 +530,7 @@ int usb_directory_next(UsbDirectory *cursor, const char **name, bool *folder, in
         return 0;
     if (work->job.error) {
         if (error) *error = work->job.error;
+        finish_directory_timing(cursor,work->job.error);
         return -1;
     }
     cursor->submitted = false;
@@ -500,6 +541,7 @@ int usb_directory_next(UsbDirectory *cursor, const char **name, bool *folder, in
     }
     if (!work->info.fname[0]) {
         cursor->complete = true;
+        finish_directory_timing(cursor,0);
         return 2;
     }
     if (work->info.fname[0] == '.' || (work->info.fattrib & (AM_HID | AM_SYS)))
@@ -517,6 +559,8 @@ void usb_directory_close(UsbDirectory *cursor)
         usb_fs_cancel(&cursor->work.job);
         usb_fs_wait(&cursor->work.job);
     }
+    finish_directory_timing(cursor,
+        cursor->work.job.error?cursor->work.job.error:cursor->complete?0:ECANCELED);
     /* Read-only FatFs close has no I/O or shared lock bookkeeping. */
     if (cursor->opened && usb_storage_mounted() && cursor->generation == mounted_generation)
         f_closedir(&cursor->work.dir);
@@ -533,12 +577,14 @@ bool usb_directory_list(const char *path, UsbDirectoryEntry callback, void *cont
             *error = usb_storage_mounted() ? EINVAL : ENODEV;
         return false;
     }
+    UsbPhaseTimingToken timing=usb_phase_timing_begin(USB_PHASE_FOLDER_SCAN);
     uint32_t generation = mounted_generation;
     job.job.run = directory_job;
     job.job.argument = &job;
     if (!run_sync(&job.job)) {
         if (error)
             *error = job.job.error;
+        usb_phase_timing_end(USB_PHASE_FOLDER_SCAN,timing,job.job.error?job.job.error:EIO);
         return false;
     }
     job.operation = 1;
@@ -567,5 +613,6 @@ bool usb_directory_list(const char *path, UsbDirectoryEntry callback, void *cont
     run_sync(&job.job);
     if (error)
         *error = status;
+    usb_phase_timing_end(USB_PHASE_FOLDER_SCAN,timing,status?status:ok?0:EIO);
     return ok;
 }

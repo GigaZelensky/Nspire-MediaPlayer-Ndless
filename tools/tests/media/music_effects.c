@@ -15,8 +15,8 @@ int main(void)
     assert(memory);
     memory->before = 0x12345678;
     memory->after = 0x87654321;
-    uint32_t hashes[4] = {0};
-    for (unsigned effect = 1; effect <= 4; ++effect)
+    uint32_t hashes[6] = {0};
+    for (unsigned effect = 1; effect <= 6; ++effect)
     {
         MusicVisual *v = &memory->visual;
         memset(v, 0, sizeof(*v));
@@ -56,10 +56,28 @@ int main(void)
         for (unsigned i = 0; i < 160 * 120; ++i)
             assert(!pixels[i]);
     }
-    for (unsigned i = 0; i < 4; ++i)
-        for (unsigned j = i + 1; j < 4; ++j)
+    for (unsigned i = 0; i < 6; ++i)
+        for (unsigned j = i + 1; j < 6; ++j)
             assert(hashes[i] != hashes[j]);
-    printf("PASS four distinct moving feedback presets, PCM unchanged, silence fade, bounds and "
+    /* Equal-volume tones at the same timestamps must produce different
+     * pictures. This distinguishes audio response from timer-only movement. */
+    for(unsigned effect=1;effect<=6;++effect) {
+        uint32_t tone_hash[2]={0};
+        for(unsigned high=0;high<2;++high) {
+            MusicVisual *v=&memory->visual;memset(v,0,sizeof(*v));
+            for(unsigned frame=0;frame<24;++frame) {
+                for(unsigned i=0;i<512;++i) {
+                    int16_t p=(int16_t)(sin(i*6.283185307*(high?120:3)/512)*22000);
+                    v->pcm[2*i]=p;v->pcm[2*i+1]=p/2;
+                }
+                music_visual_analyze(v,512);music_visual_frame(v,effect,1000+frame*40);
+            }
+            const uint16_t *pixels=music_visual_pixels(v);
+            for(unsigned i=0;i<160*120;++i)tone_hash[high]=tone_hash[high]*33+pixels[i];
+        }
+        assert(tone_hash[0]!=tone_hash[1]);
+    }
+    printf("PASS six distinct audio-driven presets, PCM unchanged, silence fade, bounds and "
            "clock wrap; working set %lu bytes\n",
            (unsigned long)sizeof(MusicVisual));
     free(memory);

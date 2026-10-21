@@ -15,7 +15,7 @@ void format_file_size(uint64_t bytes, char *out, size_t size)
 }
 
 enum {
-    TOOLTIP_LINES = 7,
+    TOOLTIP_LINES = 16,
     TOOLTIP_LINE_BYTES = 96,
     TOOLTIP_TEXT_WIDTH = 170,
     TOOLTIP_PAD_X = 7,
@@ -25,7 +25,7 @@ enum {
 
 typedef struct {
     char lines[TOOLTIP_LINES][TOOLTIP_LINE_BYTES];
-    unsigned count, title_lines, limit;
+    unsigned count, title_lines, limit, width;
 } TooltipText;
 
 static bool tooltip_space(char ch)
@@ -50,7 +50,7 @@ static bool tooltip_append(TooltipText *wrapped, nSDL_Font *font, const char *te
         int width = 0;
         while (text[length] && text[length] != '\n' && length + 1 < TOOLTIP_LINE_BYTES) {
             int advance = font_char_advance_width(font, (unsigned char)text[length]);
-            if (width + advance > TOOLTIP_TEXT_WIDTH)
+            if (width + advance > (int)wrapped->width)
                 break;
             if (tooltip_space(text[length]))
                 word_end = length;
@@ -79,20 +79,20 @@ static void tooltip_truncate(TooltipText *wrapped, nSDL_Font *font)
     size_t length = strlen(last);
     while (length && (length + 4 > TOOLTIP_LINE_BYTES ||
                       nSDL_GetStringWidth(font, last) + nSDL_GetStringWidth(font, "...") >
-                          TOOLTIP_TEXT_WIDTH))
+                          (int)wrapped->width))
         last[--length] = 0;
     memcpy(last + length, "...", 4);
 }
 
 static void draw_tooltip(SDL_Surface *screen, const Fonts *fonts, const MovieFile *file,
-                         const PointerState *pointer, uint8_t mix, bool resume)
+                         const PointerState *pointer, uint8_t mix, bool resume,bool path)
 {
     if (!screen || !fonts || !file || !pointer || !pointer->visible || !mix)
         return;
-    TooltipText text = {.limit = TOOLTIP_LINES - 1};
+    TooltipText text = {.limit = path?TOOLTIP_LINES:6,.width=path?230:TOOLTIP_TEXT_WIDTH};
     bool complete = tooltip_append(&text, fonts->white, file->name);
     text.title_lines = text.count;
-    bool unavailable=picker_codec_unavailable(file);
+    bool unavailable=!path && picker_codec_unavailable(file);
     unsigned warning_begin=text.count,warning_end=text.count;
     if(unavailable && complete) {
         complete=tooltip_append(&text,fonts->white,"Codec not included in this build");
@@ -116,7 +116,7 @@ static void draw_tooltip(SDL_Surface *screen, const Fonts *fonts, const MovieFil
         tooltip_truncate(&text, fonts->white);
     if (file->kind != PICKER_FOLDER && file->kind != PICKER_SEPARATOR) {
         char size[32]; format_file_size(file->file_bytes, size, sizeof(size));
-        text.limit = TOOLTIP_LINES;
+        text.limit = 7;
         tooltip_append(&text, fonts->white, size);
     }
     if (!text.count)
@@ -154,11 +154,18 @@ static void draw_tooltip(SDL_Surface *screen, const Fonts *fonts, const MovieFil
 void draw_movie_hover_tooltip(SDL_Surface *screen, const Fonts *fonts, const MovieFile *file,
                               const PointerState *pointer, uint8_t tooltip_mix)
 {
-    draw_tooltip(screen, fonts, file, pointer, tooltip_mix, false);
+    draw_tooltip(screen, fonts, file, pointer, tooltip_mix, false,false);
 }
 
 void draw_resume_hover_tooltip(SDL_Surface *screen, const Fonts *fonts, const MovieFile *file,
                                const PointerState *pointer, uint8_t tooltip_mix)
 {
-    draw_tooltip(screen, fonts, file, pointer, tooltip_mix, true);
+    draw_tooltip(screen, fonts, file, pointer, tooltip_mix, true,false);
+}
+
+void draw_path_hover_tooltip(SDL_Surface *screen,const Fonts *fonts,char *path,
+                              const PointerState *pointer,uint8_t mix)
+{
+    MovieFile file={.kind=PICKER_FOLDER,.name=path,.detail=""};
+    draw_tooltip(screen,fonts,&file,pointer,mix,false,true);
 }

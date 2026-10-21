@@ -4,6 +4,41 @@
 #include "music_ui.h"
 #include "audio_controls.h"
 #include "audio/audio_playback.h"
+#include "platform/battery_diagnostics.h"
+#include "platform/battery_calibration.h"
+#include "platform/battery_gauge.h"
+#include "platform/battery_meter.h"
+#include "performance_clock.h"
+#include "storage/usb/usb_storage.h"
+#include "wallpaper_image.h"
+
+typedef struct {AudioPlayback *audio;MusicControls *controls;uint32_t serviced_at;} MusicWallpaperService;
+static void music_wallpaper_service(void *context)
+{
+    MusicWallpaperService *service=context;
+    uint32_t now=monotonic_clock_now_ms();
+    if(now-service->serviced_at<4)return;
+    service->serviced_at=now;
+    audio_playback_tick(service->audio,service->controls->paused || service->controls->scrubbing,1,1);
+    audio_playback_pump(service->audio);
+}
+
+#if NDVIDEO_BATTERY_ACQUISITION || NDMEDIA_BATTERY_SERVICE
+static void music_battery_maintenance(AudioPlayback *audio,AudioPlaybackInfo *info,uint32_t *now)
+{
+    if(!info->running || info->failed || !battery_diagnostics_acquisition_due(*now))return;
+    /* Maintenance follows normal decoder/USB service, outside native callbacks.
+     * The pump can discover a lost device, so recheck before sampling. */
+    audio_playback_pump(audio);
+    audio_playback_info(audio,info);
+    if(info->running && !info->failed) {
+        battery_diagnostics_acquire(monotonic_clock_now_ms());
+        audio_playback_pump(audio);
+        audio_playback_info(audio,info);
+    }
+    *now=monotonic_clock_now_ms();
+}
+#endif
 
 /* Only the display state changes here. The audio loop below keeps its
  * decoder, headset, USB lease and sample clock alive while the LCD is dark. */
@@ -52,10 +87,13 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
         return cancelled ? PLAY_MOVIE_RESULT_EXIT : PLAY_MOVIE_RESULT_ERROR;
     }
     audio_playback_diagnostics(audio, music_ui_debug, &ui, ui.cover_error);
+    battery_calibration_start(monotonic_clock_now_ms());
     PointerState pointer;
     pointer_init(&pointer);
     pointer_update(&pointer);
     MusicControls controls = {0};
+    MusicWallpaperService wallpaper_service_context={audio,&controls,0};
+    wallpaper_set_service(music_wallpaper_service,&wallpaper_service_context);
     audio_controls_reset();
     audio_controls_set_vertical_offset(-8);
     clock_menu_sync_shortcut();
@@ -71,7 +109,7 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
          visual_key = isKeyPressed(KEY_NSPIRE_V), theme_key = isKeyPressed(KEY_NSPIRE_C),
          k7 = isKeyPressed(KEY_NSPIRE_7), k9 = isKeyPressed(KEY_NSPIRE_9), on = false;
     uint32_t draw_at = 0;
-    bool redraw = true, keyboard_was_held = enter || k5;
+    bool redraw = true, keyboard_was_held = enter || k5,theme_was_animating=false;
     int result = PLAY_MOVIE_RESULT_EXIT;
     for (;;)
     {
@@ -248,14 +286,61 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
         }
         audio_playback_tick(audio, controls.paused || controls.scrubbing, 1, 1);
         audio_playback_info(audio, &info);
+#if NDVIDEO_BATTERY_ACQUISITION || NDMEDIA_BATTERY_SERVICE
+        music_battery_maintenance(audio,&info,&now);
+#endif
+#if NDMEDIA_BATTERY_METER
+        AudioPlaybackLevel meter_level={0};audio_playback_level(audio,&meter_level);
+        uint32_t meter_key=info.running && !info.failed && !controls.paused && !controls.scrubbing?
+            battery_meter_load_key(false,usb_path(path),info.codec,performance_clock_current_mhz(),
+                current_lcd_brightness(),g_display_power_state.off,
+                meter_level.muted?0:meter_level.volume,info.rate,info.channels,
+                audio_playback_output_key(audio) ^
+                    (g_display_power_state.off?0:ui.view*0x9e3779b9U)):0;
+        battery_meter_tick(now,meter_key,false);
+#endif
+#if NDMEDIA_BATTERY_CALIBRATION || NDMEDIA_BATTERY_GAUGE_TEST
+        int screen_target=battery_calibration_screen_target(now);
+        if(screen_target==0 && !g_display_power_state.off && !g_display_power_state.off_fade_active)
+            display_power_request_off(&g_display_power_state,false,now);
+        if(screen_target==1) {
+            if(g_display_power_state.off || g_display_power_state.off_fade_active)
+                display_power_restore_animated(&g_display_power_state,now);
+            display_power_note_activity(&g_display_power_state,now);
+        }
+        BatteryFreshReading battery;
+        AudioPlaybackLevel level={0};audio_playback_level(audio,&level);
+        BatteryCalibrationContext context={
+            .flags=(info.running&&!info.failed?BATTERY_CAL_PLAYING:0) |
+                (controls.paused||controls.scrubbing?BATTERY_CAL_PAUSED:0) |
+                (g_display_power_state.off?BATTERY_CAL_SCREEN_OFF:0) |
+                (usb_path(path)?BATTERY_CAL_USB_SOURCE:0) |
+                (ui.view&&!g_display_power_state.off?BATTERY_CAL_VISUAL:0),
+            .cpu_mhz=performance_clock_current_mhz(),
+            .brightness=g_display_power_state.off?0:current_lcd_brightness(),
+            .volume=level.volume,.muted=level.muted,.codec=info.codec,
+            .rate=info.rate,.channels=info.channels};
+        bool has_reading=battery_diagnostics_latest(&battery);
+        battery_calibration_tick(now,has_reading?&battery:NULL,&context);
+        battery_gauge_update(now,has_reading?&battery:NULL,&context);
+        if(battery_calibration_stopped()) {result=PLAY_MOVIE_RESULT_APP_EXIT;break;}
+#endif
         audio_playback_context(audio, info.position, info.frames, media_audio_format(path));
         if (info.failed)
         {
+#if NDMEDIA_BATTERY_CALIBRATION
+            /* A long unattended calibration must not wait indefinitely on a
+             * disconnected output with no fresh low-voltage measurements. */
+            battery_calibration_abort();result=PLAY_MOVIE_RESULT_APP_EXIT;break;
+#endif
             if (isKeyPressed(KEY_NSPIRE_ESC))
                 break;
             if(audio_playback_can_reconnect(audio)) {
+                wallpaper_set_service(NULL,NULL);
                 int recovered=music_wait_for_audio(screen,fonts,path,&audio,&info,&controls,
                                                    &pointer,&ui);
+                wallpaper_service_context.audio=audio;
+                wallpaper_set_service(music_wallpaper_service,&wallpaper_service_context);
                 if(recovered>0) {
                     esc=isKeyPressed(KEY_NSPIRE_ESC);space=isKeyPressed(KEY_NSPIRE_SPACE);
                     enter=isKeyPressed(KEY_NSPIRE_ENTER);k5=isKeyPressed(KEY_NSPIRE_5);
@@ -276,7 +361,7 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
         }
         if (info.finished && !controls.paused)
         {
-            if (ui.mode == PLAYBACK_MODE_REPEAT)
+            if (ui.mode == PLAYBACK_MODE_REPEAT || battery_calibration_active())
             {
                 if (!audio_playback_seek(audio, 0))
                 {
@@ -317,7 +402,10 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
         now=monotonic_clock_now_ms();
         if(!draw_at)ui.chrome_until=now+2400;
         music_ui_update(&ui, audio, &info, &controls, &pointer, now);
-        uint32_t interval = ui.animating || audio_controls_animating() ? 16
+        bool theme_animating=ui_theme_transition_active();
+        if(theme_animating!=theme_was_animating)redraw=true;
+        theme_was_animating=theme_animating;
+        uint32_t interval = ui.animating || theme_animating || battery_ui_animating() || audio_controls_animating() ? 16
                             : ui.view && !controls.paused              ? 40
                                                                        : 125;
         if ((redraw && now - draw_at >= 16) || now - draw_at >= interval)
@@ -338,6 +426,7 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
     if (result != PLAY_MOVIE_RESULT_AUTO_NEXT)
         display_power_restore(&g_display_power_state, monotonic_clock_now_ms());
     audio_controls_reset();
+    wallpaper_set_service(NULL,NULL);
     audio_playback_close(audio);
     music_ui_close(&ui);
     flush_queued_preferences_save("music-close");

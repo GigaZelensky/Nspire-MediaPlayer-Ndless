@@ -44,6 +44,8 @@ bool audio_playback_info(const AudioPlayback *, AudioPlaybackInfo *);
  * Missing/paused data is zero-filled; optional visuals cannot fail playback. */
 size_t audio_playback_snapshot(const AudioPlayback *, int16_t *stereo, size_t frames);
 bool audio_playback_level(const AudioPlayback *, AudioPlaybackLevel *);
+/* Passive selected USB output identity/format for battery load separation. */
+uint32_t audio_playback_output_key(const AudioPlayback *);
 void audio_playback_set_volume(AudioPlayback *, unsigned);
 void audio_playback_volume(AudioPlayback *, int);
 void audio_playback_mute(AudioPlayback *);

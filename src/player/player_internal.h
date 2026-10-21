@@ -83,6 +83,7 @@ static inline void player_prefetch_data(const void *ptr)
 #define PICKER_ROW_STEP_PX 30
 #define PROMPT_BUTTON_ANIM_MS 90U
 #define UI_CHROME_ANIM_MS 115U
+#define UI_CHROME_EXIT_ANIM_MS 200U
 #define UI_HOVER_ANIM_MS 105U
 #define UI_TITLE_ANIM_MS 135U
 #define UI_PRESS_ANIM_MS 120U
@@ -461,6 +462,7 @@ typedef struct {
     bool plus;
     bool minus;
     bool f;
+    bool i;
     bool t;
     bool m;
     bool d;
@@ -533,6 +535,7 @@ typedef struct {
     uint8_t seek_preview;
     uint8_t title_strip;
     uint8_t help_menu;
+    bool transitioning;
 } PlaybackUiMixes;
 
 typedef struct {
@@ -1027,6 +1030,16 @@ typedef struct {
 } PlayerMessage;
 typedef void (*MessageBackdropDraw)(SDL_Surface *, void *, uint32_t closing_elapsed_ms);
 void queue_player_message(const char *title, const char *text);
+void draw_battery_power_glyph(SDL_Surface *,int,int,uint8_t,bool);
+void draw_battery_meter(SDL_Surface *,const Fonts *,int,int,uint8_t);
+int battery_meter_width(const Fonts *);
+void draw_accent_info_panel(SDL_Surface *,const SDL_Rect *);
+void draw_video_info(SDL_Surface *,const Fonts *,const Movie *,const char *,uint8_t);
+bool ui_mix_animating(uint8_t);
+void video_info_control(bool *,bool,bool *,bool *);
+int draw_video_battery_badge(SDL_Surface *,const Fonts *,int,int,uint8_t);
+void draw_player_wallpaper(SDL_Surface *,uint8_t);
+void restore_wallpaper_corners(SDL_Surface *,const SDL_Rect *,uint8_t);
 bool player_message_pending(void);
 bool take_player_message(PlayerMessage *message);
 int show_player_message(SDL_Surface *screen, const Fonts *fonts, PointerState *pointer,
@@ -1075,6 +1088,9 @@ void animate_movie_collapse_to_black( SDL_Surface *screen, Movie *movie, ScaleMo
 void copy_fitted_text(nSDL_Font *font, const char *text, char *buffer, size_t buffer_size, int max_width);
 void draw_movie_hover_tooltip( SDL_Surface *screen, const Fonts *fonts, const MovieFile *file, const PointerState *pointer, uint8_t tooltip_mix );
 void format_file_size(uint64_t bytes, char *out, size_t size);
+void save_loading_diagnostic(void);
+bool battery_ui_animating(void);
+void draw_path_hover_tooltip(SDL_Surface *,const Fonts *,char *,const PointerState *,uint8_t);
 void draw_resume_badge( SDL_Surface *screen, const Fonts *fonts, const SDL_Rect *badge, uint8_t hover_mix, uint8_t press_mix, uint8_t visible_mix, Uint16 background_color );
 void draw_resume_hover_tooltip( SDL_Surface *screen, const Fonts *fonts, const MovieFile *file, const PointerState *pointer, uint8_t tooltip_mix );
 uint8_t picker_selection_ease(uint32_t elapsed_ms, uint32_t duration_ms);
@@ -1305,7 +1321,7 @@ void audio_controls_draw(SDL_Surface *, const Fonts *, const struct AudioPlaybac
 int play_audio_file(SDL_Surface *,const Fonts *,const char *,char *,size_t);
 void draw_progress_overlay(SDL_Surface *screen, const SDL_Rect *overlay);
 void draw_progress( SDL_Surface *screen, const Fonts *fonts, Movie *movie, uint32_t current_ms, bool paused, const PlaybackRate *playback_rate, uint32_t now_ms, const PointerState *pointer, int32_t pending_seek_ms, int32_t seek_badge_ms, uint32_t seek_badge_started_ms, uint32_t seek_badge_hide_elapsed_ms, SeekBarPreviewState *seek_preview, uint8_t preview_mix, uint8_t chrome_mix );
-void render_movie( SDL_Surface *screen, const Fonts *fonts, Movie *movie, bool paused, bool show_ui, bool help_menu_open, ScaleMode scale_mode, ScaleMorphState *scale_morph, VideoAlign video_align_x, VideoAlign video_align_y, const PlaybackRate *playback_rate, MemoryOverlayMode memory_overlay_mode, SubtitleSurfaceCache *subtitle_cache, size_t subtitle_font_index, bool subtitle_font_overlay_visible, int subtitle_size, SubtitlePlacement subtitle_placement, const char *movie_title_text, const char *movie_detail_text, const char *status_overlay_text, uint32_t status_overlay_started_ms, uint32_t status_overlay_until_ms, const ScreenshotPreviewState *screenshot_preview, SeekBarPreviewState *seek_preview, uint32_t now_ms, const PointerState *pointer, int32_t pending_seek_ms, int32_t seek_badge_ms, uint32_t seek_badge_started_ms, uint32_t seek_badge_hide_elapsed_ms, const PlaybackUiMixes *ui_mixes );
+void render_movie( SDL_Surface *screen, const Fonts *fonts, Movie *movie, bool paused, bool show_ui, bool help_menu_open, ScaleMode scale_mode, ScaleMorphState *scale_morph, VideoAlign video_align_x, VideoAlign video_align_y, const PlaybackRate *playback_rate, MemoryOverlayMode memory_overlay_mode, SubtitleSurfaceCache *subtitle_cache, size_t subtitle_font_index, bool subtitle_font_overlay_visible, int subtitle_size, SubtitlePlacement subtitle_placement, const char *movie_title_text, const char *movie_detail_text, const char *status_overlay_text, uint32_t status_overlay_started_ms, uint32_t status_overlay_until_ms, const ScreenshotPreviewState *screenshot_preview, SeekBarPreviewState *seek_preview, uint32_t now_ms, const PointerState *pointer, int32_t pending_seek_ms, int32_t seek_badge_ms, uint32_t seek_badge_started_ms, uint32_t seek_badge_hide_elapsed_ms, const PlaybackUiMixes *ui_mixes, const char *info_path, uint8_t info_mix );
 bool commit_seek_bar_preview_to_movie(Movie *movie, SeekBarPreviewState *preview, uint32_t target_frame, VideoDecodePoll poll, void *userdata);
 void draw_movie_frame_background( SDL_Surface *screen, Movie *movie, ScaleMode scale_mode, VideoAlign video_align_x, VideoAlign video_align_y, SDL_Rect *out_src, SDL_Rect *out_dst );
 
@@ -1318,6 +1334,7 @@ bool progress_bar_target_frame_for_marker(const Movie *movie, const SDL_Rect *ba
 uint32_t progress_bar_width_for_frame(const Movie *movie, const SDL_Rect *bar, uint32_t frame);
 UiThemeId ui_theme_clamp(int theme_id);
 const UiThemePalette *ui_theme(void);
+const UiThemePalette *ui_theme_target(void);
 const char *ui_theme_name(UiThemeId theme_id);
 void ui_set_theme(UiThemeId theme_id);
 UiThemeId ui_cycle_theme(void);
@@ -1367,6 +1384,7 @@ void draw_cursor(SDL_Surface *screen, int x, int y);
 void remove_captured_cursor(SDL_Surface *screen, SDL_Surface *snapshot);
 bool clock_menu_poll(SDL_Surface *screen, const Fonts *fonts, Movie *movie, PointerState *pointer, bool footer, const char *path);
 bool clock_menu_consumed_input(void);
+bool clock_menu_hovered(void);
 void clock_menu_sync_shortcut(void);
 void clock_menu_queue_shortcut(void);
 void clock_menu_draw_footer(SDL_Surface *screen, const Fonts *fonts, int offset_y, uint8_t mix);

@@ -1,6 +1,6 @@
 """Check feature-selected builds and bounded automatic error reports."""
 from pathlib import Path
-import json, shutil, subprocess, tempfile
+import json, shutil, subprocess, sys, tempfile
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -28,7 +28,8 @@ int main(void) {
         cases=[['PROFILE=full'],['PROFILE=lite'],['PROFILE=custom','CODECS=',
             'AUDIO_CODECS=mp3 opus','USB_STORAGE=1','ARTWORK=0','VISUALIZATIONS=0']]
         for case in cases:
-            config=json.loads(subprocess.check_output(['make','--no-print-directory','build-config',*case],cwd=ROOT,text=True))
+            config=json.loads(subprocess.check_output(['make','--no-print-directory','build-config',
+                'PYTHON='+sys.executable,*case],cwd=ROOT,text=True))
             definitions=[x for x in config['compiler_flags'] if x.startswith('-D')]
             exe=work/'features.exe'
             subprocess.run([cc,'-std=c99','-O2','-Wall','-Wextra','-Werror','-I'+str(ROOT/'src'),*definitions,str(source),'-o',str(exe)],check=True)

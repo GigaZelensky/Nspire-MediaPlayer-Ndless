@@ -25,7 +25,9 @@ int main(void)
     do {
         reads = page_checks = 0;
         result = native_usb_ui_resolve_step(&view, false, &api, 1024);
-        assert(reads <= 1024 && page_checks <= 2);
+        /* The first CX II call rejects the 40-byte display-control hint
+         * before the bounded general scan; later slices have no hint cost. */
+        assert(reads <= 1024 + (calls ? 0U : 10U) && page_checks <= 2);
         assert(result != 1);
         ++calls;
     } while (!result && calls < 5000);

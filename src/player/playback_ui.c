@@ -378,6 +378,7 @@ bool ui_mix_animating(uint8_t mix)
 bool playback_ui_mixes_animating(const PlaybackUiMixes *mixes)
 {
     return mixes && (
+        mixes->transitioning ||
         ui_mix_animating(mixes->chrome) ||
         ui_mix_animating(mixes->pause_indicator) ||
         ui_mix_animating(mixes->playback_badge) ||
@@ -606,16 +607,16 @@ static int draw_text_badge_visible(
     if (visible_mix == 0) {
         return badge.x - 6;
     }
+    int next_right=badge.x-6;
+    SDL_Rect bounds=badge,old_clip;SDL_Surface *target;int dx,dy;
+    SDL_Surface *layer=begin_faded_region_draw(screen,&bounds,visible_mix,&target,&old_clip,&dx,&dy);
+    badge=offset_sdl_rect(&badge,dx,dy);
+    SDL_Surface *destination=screen;screen=target;
     visible_hover_mix = mix_product_u8(hover_mix, visible_mix);
     visible_press_mix = mix_product_u8(press_mix, visible_mix);
     press_offset_x = pressed_control_offset_x(visible_press_mix);
     press_offset_y = pressed_control_offset_y(visible_press_mix);
-    base = rgb565_lerp(
-        UI_COLOR_BLACK,
-        animated_control_color(UI_COLOR_GUNMETAL, ui_theme()->row_selected, visible_hover_mix),
-        visible_mix,
-        255
-    );
+    base = animated_control_color(UI_COLOR_GUNMETAL, ui_theme()->row_selected, visible_hover_mix);
 
     draw_soft_glass_panel_mix(
         screen,
@@ -625,10 +626,9 @@ static int draw_text_badge_visible(
     );
     draw_pressed_control_reflection(screen, &badge, visible_press_mix);
     draw_soft_glass_panel_rim(screen, &badge, base, max_u8(visible_hover_mix, visible_press_mix));
-    if (visible_mix > 48) {
-        draw_ui_label(screen, fonts, badge.x + 6 + press_offset_x, badge.y + 4 + press_offset_y, label);
-    }
-    return badge.x - 6;
+    draw_ui_label(screen, fonts, badge.x + 6 + press_offset_x, badge.y + 4 + press_offset_y, label);
+    end_faded_region_draw(destination,layer,&bounds,&old_clip,visible_mix);
+    return next_right;
 }
 
 int draw_text_badge(
@@ -922,6 +922,10 @@ void draw_playback_title_strip(
     strip.y = (Sint16) y;
     strip.w = (Uint16) (right_x - left_x);
     strip.h = has_detail ? 30 : 20;
+    SDL_Rect bounds=strip,old_clip;SDL_Surface *target;int dx,dy;
+    SDL_Surface *layer=begin_faded_region_draw(screen,&bounds,mix,&target,&old_clip,&dx,&dy);
+    SDL_Surface *destination=screen;screen=target;
+    strip=offset_sdl_rect(&strip,dx,dy);
     copy_fitted_text(fonts->white, title, fitted_title, sizeof(fitted_title), strip.w - 16 - (encrypted ? 12 : 0));
     text_x = strip.x + 8 + (encrypted ? 12 : 0);
     if (has_detail) {
@@ -942,13 +946,14 @@ void draw_playback_title_strip(
         glint.h = 1;
         fill_rect_rgb565(screen, &glint, rgb565_lerp(ui_theme()->row_selected, UI_COLOR_WARM_WHITE, 72, 255));
     }
-    if (mix > 48) {
-        if (encrypted) draw_lock_icon(screen, strip.x + 8, strip.y + (has_detail ? 4 : 5), mix);
+    {
+        if (encrypted) draw_lock_icon(screen, strip.x + 8, strip.y + (has_detail ? 4 : 5), 255);
         draw_ui_label(screen, fonts, text_x, strip.y + (has_detail ? 5 : 6), fitted_title);
         if (has_detail) {
             draw_ui_label(screen, fonts, detail_x, strip.y + 17, fitted_detail);
         }
     }
+    end_faded_region_draw(destination,layer,&bounds,&old_clip,mix);
 }
 
 void draw_centered_text_badge(SDL_Surface *screen, const Fonts *fonts, int center_x, int y, const char *label)
@@ -1220,6 +1225,21 @@ int draw_status_badges(
     return scale_badge.x - 6;
 }
 
+static uint8_t ui_transition_chrome(UiTransition *t,bool active,uint32_t now)
+{
+    if(!t->initialized)ui_transition_init(t,false);
+    uint8_t current=ui_transition_value_with_ease(t,now,
+        t->target_active?UI_CHROME_ANIM_MS:UI_CHROME_EXIT_ANIM_MS,
+        t->target_active?ui_ease_out_cubic:ui_ease_smoothstep);
+    if(t->target_active!=active) {
+        if(active && current<UI_WAKE_MIN_MIX)current=UI_WAKE_MIN_MIX;
+        t->start_mix=current;t->target_active=active;t->started_ms=now?now:1;
+    }
+    t->current_mix=ui_transition_value_with_ease(t,now,
+        active?UI_CHROME_ANIM_MS:UI_CHROME_EXIT_ANIM_MS,
+        active?ui_ease_out_cubic:ui_ease_smoothstep);
+    return t->current_mix;
+}
 void update_playback_ui_mixes(
     PlaybackUiTransitions *transitions,
     PlaybackUiMixes *mixes,
@@ -1260,13 +1280,10 @@ void update_playback_ui_mixes(
         return;
     }
 
-    mixes->chrome = ui_transition_update_ex(
-        &transitions->chrome,
-        show_ui,
-        now_ms,
-        UI_CHROME_ANIM_MS,
-        UI_WAKE_MIN_MIX
-    );
+    /* Retarget using the outgoing transition's duration, then evaluate the
+     * new direction. Smoothstep gives the fade-out visible intermediate
+     * frames instead of dropping most opacity in its first video frame. */
+    mixes->chrome=ui_transition_chrome(&transitions->chrome,show_ui,now_ms);
     mixes->pause_indicator = ui_transition_update(
         &transitions->pause_indicator,
         transitions->pause_indicator.target_active,
@@ -1338,6 +1355,12 @@ void update_playback_ui_mixes(
         UI_MENU_ANIM_MS,
         UI_MENU_ANIM_MS
     );
+    const UiTransition *all[]={&transitions->chrome,&transitions->pause_indicator,
+        &transitions->playback_badge,&transitions->playback_press,&transitions->scale_badge,
+        &transitions->scale_press,&transitions->speed_badge,&transitions->speed_press,
+        &transitions->seek_preview,&transitions->title_strip,&transitions->help_menu};
+    for(unsigned i=0;i<sizeof(all)/sizeof(*all);++i)
+        if(all[i]->current_mix!=(all[i]->target_active?255:0))mixes->transitioning=true;
 }
 
 SDL_Rect playback_badge_rect(const SDL_Rect *video_rect)
@@ -1360,6 +1383,7 @@ SDL_Rect playback_status_badge_anchor(const SDL_Rect *video_rect, bool playback_
 
 void draw_playback_badge(SDL_Surface *screen, const SDL_Rect *video_rect, bool paused, uint8_t hover_mix, uint8_t press_mix, uint8_t chrome_mix)
 {
+    if(!chrome_mix)return;
     SDL_Rect outer = playback_badge_rect(video_rect);
     int y_offset = -(((255 - chrome_mix) * 4 + 127) / 255);
     int press_offset_x = pressed_control_offset_x(press_mix);
@@ -1370,17 +1394,16 @@ void draw_playback_badge(SDL_Surface *screen, const SDL_Rect *video_rect, bool p
     Uint16 pressed_base;
 
     outer.y = (Sint16) (outer.y + y_offset);
+    SDL_Rect bounds=outer,old_clip;SDL_Surface *target;int dx,dy;
+    SDL_Surface *layer=begin_faded_region_draw(screen,&bounds,chrome_mix,&target,&old_clip,&dx,&dy);
+    outer=offset_sdl_rect(&outer,dx,dy);
+    SDL_Surface *destination=screen;screen=target;
     y = outer.y;
     fill.x = (Sint16) (outer.x + 1 + press_offset_x);
     fill.y = (Sint16) (y + 1 + press_offset_y);
     fill.w = 20;
     fill.h = 20;
-    base = rgb565_lerp(
-        UI_COLOR_BLACK,
-        animated_control_color(UI_COLOR_CARBON, ui_theme()->row_selected, hover_mix),
-        chrome_mix,
-        255
-    );
+    base = animated_control_color(UI_COLOR_CARBON, ui_theme()->row_selected, hover_mix);
     pressed_base = pressed_control_base(base, press_mix);
 
     draw_soft_glass_panel_mix(
@@ -1391,9 +1414,6 @@ void draw_playback_badge(SDL_Surface *screen, const SDL_Rect *video_rect, bool p
     );
     draw_pressed_control_reflection(screen, &outer, press_mix);
     draw_soft_glass_panel_rim(screen, &outer, base, max_u8(hover_mix, press_mix));
-    if (chrome_mix < 48) {
-        return;
-    }
     if (paused) {
         SDL_Rect left_bar = {(Sint16) (outer.x + 6 + press_offset_x), (Sint16) (y + 5 + press_offset_y), 3, 10};
         SDL_Rect right_bar = {(Sint16) (outer.x + 13 + press_offset_x), (Sint16) (y + 5 + press_offset_y), 3, 10};
@@ -1419,6 +1439,7 @@ void draw_playback_badge(SDL_Surface *screen, const SDL_Rect *video_rect, bool p
             fill_rect_rgb565(screen, &slice, UI_COLOR_WHITE);
         }
     }
+    end_faded_region_draw(destination,layer,&bounds,&old_clip,chrome_mix);
 }
 
 static bool h264_frame_payload_contains_idr(const uint8_t *data, size_t size)
@@ -1765,7 +1786,7 @@ static void draw_help_menu_contents(SDL_Surface *screen, const Fonts *fonts, con
         {"^", "Subtitle position"},
         {"+ / -", "Subtitle size"},
         {"F / T", "Subtitle font / track"},
-        {"M / O", "Memory / processor speed"},
+        {"I / M / O", "Info / memory / clock"},
         {"C / D", "Theme / debug logging"},
         {"S", "Save BMP screenshot"},
         {"TOUCHPAD", "Move cursor / show UI"},
@@ -2515,7 +2536,9 @@ void render_movie(
     int32_t seek_badge_ms,
     uint32_t seek_badge_started_ms,
     uint32_t seek_badge_hide_elapsed_ms,
-    const PlaybackUiMixes *ui_mixes
+    const PlaybackUiMixes *ui_mixes,
+    const char *info_path,
+    uint8_t info_mix
 )
 {
     SDL_Rect src = {0, 0, SCREEN_W, SCREEN_H};
@@ -2590,6 +2613,10 @@ void render_movie(
     if (chrome_visible) {
         if (top_chrome_visible) {
             memory_right_limit = draw_status_badges(screen, fonts, &dst, scale_mode, playback_rate, ui_mixes, top_chrome_mix);
+            uint8_t battery_mix=mix_product_u8(top_chrome_mix,
+                ui_mixes?(uint8_t)(255-ui_mixes->title_strip):255);
+            memory_right_limit=draw_video_battery_badge(screen,fonts,memory_right_limit,
+                top_overlay_y_for_rect(&dst,16)-(((255-top_chrome_mix)*4+127)/255),battery_mix);
         }
         draw_progress(
             screen,
@@ -2648,6 +2675,7 @@ void render_movie(
     if (!help_menu_visible) {
         audio_controls_draw(screen,fonts,movie->audio,chrome_visible && (!ui_mixes || !ui_mixes->title_strip),now_ms);
     }
+    if(!help_menu_visible)draw_video_info(screen,fonts,movie,info_path,info_mix);
     if (cursor_visible) {
         draw_cursor(screen, pointer->x, pointer->y);
     }

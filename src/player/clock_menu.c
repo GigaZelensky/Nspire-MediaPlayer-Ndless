@@ -5,7 +5,7 @@
 #include "usb_browser.h"
 
 static bool previous_o, footer_armed, footer_key_armed, footer_key_down;
-static bool footer_input_captured, footer_canceled, dialog_active, queued_shortcut;
+static bool footer_input_captured, footer_canceled, dialog_active, queued_shortcut, footer_hot;
 enum { CLOCK_FOOTER_LEFT_X = 244, CLOCK_FOOTER_Y = SCREEN_H - 18,
        CLOCK_FOOTER_W = 64, CLOCK_FOOTER_H = 13 };
 static Uint16 footer_backdrop[CLOCK_FOOTER_W * CLOCK_FOOTER_H];
@@ -20,6 +20,7 @@ static SDL_Rect clock_footer_rect(const Fonts *fonts, int offset_y)
     return (SDL_Rect){CLOCK_FOOTER_LEFT_X, CLOCK_FOOTER_Y + offset_y, width, CLOCK_FOOTER_H};
 }
 bool clock_menu_consumed_input(void) { return footer_input_captured; }
+bool clock_menu_hovered(void) { return footer_hot; }
 void clock_menu_sync_shortcut(void) { previous_o = isKeyPressed(KEY_NSPIRE_O); }
 void clock_menu_queue_shortcut(void)
 {
@@ -344,6 +345,7 @@ bool clock_menu_poll(SDL_Surface *screen, const Fonts *fonts, Movie *movie, Poin
     edge = edge || queued_shortcut;
     bool enabled = footer && !g_display_power_state.off && !g_display_power_state.off_fade_active;
     bool hot = enabled && footer_drawn_visible && hit(pointer, &footer_drawn_rect);
+    footer_hot=hot;
     uint32_t now = monotonic_clock_now_ms();
     bool key_down = isKeyPressed(KEY_NSPIRE_ENTER) ||
         (!isKeyPressed(KEY_NSPIRE_CTRL) && isKeyPressed(KEY_NSPIRE_5));

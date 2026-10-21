@@ -1,5 +1,6 @@
 #include "usb_controller.h"
 #include "usb_scsi_commands.h"
+#include "usb_phase_timing.h"
 #include "usb_registers.h"
 #include "usb_storage.h"
 #include "../../platform/hardware_acceleration.h"
@@ -272,6 +273,7 @@ static void close_pipes(UsbController *c)
     /* Native pipes contain no OS transfer requests: all payload DMA uses
      * our separate queue.
      * Consume ownership before calling native cleanup. */
+    if(input || output)native_usb_ui_queue_capture("pipe_close_before",NULL);
     if (input) {
         c->abort_pipe(input);
         c->close_pipe(input);
@@ -280,6 +282,7 @@ static void close_pipes(UsbController *c)
         c->abort_pipe(output);
         c->close_pipe(output);
     }
+    if(input || output)native_usb_ui_queue_capture("pipe_close_after",NULL);
 }
 static int detach(device_t d, UsbController *c)
 {
@@ -592,12 +595,28 @@ fail:
     controller = NULL;
     return false;
 }
+static void capture_private_queue(UsbController *c,const char *label,int result)
+{
+#if NDVIDEO_USB_TIMINGS
+    if(!usb_phase_timing_enabled() || !c)return;
+    const UsbTransport *t=&c->transport;
+    UsbQueueTimingPrivate state={t->phase,t->error,t->original_list,t->original_command,
+        t->queue_physical,t->descriptor_physical,t->last_token,t->timeout_phase,result};
+    native_usb_ui_queue_capture(label,&state);
+#else
+    (void)c;(void)label;(void)result;
+#endif
+}
 static int command_sync(const uint8_t *command, unsigned length, void *data, unsigned bytes)
 {
     UsbController *c = controller;
     if (!c)
         return -1;
     unsigned mask = native_critical_enter();
+#if NDVIDEO_USB_TIMINGS
+    if(!c->owner && !c->transport.transfers && c->transport.phase==USB_TRANSFER_IDLE)
+        capture_private_queue(c,"private_first_cbw_before",0);
+#endif
     if (c->owner || !usb_scsi_begin(&c->scsi, command, length, data, bytes, true)) {
         native_critical_leave(mask);
         return -1;
@@ -629,6 +648,16 @@ static bool reset_bulk_transport(UsbController *c)
        descriptor->bDescriptorType!=UDESC_INTERFACE || descriptor->bInterfaceClass!=UICLASS_MASS ||
        descriptor->bInterfaceSubClass!=UISUBCLASS_SCSI || descriptor->bInterfaceProtocol!=UIPROTO_MASS_BBB)
         goto failed;
+    /* Native pipe bindings may outlive a root-port interruption. A new class
+     * request cannot complete on a disconnected, disabled or suspended port;
+     * the native six-second timeout only postpones rediscovery. This is the
+     * same link predicate as the existing host-session readiness check.
+     * Pipe ownership remains intact for the normal abort/close cleanup. */
+    if((bus_read(&c->registers,0x30U)&0x85U)!=5U) {
+        capture_private_queue(c,"bulk_reset_unready",-ENODEV);
+        usb_controller_set_error("The USB connection is not ready. Reconnect USB and try again.",ENODEV);
+        return false;
+    }
     if(!nl_hassyscall(usbd_do_request) || !nl_hassyscall(usbd_clear_endpoint_stall)) {
         usb_controller_set_error("USB storage reset is unavailable on this OS.",ENOSYS);return false;
     }
@@ -642,19 +671,23 @@ static bool reset_bulk_transport(UsbController *c)
      * halt. Reset alone preserves DATA toggles. The clear-halt syscall also
      * resets the native HCD toggle; the new private transport starts at DATA0.
      * Native control requests run before taking the private schedule lease. */
+    capture_private_queue(c,"bulk_reset_before",0);
     native_critical_leave(0);
     c->bulk_reset_result=usbd_do_request(device,&request,NULL);
     native_critical_enter();
+    capture_private_queue(c,"bulk_reset_after",c->bulk_reset_result);
     if(c->bulk_reset_result || !c->attached || c->device!=device || c->input!=input || c->output!=output)
         goto failed;
     native_critical_leave(0);
     c->bulk_clear_in_result=usbd_clear_endpoint_stall(input);
     native_critical_enter();
+    capture_private_queue(c,"bulk_clear_in_after",c->bulk_clear_in_result);
     if(c->bulk_clear_in_result || !c->attached || c->device!=device || c->input!=input || c->output!=output)
         goto failed;
     native_critical_leave(0);
     c->bulk_clear_out_result=usbd_clear_endpoint_stall(output);
     native_critical_enter();
+    capture_private_queue(c,"bulk_clear_out_after",c->bulk_clear_out_result);
     if(c->bulk_clear_out_result || !c->attached || c->device!=device || c->input!=input || c->output!=output)
         goto failed;
     return true;
@@ -683,6 +716,14 @@ bool usb_storage_prepare_endpoints(void)
     if (!usb_transport_quiescent(&c->transport) || c->owner || usb_scsi_busy(&c->scsi) ||
         native_usb_ui_bus_is_leased()) {
         usb_controller_set_error("A USB storage transfer is still finishing.", EBUSY);
+        return false;
+    }
+    /* A retained callback/object is not electrical readiness. In particular,
+     * don't abort/close its native pipes on a disabled root: that can leave a
+     * native async-advance wait behind before the hub consumes the detach. */
+    if((bus_read(&c->registers,0x30U)&0x85U)!=5U) {
+        c->init_failed=true;
+        usb_controller_set_error("The USB connection is not ready. Reconnect USB and try again.",ENODEV);
         return false;
     }
     bool synchronize=c->attachments[c->selected_attachment].reset_required;
@@ -830,15 +871,22 @@ bool usb_storage_next_candidate(void)
 }
 void usb_storage_poll_connection(void)
 {
-    if (controller && controller->online && !(REG(controller->registers.port) & 1U)) {
+    unsigned mask=native_critical_enter();
+    if (controller && controller->online &&
+        (!(REG(controller->registers.port)&1U) || (REG(controller->registers.port)&2U))) {
         controller->online = false;
         /* Do not reuse the old attachment until the native stack reports a
          * fresh attach after a physical disconnect. */
         controller->init_failed = true;
+        controller->attached=false;
+        controller->interface_classes=0;
+        for(unsigned i=0;i<controller->attachment_count;++i)
+            controller->attachments[i].present=false;
         controller->error = ENODEV;
         controller->generation = ++next_generation;
         strcpy(error_text, "The USB drive was disconnected.");
     }
+    native_critical_leave(mask);
 }
 bool usb_controller_parked(void)
 {
@@ -886,6 +934,7 @@ int usb_controller_step(UsbCommand *request)
     if (elapsed > c->max_step_ticks)
         c->max_step_ticks = elapsed;
     if (result < 0) {
+        capture_private_queue(c,"private_transfer_failed",result);
         usb_controller_set_error(c->scsi.error == USB_TRANSPORT_DISCONNECTED
                                      ? "The USB drive was disconnected."
                                      : "USB read failed.",

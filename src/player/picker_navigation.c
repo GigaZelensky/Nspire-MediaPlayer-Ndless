@@ -6,6 +6,9 @@ static int captured = -1;
 static bool keyboard;
 static uint32_t transition_started;
 static bool transition_closing, transition_active, transition_backwards;
+static UiTransition row_focus,path_tooltip;
+static bool path_hot;
+static uint32_t path_since;
 enum { SHORTCUT_Y = 15, SHORTCUT_HEIGHT = 13, SHORTCUT_GAP = 5 };
 static const char *shortcut_key(unsigned index)
 {
@@ -41,6 +44,9 @@ void picker_navigation_reset(void)
 {
     captured = -1;
     keyboard = false;
+    path_hot=false;path_since=0;
+    ui_transition_init(&row_focus,true);
+    ui_transition_init(&path_tooltip,false);
     for (unsigned i = 0; i < 2; ++i) {
         ui_transition_init(hover + i, false);
         ui_transition_init(press + i, false);
@@ -55,7 +61,15 @@ int picker_navigation_poll(const Fonts *fonts, const PointerState *pointer, bool
         if (available(i) && pointer->visible && rect_contains_point(&rect, pointer->x, pointer->y))
             hot = (int)i;
     }
-    *consumed = captured >= 0 || hot >= 0;
+    int path_x=media_browser_at_root()?12:46;
+    SDL_Rect path_rect={path_x,28,308-path_x,14};
+    bool was_path_hot=path_hot;
+    path_hot=pointer->visible && rect_contains_point(&path_rect,pointer->x,pointer->y);
+    if(path_hot && !was_path_hot)path_since=now;
+    if(pointer->press_edge || enter_edge)path_since=now;
+    ui_transition_update(&path_tooltip,path_hot && now-path_since>=PICKER_TOOLTIP_DWELL_MS,
+                         now,UI_TOOLTIP_ANIM_MS);
+    *consumed = captured >= 0 || hot >= 0 || path_hot;
     if (captured < 0 && hot >= 0 && (pointer->press_edge || enter_edge)) {
         captured = hot;
         keyboard = enter_edge;
@@ -78,6 +92,17 @@ int picker_navigation_poll(const Fonts *fonts, const PointerState *pointer, bool
                                       UI_PRESS_ANIM_MS, PICKER_PRESS_RELEASE_ANIM_MS);
     }
     return result;
+}
+void picker_navigation_focus_rows(bool active,uint32_t now)
+{ui_transition_update(&row_focus,active,now,UI_HOVER_ANIM_MS);}
+uint8_t picker_navigation_rows_mix(uint32_t now)
+{return ui_transition_value(&row_focus,now,UI_HOVER_ANIM_MS);}
+bool picker_navigation_draw_tooltip(SDL_Surface *screen,const Fonts *fonts,const PointerState *pointer)
+{
+    if(!path_tooltip.current_mix || !pointer || !pointer->visible)return false;
+    char path[MAX_PATH_LEN];media_browser_breadcrumb(path,sizeof(path));
+    draw_path_hover_tooltip(screen,fonts,path,pointer,path_tooltip.current_mix);
+    return true;
 }
 void picker_navigation_draw(SDL_Surface *screen, const Fonts *fonts, uint8_t mix, int offset)
 {

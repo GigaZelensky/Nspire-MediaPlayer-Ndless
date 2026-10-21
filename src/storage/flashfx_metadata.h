@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 /* Datalight's four-byte protected tag; the validated profile supplies its
- * physical spare offset (+4 on CX II, +12 on the studied CX NTM). */
+ * physical spare offset (+4/+32 on captured CX II pages, +12 on CX NTM). */
 bool ffx_decode_tag(const uint8_t encoded[4], uint16_t *tag);
 /* Full 2048+64 raw header page: protected tag, magic and additive checksum. */
 bool ffx_decode_unit_header(const uint8_t *page, size_t bytes, uint32_t *sequence);

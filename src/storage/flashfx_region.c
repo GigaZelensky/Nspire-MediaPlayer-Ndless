@@ -54,7 +54,7 @@ bool ffx_region_begin_layout(FfxRegionLoader *r, const uint8_t *state, size_t by
         return false;
     memset(r, 0, sizeof(*r));
     r->status = FFX_REGION_ERROR;
-    if ((tag_column != 2052U && tag_column != 2060U) || !state || bytes != FFX_MAP_STATE_BYTES ||
+    if ((tag_column != 2052U && tag_column != 2060U && tag_column != 2080U) || !state || bytes != FFX_MAP_STATE_BYTES ||
         !owner || id >= le16(state + 536) || le16(state) != 64 || le16(state + 20) != 2048 ||
         le16(state + 40) != 63 || le16(state + 32) > 1024 || 538U + 2U * le16(state + 32) > bytes)
         return false;
@@ -145,8 +145,18 @@ bool ffx_region_supply(FfxRegionLoader *r, uint64_t token, const uint8_t *data, 
     r->status = FFX_REGION_MORE;
     if (r->phase == HEADER) {
         uint32_t sequence;
-        if (!ffx_decode_unit_header_layout(data, bytes, &sequence, r->tag_column))
-            return fail(r, 7);
+        if (!ffx_decode_unit_header_layout(data, bytes, &sequence, r->tag_column)) {
+            /* Captured CX II pages also place the protected tag at spare+32.
+             * Select that layout only on the first unit, with an erased +4
+             * tag and a complete signature/checksum/protected-tag validation.
+             * Every later unit and data tag must use that same column. The
+             * classic-CX ECC layout never enters this SPI-only alternative. */
+            if (r->count || r->tag_column != 2052U || bytes != 2112U ||
+                memcmp(data + 2052U,"\xff\xff\xff\xff",4) ||
+                !ffx_decode_unit_header_layout(data,bytes,&sequence,2080U))
+                return fail(r, 7);
+            r->tag_column = 2080U;
+        }
         unsigned unit = r->cursor - 1U, i = r->count++;
         while (i && r->units[i - 1U].sequence > sequence) {
             r->units[i] = r->units[i - 1U];

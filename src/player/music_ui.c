@@ -1,11 +1,14 @@
 #include "music_ui.h"
 #include "cover_image.h"
+#include "wallpaper_image.h"
 #include "media_files.h"
 #include "storage/usb/usb_storage.h"
 #include "usb_browser.h"
+#include "platform/battery_gauge.h"
+#include "platform/battery_meter.h"
 #include <errno.h>
 
-static const char *const views[] = {"Album cover", "Flow", "Vortex", "Prism", "Pulse"};
+static const char *const views[] = {"Album cover", "Flow", "Vortex", "Prism", "Pulse", "Oscilloscope", "Spectrum"};
 static unsigned remembered_view;
 static PlaybackMode remembered_mode = PLAYBACK_MODE_AUTO_NEXT;
 static const char *codec_name(unsigned codec)
@@ -162,6 +165,8 @@ void music_ui_open(MusicUi *ui, const char *path, LoadingProgress *loading)
                        !*ui->tags.title && usb_path(path));
     audio_metadata_display_text(ui->tags.artist, ui->artist, sizeof(ui->artist));
     audio_metadata_display_text(ui->tags.album, ui->album, sizeof(ui->album));
+    (void)wallpaper_image(ui_theme_target()->accent_mid);
+    loading_progress_tick(loading, false);
     /* Resolve once before USB audio starts; hover never scans the filesystem. */
     find_previous_movie_path(path, ui->previous, sizeof(ui->previous));
     find_next_movie_path(path, ui->next, sizeof(ui->next));
@@ -276,7 +281,7 @@ void music_ui_update(MusicUi *ui, AudioPlayback *audio, const AudioPlaybackInfo 
             ui->press[i].current_mix != (ui->press[i].target_active ? 255 : 0))
             ui->animating = true;
     }
-    ui_transition_update(&ui->info, c->info_open, now, 160);
+    ui_transition_update_press_ex(&ui->info,c->info_open,now,180,150);
     if (ui->info.current_mix != (c->info_open ? 255 : 0))
         ui->animating = true;
     ui_transition_update(&ui->art, c->art_open, now, 180);
@@ -349,6 +354,7 @@ static void music_label(SDL_Surface *s, const Fonts *f, int x, int y, const char
 {
     char fitted[256];
     copy_fitted_text(f->white, text, fitted, sizeof(fitted), width);
+    draw_ui_label_tint(s,f,x+1,y+1,fitted,UI_COLOR_BLACK,mix);
     draw_ui_label_tint(s, f, x, y, fitted, secondary ? picker_text_color(true) : UI_COLOR_WHITE,
                        mix);
 }
@@ -366,6 +372,12 @@ static void music_corner_pixel(SDL_Surface *s,int x,int y,Uint16 body,Uint16 edg
 static void music_button(SDL_Surface *s,const Fonts *f,const SDL_Rect *r,const char *text,
                          uint8_t hover,uint8_t press)
 {
+    /* Sink the face into its existing hit area with the same motion as the
+     * label/icon. The custom rounded renderer also needs the recessed light
+     * direction used by the standard controls, not only a darker base. */
+    SDL_Rect face=*r;
+    int dx=pressed_control_offset_x(press),dy=pressed_control_offset_y(press);
+    face.x+=dx;face.y+=dy;face.w-=2*dx;face.h-=2*dy;r=&face;
     /* A circular 5 px radius, sampled on a 4x4 subpixel grid. Inset its
      * coverage by one pixel in each axis for the inner edge: this keeps the
      * diagonal stroke connected and bright on the low-resolution display.
@@ -374,6 +386,8 @@ static void music_button(SDL_Surface *s,const Fonts *f,const SDL_Rect *r,const c
         {79,255,255,255,255},{191,255,255,255,255},{255,255,255,255,255}};
     Uint16 base=pressed_control_base(rgb565_lerp(UI_COLOR_GUNMETAL,ui_theme()->row_selected,hover,255),press);
     Uint16 top=blend_rgb565(base,UI_COLOR_WHITE,38),bottom=blend_rgb565(base,UI_COLOR_BLACK,92);
+    top=rgb565_lerp(top,blend_rgb565(base,UI_COLOR_BLACK,85),press,255);
+    bottom=rgb565_lerp(bottom,blend_rgb565(base,UI_COLOR_WHITE,40),press,255);
     Uint16 edge=control_outline_color(base,max_u8(hover,press));
     int half=r->h/2;
     for(int row=0;row<r->h;++row) {
@@ -381,7 +395,8 @@ static void music_button(SDL_Surface *s,const Fonts *f,const SDL_Rect *r,const c
         Uint16 c=rgb565_lerp(top,bottom,row,r->h-1);
         /* Let the reflection taper continuously instead of ending in a hard
          * stripe one third of the way down the larger play/pause button. */
-        if(row<half)c=blend_rgb565(c,UI_COLOR_WHITE,36*(half-row)*(half-row)/(half*half));
+        if(row<half)c=blend_rgb565(c,UI_COLOR_WHITE,
+            36*(half-row)*(half-row)*(255-press)/(half*half*255));
         int inset=distance<5?5:0;
         SDL_Rect span={r->x+inset,r->y+row,r->w-2*inset,1};
         fill_rect_rgb565(s,&span,distance?c:edge);
@@ -446,7 +461,7 @@ static void button(SDL_Surface *s, const Fonts *f, MusicUi *ui, const MusicContr
             line(s, x + 7, y + 5, x + 12, y + 11, color);
             line(s, x + 12, y + 11, x + 15, y + 8, color);
         }
-        else if (ui->view == MUSIC_VIEW_FLOW)
+        else if (ui->view == MUSIC_VIEW_SPECTRUM)
         {
             for (int i = 0; i < 5; ++i)
                 box(s, x + i * 4, y + 12 - (i % 3 + 1) * 4, 2, (i % 3 + 1) * 4, color);
@@ -574,14 +589,18 @@ static void info_panel(SDL_Surface *s, const Fonts *f, const char *path,
     uint8_t mix = ui->info.current_mix;
     if (!mix)
         return;
-    SDL_Rect panel = {12, 36, 296, 151};
+    SDL_Rect panel = {12, 36, 296, 151+12*NDMEDIA_BATTERY_GAUGE_TEST+24*NDMEDIA_BATTERY_METER};
+    panel.y+=(255-mix)*5/255;
+    SDL_Rect full={0,0,SCREEN_W,SCREEN_H},shadow={panel.x+2,panel.y+3,panel.w,panel.h};
+    dim_rect_rgb565(s,&full,(112U*mix+127)/255);
+    dim_rect_rgb565(s,&shadow,(100U*mix+127)/255);
     SDL_Surface *target;
     SDL_Rect clip;
     int dx, dy;
     SDL_Surface *layer = begin_faded_region_draw(s, &panel, mix, &target, &clip, &dx, &dy);
     SDL_Rect r = offset_sdl_rect(&panel, dx, dy);
     fill_rect_rgb565(target, &r, ui_theme()->tooltip_base);
-    draw_soft_glass_panel(target, &r, ui_theme()->tooltip_base, false);
+    draw_accent_info_panel(target,&r);
     char text[256], size[32], duration[24];
     int y = r.y + 9;
     music_label(target, f, r.x + 9, y, ui->title, 278, false, 255);
@@ -616,6 +635,48 @@ static void info_panel(SDL_Surface *s, const Fonts *f, const char *path,
         y += 14;
     }
     const char *name = strrchr(path, '/');
+#if NDMEDIA_BATTERY_METER
+    BatteryMeterInfo meter;
+    if(battery_meter_info(&meter)) {
+        if(meter.charging || meter.checking)
+            snprintf(text,sizeof(text),"Battery: %s",meter.charging?"charging":"checking battery");
+        else if(!meter.percent_valid)
+            snprintf(text,sizeof(text),"Battery: waiting for fresh voltage");
+        else if(meter.voltage_valid)
+            snprintf(text,sizeof(text),"Battery estimate %u%% / %lu.%02lu V",
+                (unsigned)(meter.percent_tenths+5)/10,(unsigned long)meter.millivolts/1000,
+                (unsigned long)(meter.millivolts%1000)/10);
+        else snprintf(text,sizeof(text),"Battery %u%% / cached OS level",(unsigned)(meter.percent_tenths+5)/10);
+        music_label(target,f,r.x+9,y,text,278,true,255);y+=12;
+        if(meter.charging || meter.checking)
+            snprintf(text,sizeof(text),"Charging voltage excluded from learning");
+        else if(meter.source!=BATTERY_METER_OS)
+            snprintf(text,sizeof(text),"%s / OS %lu%%",meter.source==BATTERY_METER_LEARNED?
+                "Default curve + local learning":"Smoothed default curve",(unsigned long)meter.os_percent);
+        else snprintf(text,sizeof(text),"OS %lu%%; waiting for a discharge sample",(unsigned long)meter.os_percent);
+    } else snprintf(text,sizeof(text),"Battery: native reading not available");
+    music_label(target,f,r.x+9,y,text,278,true,255);y+=12;
+#endif
+#if NDMEDIA_BATTERY_GAUGE_TEST
+    BatteryGaugeInfo battery;
+    uint32_t battery_now=monotonic_clock_now_ms();
+    BatteryPowerInfo power;
+    bool power_live=battery_diagnostics_power(battery_now,&power);
+    bool external=power_live && (power.charging || power.checking);
+    if(battery_gauge_info(battery_now,&battery)) {
+        if(battery.percent_valid && !external)
+            snprintf(text,sizeof(text),"Battery %u%% / %lu.%02lu V (estimate)",
+                (unsigned)(battery.percent_tenths+5)/10,(unsigned long)battery.millivolts/1000,
+                (unsigned long)(battery.millivolts%1000)/10);
+        else
+            snprintf(text,sizeof(text),"Battery %lu.%02lu V / %s",
+                (unsigned long)battery.millivolts/1000,(unsigned long)(battery.millivolts%1000)/10,
+                external?(power.charging?"charging":"checking battery"):
+                    battery.charging?"charging":battery.checking?"checking battery":"load not calibrated");
+    } else if(external)snprintf(text,sizeof(text),"Battery: %s",power.charging?"charging":"checking battery");
+    else snprintf(text,sizeof(text),"Battery: no recent sample");
+    music_label(target,f,r.x+9,y,text,278,true,255);y+=12;
+#endif
     name = name ? name + 1 : path;
     display_text_ascii(name, text, sizeof(text), usb_path(path));
     music_label(target, f, r.x + 9, y, text, 278, false, 255);
@@ -648,7 +709,7 @@ void music_ui_render(SDL_Surface *s, const Fonts *f, const char *path, AudioPlay
     if (NDMEDIA_VISUALIZATIONS && ui->view)
         visualization(s, ui);
     else
-        fill_rect_rgb565(s, &full, UI_COLOR_BG_BOTTOM);
+        draw_player_wallpaper(s,255);
     SDL_Surface *screen = s, *layer = NULL;
     SDL_Rect clip;
     int dx, dy;
@@ -665,11 +726,47 @@ void music_ui_render(SDL_Surface *s, const Fonts *f, const char *path, AudioPlay
 
         button(s, f, ui, c, (SDL_Rect){8, 8, 44, 22}, MUSIC_BACK, "Back");
         button(s, f, ui, c, (SDL_Rect){268, 8, 44, 22}, MUSIC_INFO, "Info");
+        int header_y=8+(22-NSP_FONT_HEIGHT)/2-1;
         if (ui->view)
-            music_label(s, f, 61, 16, ui->title, 199, false, 255);
+            music_label(s, f, 61, header_y, ui->title, (NDMEDIA_BATTERY_GAUGE_TEST || NDMEDIA_BATTERY_METER)?138:199, false, 255);
         else
-            music_label(s, f, 140, 16, "Music", 100, false, 255);
+            music_label(s,f,(SCREEN_W-nSDL_GetStringWidth(f->white,"Music"))/2,header_y,"Music",100,false,255);
         char text[256];
+        draw_battery_meter(s,f,258-battery_meter_width(f),header_y,255);
+#if NDMEDIA_BATTERY_GAUGE_TEST
+        BatteryGaugeInfo battery;
+        bool fresh=battery_gauge_info(now,&battery);
+        BatteryPowerInfo power;
+        bool power_live=battery_diagnostics_power(now,&power);
+        bool external=power_live && (power.charging || power.checking);
+        if(external)snprintf(text,sizeof(text),"%s",power.charging?"Charge":"Power");
+        else if(fresh && battery.percent_valid)
+            snprintf(text,sizeof(text),"%u%%",(unsigned)(battery.percent_tenths+5)/10);
+        else if(fresh)
+            snprintf(text,sizeof(text),"%lu.%02luV",(unsigned long)battery.millivolts/1000,
+                (unsigned long)(battery.millivolts%1000)/10);
+        else snprintf(text,sizeof(text),"--");
+        /* Status only: it shares the white header text and does no I/O. */
+        if(external)draw_battery_power_glyph(s,207,15,255,power.checking);
+        else {
+            box(s,204,15,14,1,UI_COLOR_WHITE);box(s,204,22,14,1,UI_COLOR_WHITE);
+            box(s,204,16,1,6,UI_COLOR_WHITE);box(s,217,16,1,6,UI_COLOR_WHITE);
+            box(s,218,17,2,4,UI_COLOR_WHITE);
+            if(fresh && battery.percent_valid) {
+                unsigned fill=10*battery.percent_tenths/1000;
+                if(fill)box(s,206,17,fill,4,UI_COLOR_WHITE);
+            }
+        }
+        int text_x=224;
+        if(!external && fresh && battery.percent_valid) {
+            /* Draw the approximation mark directly; small bitmap fonts do
+             * not consistently provide a readable ASCII tilde glyph. */
+            box(s,224,18,1,1,UI_COLOR_WHITE);box(s,225,17,2,1,UI_COLOR_WHITE);
+            box(s,227,18,2,1,UI_COLOR_WHITE);box(s,229,17,1,1,UI_COLOR_WHITE);
+            text_x=232;
+        }
+        music_label(s,f,text_x,16,text,263-text_x,false,255);
+#endif
         if (!ui->view)
         {
             art(s, f, ui);

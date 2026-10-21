@@ -8,6 +8,7 @@ bool usb_browser_device_present(void);
 bool usb_browser_adapter_present(void);
 void usb_browser_note_disconnect(void);
 bool usb_browser_auto_pending(uint32_t now);
+void usb_browser_library_presented(void);
 void usb_browser_idle_discovery(SDL_Surface *screen, uint32_t now);
 /* Failed audio must be suspended first. Service native USB workers even when
  * the upstream hub is present and the picker/storage scan is already done. */

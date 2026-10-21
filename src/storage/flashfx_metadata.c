@@ -41,7 +41,7 @@ bool ffx_decode_unit_header_layout(const uint8_t *page, size_t bytes, uint32_t *
     static const uint8_t magic[16] = {0xcc, 0xdd, 0x44, 0x4c, 0x5f, 0x46, 0x53, 0x34,
                                       0x2e, 0x30, 0x30, 0xff, 0xff, 0xff, 0xff, 0xff};
     uint16_t tag;
-    if ((tag_column != 2052U && tag_column != 2060U) || !page || bytes != 2112U || !sequence ||
+    if ((tag_column != 2052U && tag_column != 2060U && tag_column != 2080U) || !page || bytes != 2112U || !sequence ||
         !ffx_decode_tag(page + tag_column, &tag) || tag != 0x48e2U || memcmp(page, magic, 16))
         return false;
     unsigned sum = 0;

@@ -102,6 +102,13 @@ static void feedback(MusicVisual *v, unsigned mode)
 {
     uint16_t *out = v->pixels[v->front];
     const uint16_t *in = v->pixels[v->front ^ 1];
+    if(mode>=5) {
+        for(unsigned i=0;i<W*H;++i) {
+            uint16_t p=in[i];unsigned r=p>>11,g=(p>>5)&63,b=p&31;
+            out[i]=(uint16_t)((r>4?r-4:0)<<11|(g>8?g-8:0)<<5|(b>4?b-4:0));
+        }
+        return;
+    }
     int twist = mode == 2   ? 14 + (int)v->treble / 16 + v->onset/24
                 : mode == 3 ? -6-(int)v->treble/48
                 : mode == 4 ? 0
@@ -137,7 +144,7 @@ static void ribbons(MusicVisual *v, unsigned mode, unsigned energy)
         for (unsigned i = 0; i < 96; ++i)
         {
             unsigned t = i * 512 / 95;
-            int wave = v->wave[i] * (6+v->mid/24) / 32768;
+            int wave = v->wave[i] * (24+v->mid/10) / 32768;
             int x, y;
             if (mode == 1)
             {
@@ -151,7 +158,8 @@ static void ribbons(MusicVisual *v, unsigned mode, unsigned energy)
             else
             {
                 unsigned a = t + phase / 3 + ribbon * 13;
-                int radius = 35 + (int)v->bass / 12 + sn(phase / 7 + t * 3) * 6 / 32768;
+                int radius = 25 + (int)v->bass / 10 + (int)v->onset/24 +
+                    sn(phase / 7 + t * (2+v->treble/85)) * (4+v->mid/32) / 32768;
                 x = W * 128 + sn(a) * radius / 128;
                 y = H * 128 + sn(a * 2 + phase / 5) * (20 + cs(phase / 9) * 9 / 32768) / 128 +
                     wave * 128;
@@ -184,8 +192,9 @@ static void vortex(MusicVisual *v, unsigned energy)
         for (unsigned i = 0; i < 78; ++i)
         {
             unsigned a = phase + arm * 512 / 5 + i * 4;
-            int radius = 5 * 256 + (int)i * (110 + (int)v->bass / 3+v->onset/8);
-            int wave = v->wave[i % 96] * 4 / 32768;
+            int radius = 5 * 256 + (int)i * (75 + (int)v->bass / 3+v->onset/3)+
+                (int)v->bands[(i/4+arm*3)%MUSIC_VIS_BANDS]*8;
+            int wave = v->wave[i % 96] * 12 / 32768;
             int x = W * 128 + sn(a) * radius / 32768,
                 y = H * 128 + cs(a) * radius * 3 / (32768 * 4) + wave * 256;
             stroke(frame, px, py, x, y, color(phase / 2 + arm * 270 + i * 5+v->treble*3), 100 + energy / 2);
@@ -202,7 +211,7 @@ static void pulse(MusicVisual *v, unsigned energy)
     for (unsigned i = 0; i <= 144; ++i)
     {
         unsigned a = i * 512 / 144, band = (i % 144) * MUSIC_VIS_BANDS / 144;
-        int wave = v->wave[i % 96] * 7 / 32768;
+        int wave = v->wave[i % 96] * 14 / 32768;
         int radius = (20 + (int)v->bass / 14 + (int)v->bands[band] / 18 + v->onset/32+wave) * 256;
         int x = W * 128 + sn(a + phase / 7) * radius / 32768;
         int y = H * 128 + cs(a + phase / 7) * radius / 32768;
@@ -219,9 +228,47 @@ static void pulse(MusicVisual *v, unsigned energy)
         py = y;
     }
 }
+static void spectrum(MusicVisual *v)
+{
+    uint16_t *frame=v->pixels[v->front];
+    for(unsigned band=0;band<MUSIC_VIS_BANDS;++band) {
+        int height=v->bands[band]*96/255,peak=v->peaks[band]*96/255;
+        int x=8+(int)band*6;
+        for(int y=0;y<height;++y) {
+            uint16_t c=y>78?0xfaa8:y>52?0xfdca:0x5ed3;
+            for(int j=0;j<4;++j)frame[(109-y)*W+x+j]=c;
+        }
+        if(peak)for(int j=0;j<4;++j)frame[(108-peak)*W+x+j]=0xffff;
+    }
+}
+static void oscilloscope(MusicVisual *v)
+{
+    uint16_t *frame=v->pixels[v->front];
+    /* Trigger the stereo traces together at the strongest rising zero
+     * crossing. Keep a fixed 384-sample window, not a fake time animation. */
+    unsigned start=0;int best=0;
+    for(unsigned i=1;i<128;++i) {
+        int before=v->pcm[2*(i-1)],after=v->pcm[2*i];
+        if(before<=0 && after>0 && after-before>best){start=i;best=after-before;}
+    }
+    for(unsigned channel=0;channel<2;++channel) {
+        uint16_t c=channel?0x4fdf:0xfd68;
+        int center=channel?86:34,px=8*256,py=center*256;
+        for(unsigned x=0;x<144;++x) {
+            unsigned first=start+x*384/144,last=start+(x+1)*384/144;
+            int lo=32767,hi=-32768;
+            for(unsigned i=first;i<last;++i){int p=v->pcm[2*i+channel];if(p<lo)lo=p;if(p>hi)hi=p;}
+            int xx=(8+(int)x)*256,top=center*256-hi*22/128,bottom=center*256-lo*22/128;
+            stroke(frame,xx,top,xx,bottom,c,210);
+            int yy=(top+bottom)/2;
+            if(x)stroke(frame,px,py,xx,yy,c,200);
+            px=xx;py=yy;
+        }
+    }
+}
 void music_visual_frame(MusicVisual *v, unsigned effect, uint32_t now)
 {
-    if (effect < 1 || effect > 4)
+    if (effect < 1 || effect > 6)
         return;
     if (v->effect != effect)
     {
@@ -242,11 +289,15 @@ void music_visual_frame(MusicVisual *v, unsigned effect, uint32_t now)
         unsigned index = i * (MUSIC_VIS_SAMPLES - 5) / 95;
         for (unsigned j = 0; j < 5; ++j)
             sum += ((int)v->pcm[(index + j) * 2] + v->pcm[(index + j) * 2 + 1]) / 2;
-        v->wave[i] = (int16_t)((v->wave[i] * 2 + sum / 5) / 3);
+        v->wave[i] = (int16_t)(sum / 5);
     }
     if (energy < 2)
         return;
-    if (effect == 2)
+    if (effect == 6)
+        spectrum(v);
+    else if (effect == 5)
+        oscilloscope(v);
+    else if (effect == 2)
         vortex(v, energy);
     else if (effect == 4)
         pulse(v, energy);

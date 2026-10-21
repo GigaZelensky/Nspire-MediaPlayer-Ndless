@@ -1,6 +1,19 @@
 #ifndef NMEDIA_CONFIG_H
 #define NMEDIA_CONFIG_H
 #include <stdbool.h>
+/* The public meter is independent of default-off diagnostic recording and
+ * of the private experimental profile used during hardware development. */
+#ifndef NDMEDIA_BATTERY_METER
+#if (defined(NDMEDIA_BATTERY_GAUGE_TEST) && NDMEDIA_BATTERY_GAUGE_TEST) || \
+    (defined(NDMEDIA_BATTERY_CALIBRATION) && NDMEDIA_BATTERY_CALIBRATION)
+#define NDMEDIA_BATTERY_METER 0
+#else
+#define NDMEDIA_BATTERY_METER 1
+#endif
+#endif
+#ifndef NDMEDIA_BATTERY_SERVICE
+#define NDMEDIA_BATTERY_SERVICE NDMEDIA_BATTERY_METER
+#endif
 #ifndef NDVIDEO_WITH_H264
 #define NDVIDEO_WITH_H264 1
 #endif

@@ -85,7 +85,7 @@ static uint32_t literal(const PortableView *v, uint32_t pc)
  * before publication. Explicit connection can finish the same pending scan. */
 static struct {
     NativeUsbUiApi *output;
-    bool classic, event_setter;
+    bool classic, event_setter, hinted;
     unsigned phase;
     int result;
     uint32_t cursor, end, optional_ambiguous;
@@ -244,15 +244,52 @@ static bool resolve_derive(const PortableView *v, NativeUsbUiApi *api)
     }
     return true;
 }
+static bool hinted_api(const PortableView *v,bool classic_cx,NativeUsbUiApi *out)
+{
+    /* Search hints for an inspected CX II 6.2 layout. These are candidates,
+     * never trusted bindings: every complete function witness, descriptor and
+     * derived relationship is checked exactly as in the general resolver.
+     * Other firmware/regions and rejected hints retain the bounded full scan. */
+    if(classic_cx)return false;
+    static const uint32_t functions[UI_FUNCTIONS]={
+        0x100069e4,0x10006d18,0x10006e44,0x10006c90,0x10020134,0x1002022c,
+        0x103ce000,0x103ce0b8,0x10101ebc,0x10429934,0x10489a14,0x1061db6c,
+        0x1048a1d4,0x10479a60,0x10a60ea4,0x10a627cc,0x1047722c,0x10489c5c,
+        0x10489c40,0x103a7154,0x103a700c,0,0x10a63498,0,0x10a6c2a4,
+        0x10476804,0x10476d30,0x10a63444,0x10a64bf0,0x10020288,0x101022a0,0};
+    NativeUsbUiApi candidate={.display_descriptor=0x10c4e550U};
+    for(unsigned i=0;i<UI_FUNCTIONS;++i) {
+        if(functions[i] && !native_usb_ui_role_matches(v,functions[i],i))return false;
+        candidate.function[i]=functions[i];
+    }
+    uint32_t d=candidate.display_descriptor;
+    const uint32_t shape[]={0xe3e0300eU,0xe92d4070U,0xe5813008U,0xe590001cU};
+    if(!v->allow_span(v->context,d,0x3c,PORTABLE_DATA) || word(v,d+12)!=0x494f4452U ||
+       word(v,d+0x2c)!=31U || !prefix(v,word(v,d+0x38),shape,4) || !resolve_derive(v,&candidate))return false;
+    *out=candidate;return true;
+}
+static bool resolve_input_window(const PortableView *v,const NativeUsbUiApi *api)
+{
+    uint32_t begin=v->code_begin,end=begin+0x1000000U;
+    uint32_t center=branch(v,api->function[UI_CURSOR_SHOW]+(api->classic_cx?0x12c:0x198));
+    if(center<begin+0x10000U || center>end-0x10000U)return false;
+    resolver.cursor=(center-0x10000U)&~3U;resolver.end=center+0x10000U;resolver.phase=1;
+    return true;
+}
 int native_usb_ui_resolve_step(const PortableView *v, bool classic_cx, NativeUsbUiApi *api,
                                unsigned word_budget)
 {
     if (!v || !api || !word_budget) return -1;
     if (resolver.output != api || resolver.classic != classic_cx) {
         if (!resolve_start(v, classic_cx, api)) return resolve_error();
+        if(hinted_api(v,classic_cx,api)) {
+            if(!resolve_input_window(v,api)) {
+                if(!resolve_start(v,classic_cx,api))return resolve_error();
+            } else resolver.hinted=true;
+        }
     }
     if (resolver.result) return resolver.result;
-    uint32_t begin = v->code_begin, end = begin + 0x1000000U;
+    uint32_t begin = v->code_begin;
     while (resolver.phase == 0 && resolver.cursor < resolver.end) {
         uint32_t page = resolver.cursor & ~4095U;
         if (!v->allow_span(v->context, page, 4096, PORTABLE_CODE)) {
@@ -322,12 +359,7 @@ int native_usb_ui_resolve_step(const PortableView *v, bool classic_cx, NativeUsb
     if (resolver.phase == 0) {
         if (!resolve_derive(v, api)) return resolve_error();
         /* Input code lives close to the checked cursor call targets. */
-        uint32_t center = branch(v, api->function[UI_CURSOR_SHOW] + (api->classic_cx ? 0x12c : 0x198));
-        if (center < begin + 0x10000U || center > end - 0x10000U)
-            return resolve_error();
-        resolver.cursor = (center - 0x10000U) & ~3U;
-        resolver.end = center + 0x10000U;
-        resolver.phase = 1;
+        if(!resolve_input_window(v,api))return resolve_error();
         return 0;
     }
     const uint32_t setter[] = {0xe59f3004U, 0xe1c300b0U, 0xe12fff1eU};
@@ -347,6 +379,10 @@ int native_usb_ui_resolve_step(const PortableView *v, bool classic_cx, NativeUsb
            v->allow_span(v->context, api->cursor_count, 4, PORTABLE_DATA) &&
            v->allow_span(v->context, api->tracking_flags, 4, PORTABLE_DATA) &&
            v->allow_span(v->context, api->busy_interval, 4, PORTABLE_DATA);
+    if(!valid && resolver.hinted) {
+        if(!resolve_start(v,classic_cx,api))return resolve_error();
+        return 0;
+    }
     resolver.result = valid ? 1 : -1;
     return resolver.result;
 }

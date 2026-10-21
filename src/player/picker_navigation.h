@@ -9,4 +9,7 @@ void picker_navigation_draw(SDL_Surface *, const Fonts *, uint8_t, int);
 void picker_navigation_animate(uint32_t, bool, bool);
 uint8_t picker_navigation_mix(uint32_t);
 int picker_navigation_offset(uint32_t);
+void picker_navigation_focus_rows(bool,uint32_t);
+uint8_t picker_navigation_rows_mix(uint32_t);
+bool picker_navigation_draw_tooltip(SDL_Surface *,const Fonts *,const PointerState *);
 #endif

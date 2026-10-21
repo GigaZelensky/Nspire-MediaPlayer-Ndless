@@ -1,6 +1,29 @@
 #include "player_internal.h"
 #include "picker_navigation.h"
 #include "media_browser.h"
+#include "player_data.h"
+
+#if NDVIDEO_USB_TIMINGS
+static SDL_Surface *loading_diagnostic_frame;
+static void capture_loading_diagnostic(SDL_Surface *screen)
+{
+    if(!loading_diagnostic_frame && screen->w==SCREEN_W && screen->h==SCREEN_H)
+        loading_diagnostic_frame=capture_screen_surface(screen);
+}
+#endif
+void save_loading_diagnostic(void)
+{
+#if NDVIDEO_USB_TIMINGS
+    /* Capture memory during the popup; write only after playback/USB close.
+     * One overwritten bitmap, never an accumulating screenshot stream. */
+    if(loading_diagnostic_frame) {
+        char path[MAX_PATH_LEN];
+        if(player_data_prepare() && player_data_path("ndmedia-loading.bmp.tns",path,sizeof(path)))
+            SDL_SaveBMP(loading_diagnostic_frame,path);
+        SDL_FreeSurface(loading_diagnostic_frame);loading_diagnostic_frame=NULL;
+    }
+#endif
+}
 
 SDL_Rect picker_row_rect_for_y(int row_y)
 {
@@ -332,6 +355,9 @@ void draw_loading_overlay_mix(
     draw_vertical_gradient(screen, &accent, UI_COLOR_ACCENT, UI_COLOR_ACCENT_DEEP);
     draw_ui_label(screen, fonts, panel.x + 12, panel.y + 10, label ? label : "Loading");
     draw_ui_label(screen, fonts, panel.x + spinner_x, panel.y + 10, spinner);
+#if NDVIDEO_USB_TIMINGS
+    if(mix==255)capture_loading_diagnostic(screen);
+#endif
 }
 
 void draw_loading_overlay_label_mix(
@@ -501,6 +527,9 @@ void draw_loading_transition_frame(
 )
 {
     SDL_Rect full_screen = {0, 0, SCREEN_W, SCREEN_H};
+    SDL_Rect old_clip;
+    SDL_GetClipRect(screen,&old_clip);
+    SDL_SetClipRect(screen,NULL);
 
     if (snapshot) {
         SDL_BlitSurface(snapshot, NULL, screen, NULL);
@@ -511,6 +540,7 @@ void draw_loading_transition_frame(
         dim_rect_rgb565(screen, &full_screen, (UI_LOADING_DIM_ALPHA * mix + 127) / 255);
     }
     draw_loading_overlay_mix(screen, fonts, label, phase, mix, opening);
+    SDL_SetClipRect(screen,&old_clip);
     present_screen(screen);
 }
 

@@ -6,6 +6,8 @@
 #include "media_browser.h"
 #include "../storage/usb/usb_storage.h"
 #include "../storage/usb/usb_controller.h"
+#include "../platform/battery_diagnostics.h"
+#include "header_diagnostic.h"
 #include <errno.h>
 
 bool ensure_debug_ring_storage(void)
@@ -402,6 +404,7 @@ void report_movie_open_failure(const char *movie_path, MovieCodec missing_codec)
     debug_tracef("open failed: %s", debug_last_error());
     char detail[128];
     snprintf(detail, sizeof(detail), "%.120s", debug_last_error());
+    header_diagnostic_compare(movie_path);
     bool saved = save_failure_report(movie_path, NULL, "open-failure");
     snprintf(text, sizeof(text), "%s\n%s", detail,
         saved ? "Details saved to the error log." : "Error report could not be saved.");
@@ -1588,7 +1591,11 @@ bool monotonic_clock_try_init_hw_timer(void)
     uint32_t baseline;
     g_clock.using_hw_timer = timer_start_player((TimerSnapshot){UINT32_MAX,
         MONOTONIC_TIMER_CONTROL_ENABLE_32BIT, MONOTONIC_TIMER_CLOCK_SOURCE_32768HZ}, &baseline);
-    if (g_clock.using_hw_timer) g_clock.last_value = baseline;
+    if (g_clock.using_hw_timer) {
+        g_clock.last_value = baseline;
+        native_clock.player=(TimerSnapshot){UINT32_MAX,MONOTONIC_TIMER_CONTROL_ENABLE_32BIT,
+                                            MONOTONIC_TIMER_CLOCK_SOURCE_32768HZ};
+    }
     return g_clock.using_hw_timer;
 }
 
@@ -1672,7 +1679,9 @@ uint32_t monotonic_clock_ticks_to_ms(uint64_t ticks)
 
 uint32_t monotonic_clock_now_ms(void)
 {
-    return monotonic_clock_ticks_to_ms(monotonic_clock_now_ticks());
+    uint32_t now=monotonic_clock_ticks_to_ms(monotonic_clock_now_ticks());
+    battery_diagnostics_tick(now);
+    return now;
 }
 
 void monotonic_clock_shutdown(void)

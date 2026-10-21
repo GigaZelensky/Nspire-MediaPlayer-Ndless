@@ -8,6 +8,7 @@
 #include <string.h>
 #include <errno.h>
 #include "usb_scsi.h"
+#include "usb_phase_timing.h"
 typedef void *device_t,*usbd_device_handle,*usbd_interface_handle,*usbd_pipe_handle;
 typedef int usbd_status;
 typedef unsigned UsbRegisters;
@@ -36,7 +37,7 @@ static const char *operation;
 static char error_text[128];
 static bool available,device_pending_csw,native_lease;
 static unsigned step,fail_at,detach_at,mask,device_in_toggle,device_out_toggle,pipe_closes;
-static unsigned registers;
+static unsigned registers,port_status;
 static uint8_t device;
 static usb_interface_descriptor_t descriptor={9,4,7,0,2,8,6,80,0};
 static void *interface_slot;
@@ -76,7 +77,7 @@ static int usbd_clear_endpoint_stall(void *pipe)
     if(pipe==input)device_in_toggle=0;else device_out_toggle=0;
     return 0;
 }
-static uint32_t bus_read(void *c,unsigned o){(void)c;(void)o;return 0;}
+static uint32_t bus_read(void *c,unsigned o){(void)c;return o==0x30U?port_status:0;}
 static void bus_write(void *c,unsigned o,uint32_t v){(void)c;(void)o;(void)v;}
 static uint32_t ticks(void *c){(void)c;return 0;}
 static void clean(void *c,void *p,size_t n){(void)c;(void)p;(void)n;}
@@ -90,6 +91,7 @@ static void reset(UsbController *c,bool reused)
     c->attachment_count=1;c->attachments[0].reset_required=reused;
     interface_slot=&descriptor;descriptor.bInterfaceClass=8;
     step=fail_at=detach_at=pipe_closes=0;mask=0xc0;available=true;native_lease=false;error_text[0]=0;
+    port_status=5;
     device_in_toggle=device_out_toggle=reused?1:0;device_pending_csw=reused;
 }
 int main(void)
@@ -120,6 +122,13 @@ int main(void)
     reset(&c,true);c.transport.owns_schedule=true;assert(!usb_storage_prepare_endpoints() && !step && !pipe_closes && c.error==EBUSY);
     reset(&c,true);native_lease=true;assert(!usb_storage_prepare_endpoints() && !step && !pipe_closes && c.error==EBUSY);
     reset(&c,true);c.scsi.phase=USB_SCSI_CSW;assert(!usb_storage_prepare_endpoints() && !step && !pipe_closes && c.error==EBUSY);
+    const uint32_t unready[]={0,1,0x80bU,0x85U,UINT32_MAX};
+    for(unsigned i=0;i<sizeof(unready)/sizeof(*unready);++i) {
+        reset(&c,true);c.input=input;c.output=output;port_status=unready[i];
+        assert(!usb_storage_prepare_endpoints() && !step && !c.bulk_resets && c.init_failed &&
+            c.input==input && c.output==output && !c.arena && !pipe_closes && c.error==ENODEV && mask==0xc0);
+        close_pipes(&c);assert(!c.input && !c.output && pipe_closes==1);
+    }
     puts("PASS reused/cancelled BOT sessions reset protocol then clear IN/OUT toggles before DATA0; fresh/online paths stay fast; failures, detach, foreign interface and active DMA refuse takeover");
     return 0;
 }

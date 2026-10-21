@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from check_usb_lifecycle import function
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src/storage/usb"
@@ -44,13 +45,34 @@ def main():
         run(work / "autoconnect.exe")
         run(*common, "-I" + str(SRC), TEST / "transport.c", SRC / "usb_transport.c", SRC / "usb_scsi.c", "-o", work / "transport.exe")
         run(work / "transport.exe")
+        # Compare actual production disk I/O with its previous per-poll yield
+        # under a fixed foreground cadence, without a calculator or USB device.
+        source = (SRC / "usb_volume.c").read_text()
+        extractable = source.replace("DRESULT disk_read", "int disk_read")
+        actual = function(extractable, "disk_read_impl").replace(
+            "int disk_read_impl", "DRESULT disk_read_impl", 1)
+        historical = actual.replace("disk_read_impl", "legacy_disk_read").replace(
+            "(void)ndvideo_usb_fs_poll();", "usb_fs_yield();")
+        assert historical != actual
+        read_fixture = (TEST / "read_budget.c").read_text().replace("/* PRODUCTION_DISK_READ */",
+            actual + "\n" + function(extractable, "disk_read").replace(
+                "int disk_read", "DRESULT disk_read", 1)).replace("/* LEGACY_DISK_READ */", historical)
+        (work / "read_budget.c").write_text(read_fixture)
+        run(*common, "-I" + str(SRC), work / "read_budget.c", TEST / "fibers.c",
+            SRC / "usb_fs_worker.c", "-o", work / "read_budget.exe")
+        run(work / "read_budget.exe")
         run(*common, "-I" + str(fixture), TEST / "fixture.c", fixture / "ff.c", fixture / "ffunicode.c", "-o", work / "fixture.exe")
-        run(*common, "-I" + str(SRC), TEST / "filesystem.c", TEST / "fibers.c", SRC / "usb_volume.c", SRC / "usb_fs_worker.c", SRC / "fatfs/ff.c", SRC / "fatfs/ffunicode.c", "-o", work / "filesystem.exe")
+        for enabled in (0, 1):
+            run(*common, "-DNDVIDEO_USB_TIMINGS=" + str(enabled), "-I" + str(SRC),
+                TEST / "filesystem.c", TEST / "fibers.c", SRC / "usb_volume.c", SRC / "usb_fs_worker.c",
+                SRC / "usb_phase_timing.c", SRC / "fatfs/ff.c", SRC / "fatfs/ffunicode.c",
+                "-o", work / ("filesystem" + str(enabled) + ".exe"))
         for folder in ("nMedia", "ndvideo"):
             for kind in range(4):
                 image = work / "drive.img"
                 run(work / "fixture.exe", kind, image, folder)
-                run(work / "filesystem.exe", image)
+                for enabled in (0, 1):
+                    run(work / ("filesystem" + str(enabled) + ".exe"), image)
         print("PASS: USB transport and FAT16/FAT32/exFAT/GPT regressions.")
 
 

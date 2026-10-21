@@ -3,6 +3,7 @@
 #include "usb_controller.h"
 #include "usb_registers.h"
 #include <assert.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <stddef.h>
@@ -54,6 +55,9 @@ static bool native_usb_ui_storage_binding_after(unsigned after,uint32_t *owner,u
 /* PRODUCTION_ATTACHMENTS */
 /* PRODUCTION_REUSE */
 static UsbController *controller;
+static unsigned irq_mask=0x80;
+static unsigned native_critical_enter(void){unsigned saved=irq_mask;irq_mask=0xc0;return saved;}
+static void native_critical_leave(unsigned saved){irq_mask=saved;}
 static void close_pipes(UsbController *c) {(void)c;}
 bool usb_transport_quiescent(const UsbTransport *t) {return !t->owns_schedule;}
 /* PRODUCTION_FINISH */
@@ -125,6 +129,23 @@ int main(void)
     assert(!usb_storage_next_candidate() && !c.attachments[0].tried);
     c.transport.poisoned=false;c.transport.owns_schedule=true;
     assert(!usb_storage_next_candidate() && !c.attachments[0].tried);
+    /* A physical root interruption revokes every cached attachment, without
+     * closing native pipes outside their owner's detach callback. */
+    c.registers.port=(uint32_t)(uintptr_t)(arena+4092);REG(c.registers.port)=5;
+    c.online=c.attached=true;c.input=(void *)(arena+1000);c.output=(void *)(arena+1016);
+    for(unsigned i=0;i<c.attachment_count;++i)c.attachments[i].present=true;
+    uint32_t generation=c.generation;usb_storage_poll_connection();assert(c.online && c.generation==generation);
+    REG(c.registers.port)=0x85;usb_storage_poll_connection();assert(c.online); /* Suspend is not detach. */
+    REG(c.registers.port)=0;usb_storage_poll_connection();
+    assert(!c.online && !c.attached && c.init_failed && c.generation!=generation && irq_mask==0x80);
+    assert(c.input==(void *)(arena+1000) && c.output==(void *)(arena+1016) && !usb_storage_attachment_ready());
+    for(unsigned i=0;i<c.attachment_count;++i)assert(!c.attachments[i].present);
+    assert(remember_attachment(&c,c.attachments[0].owner,c.attachments[0].device,c.attachments[0].interface,false));
+    unsigned present_count=0;
+    for(unsigned i=0;i<c.attachment_count;++i)present_count+=c.attachments[i].present;
+    assert(present_count==1 && usb_storage_attachment_ready());
+    c.online=true;REG(c.registers.port)=0x80b;usb_storage_poll_connection();assert(!c.online);
+    for(unsigned i=0;i<c.attachment_count;++i)assert(!c.attachments[i].present);
     controller=NULL;
     for (unsigned i = 0; i < 10; ++i) {
         c = (UsbController){0}; stub = setup();

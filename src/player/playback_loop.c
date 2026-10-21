@@ -1,4 +1,5 @@
 #include "player_internal.h"
+#include "wallpaper_image.h"
 #include "playback_render_gate.h"
 #include "playback_pacing.h"
 #include "native_writer_platform.h"
@@ -7,6 +8,9 @@
 #include "../storage/usb/usb_controller.h"
 #include <errno.h>
 #include "../sram.h"
+#include "platform/battery_meter.h"
+#include "platform/battery_diagnostics.h"
+#include "performance_clock.h"
 #if NDVIDEO_CODEC_MODULES
 #include "codecs/codec_module_api.h"
 #include "codecs/modules/h264_module_api.h"
@@ -255,7 +259,7 @@ int play_movie(
     bool prev_gthan = false;
     bool prev_f = false;
     bool prev_t = false;
-    bool prev_m = false,prev_audio_up=false,prev_audio_down=false;
+    bool prev_m = false,prev_audio_up=false,prev_audio_down=false,prev_i=false;
     bool prev_d = false;
     bool prev_s = false;
     bool prev_p = false;
@@ -317,6 +321,8 @@ int play_movie(
     PlaybackPressTarget playback_press_target = PLAYBACK_PRESS_NONE;
     PointerState pointer;
     bool help_menu_open = false;
+    bool info_open=false;UiTransition info_transition={0};
+    uint32_t info_render_at=0;
     bool help_resume_playback = false;
     uint32_t resume_frame = 0;
     HistoryStore startup_history;
@@ -371,6 +377,7 @@ int play_movie(
         snprintf(playback_title, sizeof(playback_title), "%s", movie_filename ? movie_filename : "");
     }
 
+    wallpaper_release();
     playback_capture_release();
     if (debug_is_runtime_logging_enabled()) {
         g_debug_ring_count = 0;
@@ -570,6 +577,7 @@ int play_movie(
     prev_9 = isKeyPressed(KEY_NSPIRE_9);
     prev_t = isKeyPressed(KEY_NSPIRE_T);
     prev_m = isKeyPressed(KEY_NSPIRE_M);
+    prev_i = isKeyPressed(KEY_NSPIRE_I);
     prev_audio_up = isKeyPressed(KEY_NSPIRE_A);
     prev_audio_down = isKeyPressed(KEY_NSPIRE_Z);
     prev_d = isKeyPressed(KEY_NSPIRE_D);
@@ -629,6 +637,7 @@ int play_movie(
         bool esc_edge = esc_down && !prev_esc;
         bool scratchpad_edge = scratchpad_down && !prev_scratchpad;
         prev_esc = esc_down;
+        video_info_control(&info_open,false,&esc_edge,&esc_exit_suppressed_until_release);
         prev_scratchpad = scratchpad_down;
         if (!esc_down) {
             esc_exit_suppressed_until_release = false;
@@ -696,7 +705,7 @@ int play_movie(
         bool night_input = night_mode_poll(now_ms, !g_display_power_state.off && !audio_owns_pad);
         const PlaybackRate *playback_rate = playback_rate_for_index(playback_rate_index);
         playback_phase(&movie, PLAYER_CRASH_INPUT, paused, playback_rate);
-        bool show_ui = help_menu_open || (paused && !pause_icon_only) || ui_time_before(now_ms, ui_visible_until);
+        bool show_ui = info_open || help_menu_open || (paused && !pause_icon_only) || ui_time_before(now_ms, ui_visible_until);
         bool ctrl_down = isKeyPressed(KEY_NSPIRE_CTRL) ? true : false;
         unsigned vertical_keys = audio_vertical_keys(ctrl_down, isKeyPressed(KEY_NSPIRE_SHIFT));
         bool enter_key_was_down = prev_enter;
@@ -767,6 +776,7 @@ int play_movie(
         bool subtitle_font_edge = key_pressed_edge(KEY_NSPIRE_F, &prev_f);
         bool subtitle_track_edge = key_pressed_edge(KEY_NSPIRE_T, &prev_t);
         bool m_edge=key_pressed_edge(KEY_NSPIRE_M,&prev_m);
+        bool info_edge=key_pressed_edge(KEY_NSPIRE_I,&prev_i) && !ctrl_down;
         bool memory_overlay_edge=!ctrl_down && m_edge;
         bool audio_mute_edge = ctrl_down && m_edge;
         bool debug_logging_edge = key_pressed_edge(KEY_NSPIRE_D, &prev_d);
@@ -806,7 +816,15 @@ int play_movie(
         if (enter_edge && pointer.visible) {
             pointer_click = true;
         }
-        pointer_release_edge = pointer.release_edge || (enter_release_edge && pointer.visible);
+        if(info_edge && !help_menu_open)video_info_control(&info_open,true,&esc_edge,&esc_exit_suppressed_until_release);
+        bool info_capture=info_open || info_transition.current_mix;
+        if(info_capture) {
+            playback_press_target=PLAYBACK_PRESS_NONE;
+            if(pointer_click){info_open=false;pointer_click=false;}
+            enter_edge=enter_release_edge=false;
+        }
+        ui_transition_update_press_ex(&info_transition,info_open,now_ms,180,150);
+        pointer_release_edge = !info_capture && (pointer.release_edge || (enter_release_edge && pointer.visible));
         AudioControlInput audio_input = {
             .now_ms=now_ms, .x=pointer.x, .y=pointer.y, .pointer_visible=pointer.visible,
             .pressed=pointer_click, .released=pointer_release_edge, .held=pointer.down || enter_down,
@@ -824,7 +842,7 @@ int play_movie(
         bool audio_input_activity=audio_pointer_captured || audio_up_edge || audio_down_edge ||
             audio_up_held || audio_down_held || audio_mute_edge;
         chrome_input_activity =
-            audio_input_activity ||
+            info_edge || audio_input_activity ||
             pointer_click ||
             pointer_release_edge ||
             pointer.moved ||
@@ -944,7 +962,7 @@ int play_movie(
         }
         if (g_display_power_state.off || g_display_power_state.off_fade_active) {
             bool off_input_activity =
-                pointer_click ||
+                info_edge || pointer_click ||
                 pointer_release_edge ||
                 pointer.moved ||
                 enter_edge ||
@@ -1127,7 +1145,7 @@ int play_movie(
             show_ui = true;
         }
         if (!pointer_click && !seek.preview_pending) {
-            bool allow_seek_preview = paused && show_ui && !help_menu_open;
+            bool allow_seek_preview = paused && show_ui && !help_menu_open && !info_open && !info_transition.current_mix;
             if (allow_seek_preview) {
                 update_seek_bar_preview(&movie, &seek_preview, &pointer, allow_seek_preview, now_ms);
             } else {
@@ -1225,6 +1243,7 @@ int play_movie(
             take_screenshot = true;
         }
         if (cat_edge) {
+            info_open=false;
             bool was_paused = paused;
 
             if (help_menu_open) {
@@ -1330,7 +1349,7 @@ int play_movie(
                 0,
                 0,
                 0,
-                &ui_mixes
+                &ui_mixes, path, 0
             );
             if (take_screenshot) {
                 request_screenshot(screen, path, &screenshot_preview);
@@ -1568,10 +1587,8 @@ int play_movie(
             pause_icon_only = true;
             ui_visible_until = 0;
             show_ui = false;
-            ui_transition_init(&ui_transitions.chrome, false);
-            ui_transition_init(&ui_transitions.title_strip, false);
-            ui_transition_init(&ui_transitions.seek_preview, false);
-            ui_transition_init(&ui_transitions.help_menu, false);
+            /* Let chrome/title/preview retarget and fade below. Resetting
+             * their state here erased the exit animation on keyboard pause. */
             ui_transition_init(&ui_transitions.pause_indicator, true);
             if (!paused) {
                 ui_transition_update(&ui_transitions.pause_indicator, false, now_ms, UI_CHROME_ANIM_MS);
@@ -1865,6 +1882,25 @@ int play_movie(
         }
         movie_audio_tick(&movie,paused || help_menu_open || g_display_power_state.off || seek.active || seek_work,
             playback_rate->numerator,playback_rate->denominator);
+#if NDMEDIA_BATTERY_METER
+        uint32_t meter_now=monotonic_clock_now_ms();
+        MovieAudioLevel meter_level={0};movie_audio_level(&movie,&meter_level);
+        bool meter_playing=!paused && !help_menu_open && !seek.active && !seek_work &&
+            playback_rate->numerator==playback_rate->denominator;
+        uint32_t meter_key=meter_playing?battery_meter_load_key(true,usb_path(path),
+            (uint32_t)movie.codec*16U+movie.audio_track.codec,performance_clock_current_mhz(),
+            current_lcd_brightness(),g_display_power_state.off,
+            meter_level.muted?0:meter_level.volume,movie.audio_track.rate,movie.audio_track.channels,
+            audio_playback_output_key(movie.audio) ^ (movie.header.video_width*65537U) ^
+                (movie.header.video_height*16777619U) ^ (movie.timing_fps_num*65599U) ^
+                movie.timing_fps_den):0;
+        if(battery_diagnostics_acquisition_due(meter_now)) {
+            movie_audio_pump(&movie);
+            battery_diagnostics_acquire(monotonic_clock_now_ms());
+            movie_audio_pump(&movie);
+        }
+        battery_meter_tick(monotonic_clock_now_ms(),meter_key,false);
+#endif
         if (movie_audio_source_lost(&movie) && usb_path(path)) {
             debug_failf("USB drive disconnected while reading the soundtrack");
             result=PLAY_MOVIE_RESULT_ERROR;
@@ -2135,7 +2171,7 @@ int play_movie(
                 (subtitle_font_overlay_visible ? 8U : 0U) | (render_status_visible ? 16U : 0U) |
                 (night_mode_status_visible(render_now_ms) ? 32U : 0U) |
                 (audio_controls_open() ? 64U : 0U);
-            bool render_effects = playback_ui_mixes_animating(&ui_mixes) ||
+            bool render_effects = battery_ui_animating() || info_transition.current_mix!=(info_open?255:0) || playback_ui_mixes_animating(&ui_mixes) ||
                 audio_controls_animating() ||
                 brightness_animation.active ||
                 scale_morph_animating(&scale_morph, render_now_ms) ||
@@ -2162,7 +2198,7 @@ int play_movie(
             bool render_buffers_changed = ui_mixes.chrome &&
                 (render_buffer_width != last_render_buffer_width ||
                  render_decoded_width != last_render_decoded_width);
-            bool render_input_changed = render_pointer_changed ||
+            bool render_input_changed = info_edge || (info_open && render_now_ms-info_render_at>=1000) || render_pointer_changed ||
                 audio_input_activity || audio_controls_revision()!=last_render_audio_revision ||
                 (seek_preview.over_bar && seek_preview.surface_render_pending) ||
                 enter_edge || enter_release_edge || space_edge || tab_edge || cat_edge || esc_edge ||
@@ -2221,6 +2257,7 @@ int play_movie(
                 uint32_t render_started_ms = collect_render_metrics ? monotonic_clock_now_ms() : 0;
                 bool capture_render = playback_capture_active(&movie);
                 uint64_t capture_render_started = monotonic_clock_now_ticks();
+                info_render_at=render_now_ms;
                 render_movie(
                     screen,
                     fonts,
@@ -2252,7 +2289,7 @@ int play_movie(
                     seek_badge_ms,
                     seek_badge_started_ms,
                     seek_badge_hide_elapsed_ms,
-                    &ui_mixes
+                    &ui_mixes, path, info_transition.current_mix
                 );
                 uint64_t presented_ticks=monotonic_clock_now_ticks();
                 playback_render_observed(&render_gate, presented_ticks - capture_render_started);
@@ -2319,6 +2356,8 @@ int play_movie(
                 idle_now_ms = monotonic_clock_now_ms();
             }
             bool paused_ui_busy = paused && (
+                info_transition.current_mix!=(info_open?255:0) ||
+                battery_ui_animating() ||
                 playback_ui_mixes_animating(&ui_mixes) ||
                 night_mode_status_animating(idle_now_ms) ||
                 scale_morph_animating(&scale_morph, idle_now_ms) ||

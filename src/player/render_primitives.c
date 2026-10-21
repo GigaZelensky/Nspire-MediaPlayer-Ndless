@@ -1,4 +1,18 @@
 #include "player_internal.h"
+#include "wallpaper_image.h"
+
+void draw_battery_power_glyph(SDL_Surface *screen,int x,int y,uint8_t mix,bool checking)
+{
+    static const uint8_t bolt[8]={0x0c,0x18,0x18,0x3e,0x3c,0x0c,0x18,0x10};
+    static const uint8_t plug[8]={0x24,0x24,0x7e,0x7e,0x3c,0x18,0x18,0};
+    const uint8_t *rows=checking?plug:bolt;
+    if(!mix)return;
+    for(int row=0;row<8;++row)for(int column=0;column<8;++column)
+        if(rows[row]&(0x80U>>column)) {
+            SDL_Rect pixel={x+column,y+row,1,1};
+            fill_rect_rgb565_mix(screen,&pixel,UI_COLOR_WHITE,mix);
+        }
+}
 
 SDL_Rect progress_bar_rect(void)
 {
@@ -379,6 +393,49 @@ const UiThemePalette *ui_theme(void)
     return &g_ui_themes[g_ui_theme_id];
 }
 
+const UiThemePalette *ui_theme_target(void)
+{return &g_ui_themes[ui_theme_clamp(g_ui_theme_id)];}
+static uint8_t wallpaper_last_mix=255;
+void draw_player_wallpaper(SDL_Surface *screen,uint8_t mix)
+{
+    const uint16_t *image=wallpaper_image(ui_theme_target()->accent_mid);
+    if(!image) {
+        SDL_Rect r={0,0,SCREEN_W,SCREEN_H};
+        draw_vertical_gradient(screen,&r,rgb565_lerp(UI_COLOR_BLACK,UI_COLOR_BG_TOP,mix,255),
+            rgb565_lerp(UI_COLOR_BLACK,UI_COLOR_BG_BOTTOM,mix,255));
+        return;
+    }
+    bool changing=ui_theme_transition_active();
+    const uint16_t *previous=changing?wallpaper_previous():NULL;
+    unsigned tint=changing?ui_theme_transition_ease((int)(((monotonic_clock_now_ms()-g_ui_theme_transition_started_ms)*255U)/UI_THEME_TRANSITION_MS)):255;
+    if(tint>255)tint=255;
+    wallpaper_last_mix=(uint8_t)tint;
+    if(!changing)wallpaper_finish_transition();
+    for(unsigned y=0;y<SCREEN_H;++y) {
+        if((y&7)==0)wallpaper_service();
+        uint16_t *row=(uint16_t *)((uint8_t *)screen->pixels+y*screen->pitch);
+        if(mix==255 && !previous)memcpy(row,image+y*SCREEN_W,SCREEN_W*2);
+        else for(unsigned x=0;x<SCREEN_W;++x) {
+            unsigned at=y*SCREEN_W+x;
+            uint16_t p=previous?rgb565_lerp(previous[at],image[at],tint,255):image[at];
+            row[x]=mix==255?p:rgb565_lerp(UI_COLOR_BLACK,p,mix,255);
+        }
+    }
+}
+
+void restore_wallpaper_corners(SDL_Surface *screen,const SDL_Rect *r,uint8_t mix)
+{
+    const uint16_t *image=wallpaper_image(ui_theme_target()->accent_mid),*previous=wallpaper_previous();
+    for(unsigned i=0;i<4;++i) {
+        int x=r->x+(i&1?r->w-1:0),y=r->y+(i&2?r->h-1:0);
+        if(x<0 || x>=SCREEN_W || y<0 || y>=SCREEN_H)continue;
+        SDL_Rect dot={x,y,1,1};
+        fill_rect_rgb565(screen,&dot,image?rgb565_lerp(UI_COLOR_BLACK,previous?rgb565_lerp(previous[y*SCREEN_W+x],image[y*SCREEN_W+x],wallpaper_last_mix,255):image[y*SCREEN_W+x],mix,255):
+            picker_background_color_at_y_mix(y,mix));
+    }
+}
+
+
 const char *ui_theme_name(UiThemeId theme_id)
 {
     return g_ui_themes[ui_theme_clamp((int) theme_id)].name;
@@ -401,6 +458,10 @@ UiThemeId ui_cycle_theme(void)
 
     next_theme = (UiThemeId) ((g_ui_theme_id + 1) % UI_THEME_COUNT);
     g_ui_theme_id = next_theme;
+    /* Texture preparation services live audio but can outlast the fade.
+     * Begin the shared palette/texture clock only when the new cache is ready.
+     * Video has released this cache and must not allocate a wallpaper here. */
+    if(wallpaper_cached())(void)wallpaper_image(ui_theme_target()->accent_mid);
     g_ui_theme_transition_started_ms = monotonic_clock_now_ms();
     g_ui_theme_transition_running = true;
     ui_theme_blend_palette(
@@ -488,7 +549,10 @@ void fill_rect_rgb565(SDL_Surface *screen, const SDL_Rect *rect, Uint16 color)
     if (!screen || !rect || rect->w == 0 || rect->h == 0) {
         return;
     }
-    SDL_FillRect(screen, (SDL_Rect *) rect, map_rgb565(screen, color));
+    /* SDL 1.2 writes the clipped geometry back to its argument. Callers reuse
+     * their layout rectangles, so never hand SDL a const caller-owned rect. */
+    SDL_Rect target=*rect;
+    SDL_FillRect(screen, &target, map_rgb565(screen, color));
 }
 
 void fill_rect_rgb565_mix(SDL_Surface *screen, const SDL_Rect *rect, Uint16 color, uint8_t mix)
@@ -515,6 +579,10 @@ void fill_rect_rgb565_mix(SDL_Surface *screen, const SDL_Rect *rect, Uint16 colo
     y0 = clamp_int(rect->y, 0, screen->h);
     x1 = clamp_int(rect->x + rect->w, 0, screen->w);
     y1 = clamp_int(rect->y + rect->h, 0, screen->h);
+    SDL_Rect clip;
+    SDL_GetClipRect(screen,&clip);
+    x0=clamp_int(x0,clip.x,clip.x+clip.w);x1=clamp_int(x1,clip.x,clip.x+clip.w);
+    y0=clamp_int(y0,clip.y,clip.y+clip.h);y1=clamp_int(y1,clip.y,clip.y+clip.h);
     if (x0 >= x1 || y0 >= y1) {
         return;
     }
@@ -560,7 +628,8 @@ void blit_surface_rgb565_mix(SDL_Surface *screen, SDL_Surface *surface, const SD
         return;
     }
     if (mix >= 255) {
-        SDL_BlitSurface(surface, NULL, screen, (SDL_Rect *) dst_rect);
+        SDL_Rect target=*dst_rect;
+        SDL_BlitSurface(surface, NULL, screen, &target);
         return;
     }
     if (!surface_is_rgb565(screen) || !surface_is_rgb565(surface)) {
@@ -571,6 +640,10 @@ void blit_surface_rgb565_mix(SDL_Surface *screen, SDL_Surface *surface, const SD
     dst_y0 = clamp_int(dst_rect->y, 0, screen->h);
     dst_x1 = clamp_int(dst_rect->x + surface->w, 0, screen->w);
     dst_y1 = clamp_int(dst_rect->y + surface->h, 0, screen->h);
+    SDL_Rect clip;
+    SDL_GetClipRect(screen,&clip);
+    dst_x0=clamp_int(dst_x0,clip.x,clip.x+clip.w);dst_x1=clamp_int(dst_x1,clip.x,clip.x+clip.w);
+    dst_y0=clamp_int(dst_y0,clip.y,clip.y+clip.h);dst_y1=clamp_int(dst_y1,clip.y,clip.y+clip.h);
     if (dst_x0 >= dst_x1 || dst_y0 >= dst_y1) {
         return;
     }
@@ -639,6 +712,10 @@ void dim_rect_rgb565(SDL_Surface *screen, const SDL_Rect *rect, int alpha)
     y0 = clamp_int(rect->y, 0, screen->h);
     x1 = clamp_int(rect->x + rect->w, 0, screen->w);
     y1 = clamp_int(rect->y + rect->h, 0, screen->h);
+    SDL_Rect clip;
+    SDL_GetClipRect(screen,&clip);
+    x0=clamp_int(x0,clip.x,clip.x+clip.w);x1=clamp_int(x1,clip.x,clip.x+clip.w);
+    y0=clamp_int(y0,clip.y,clip.y+clip.h);y1=clamp_int(y1,clip.y,clip.y+clip.h);
     if (x0 >= x1 || y0 >= y1) {
         return;
     }
@@ -687,6 +764,10 @@ void draw_vertical_gradient(SDL_Surface *screen, const SDL_Rect *rect, Uint16 co
     y0 = clamp_int(rect->y, 0, screen->h);
     x1 = clamp_int(rect->x + rect->w, 0, screen->w);
     y1 = clamp_int(rect->y + rect->h, 0, screen->h);
+    SDL_Rect clip;
+    SDL_GetClipRect(screen,&clip);
+    x0=clamp_int(x0,clip.x,clip.x+clip.w);x1=clamp_int(x1,clip.x,clip.x+clip.w);
+    y0=clamp_int(y0,clip.y,clip.y+clip.h);y1=clamp_int(y1,clip.y,clip.y+clip.h);
     if (x0 >= x1 || y0 >= y1) {
         return;
     }
@@ -808,11 +889,7 @@ void fill_picker_selection_line(
     uint8_t mix
 )
 {
-    fill_rect_rgb565(
-        screen,
-        line,
-        rgb565_lerp(picker_background_color_at_y(line->y), target_color, mix, 255)
-    );
+    fill_rect_rgb565_mix(screen,line,target_color,mix);
 }
 
 Uint16 control_outline_color(Uint16 base_color, uint8_t selected_mix)
@@ -2002,3 +2079,17 @@ void draw_movie_frame_background_rects(
     draw_movie_frame_scaled_clipped(screen, movie, src, dst);
 }
 
+
+void draw_accent_info_panel(SDL_Surface *screen,const SDL_Rect *r)
+{
+    /* A framed dialog, with an inset body rather than a tooltip's flat slab.
+     * Keep the accent line, without a separate glossy header strip. */
+    fill_rect_rgb565(screen,r,ui_theme()->gunmetal);
+    draw_rect_outline_rgb565(screen,r,blend_rgb565(ui_theme()->gunmetal,UI_COLOR_WHITE,80));
+    SDL_Rect body={r->x+2,r->y+3,r->w-4,r->h-5};
+    fill_rect_rgb565(screen,&body,ui_theme()->modal_panel);
+    SDL_Rect bottom={r->x+1,r->y+r->h-2,r->w-2,1};
+    fill_rect_rgb565(screen,&bottom,blend_rgb565(ui_theme()->gunmetal,UI_COLOR_BLACK,120));
+    SDL_Rect accent={r->x+2,r->y+1,r->w-4,2};
+    draw_vertical_gradient(screen,&accent,UI_COLOR_ACCENT,UI_COLOR_ACCENT_DEEP);
+}

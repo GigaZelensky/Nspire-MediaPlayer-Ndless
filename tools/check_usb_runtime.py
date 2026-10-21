@@ -70,13 +70,15 @@ with tempfile.TemporaryDirectory(prefix='ndvideo-usb-worker-') as temporary:
     subprocess.run([str(executable)],check=True,timeout=10)
 body=(root/'src/player/usb_browser.c').read_text().split('static void connect_native(void *context)',1)[1].split('bool usb_browser_connect(',1)[0]
 body='static void connect_native(void *context)'+body
-fixture='''#include <assert.h>
+fixture='''#include "storage/usb/usb_phase_timing.h"
+#include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <errno.h>
 #include <stddef.h>
 typedef struct { bool cancelled,preconnected,timed_out,connected,audio_only; int guard_error;const char *status,*line1,*line2;} UsbConnectWindow;
 static unsigned kernel_policy=7,now_ms,resume_attempts;static int resume_result;
+static bool clock_bindings_ok,clock_timer_rearmed,clock_entry_ok;static uint32_t clock_binding_hz;static uintptr_t clock_binding_counter;
 static bool standby_was_outer,native_clock,player_timer=true,audio_mode,tree_busy,lease,host_running=true;
 static unsigned native_waits;
 static unsigned soft_refusals,owner_pending;
@@ -105,10 +107,11 @@ static void render_window(UsbConnectWindow *w,bool force) {}
 static bool usb_storage_prepare_connection(void) {accepting=true;return true;}
 static bool usb_fs_prepare(void) {return true;}
 static uint32_t monotonic_clock_now_ms(void) {now_ms+=100;return now_ms;}
+static uint64_t monotonic_clock_now_ticks(void) {return now_ms*33ULL;}
 static uint32_t connection_seconds(void) {return now_ms/1000;}
 static bool host_device_present(void) {return true;}
 static unsigned connection_presence(void) {return USB_AUTO_ADAPTER;}
-static uint32_t host_connection_state(void) {return tree_busy?4:1;}
+static uint32_t host_connection_state(void) {return tree_busy?4:(1U|(5U<<8));}
 static bool usb_storage_driver_registered(void) {return true;}
 static void usb_controller_set_error(const char *s,int e) {}
 static bool usb_storage_attachment_ready(void) {return !audio_mode && !tree_busy && candidate<candidate_available;}
@@ -142,8 +145,14 @@ static bool usb_storage_park(void) {return true;}
 static bool performance_clock_start(void) {return true;}
 static int performance_clock_status(void) {return 0;}
 static void usb_storage_unpark(void) {}
-'''+body+'''
+'''+function((root/'src/player/usb_browser.c').read_text(),'host_storage_ready')+body+'''
 int main(void) {
+ assert(host_storage_ready(1U|(5U<<8)));
+ assert(!host_storage_ready(1U|(0x80bU<<8)));
+ assert(!host_storage_ready(1U|(0x85U<<8)));
+ assert(!host_storage_ready(65U|(5U<<8)));
+ assert(!host_storage_ready(3U|(5U<<8)));
+ assert(!host_storage_ready(5U|(5U<<8)));
  UsbConnectWindow w={.preconnected=true};connect_native(&w);assert(w.connected && !w.guard_error && kernel_policy==7 && !native_clock && player_timer);
  candidate=0;audio_mode=true;w=(UsbConnectWindow){.preconnected=true};connect_native(&w);
  assert(w.audio_only && !w.connected && !w.timed_out && !w.guard_error && kernel_policy==7 && !native_clock && player_timer);
@@ -173,7 +182,7 @@ int main(void) {
 '''
 with tempfile.TemporaryDirectory() as tmp:
  c=Path(tmp)/'handoff.c';exe=Path(tmp)/'handoff.exe';c.write_text(fixture)
- subprocess.run([gcc,'-std=c99','-O2','-Wall','-Wextra','-Werror','-Wno-unused-parameter',str(c),'-o',str(exe)],check=True)
+ subprocess.run([gcc,'-std=c99','-O2','-Wall','-Wextra','-Werror','-Wno-unused-parameter','-I'+str(root/'src'),str(c),'-o',str(exe)],check=True)
  subprocess.run([str(exe)],check=True,timeout=10)
 print('PASS production connection retires native policy and reclaims disturbed app timer before filesystem mount')
 print('PASS hub discovery: empty reader first, flash attached on a later scheduler tick, and bounded no-media timeout')

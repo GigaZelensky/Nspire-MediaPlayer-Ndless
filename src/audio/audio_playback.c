@@ -12,6 +12,7 @@
 #include "player/usb_browser.h"
 #include "storage/usb/usb_storage.h"
 #include "storage/usb/usb_controller.h"
+#include "storage/usb/usb_phase_timing.h"
 #include <errno.h>
 #if NDVIDEO_CODEC_MODULES || NDVIDEO_AUDIO_MODULES
 #include "codecs/codec_module_api.h"
@@ -46,6 +47,10 @@ struct AudioPlayback {
     const void *diagnostics_context;bool diagnostics_error;
 };
 static AudioPlayback *current_audio;
+uint32_t audio_playback_output_key(const AudioPlayback *a)
+{
+    return a?usb_audio_output_key(a->usb):0;
+}
 static void pump_audio(AudioPlayback *, bool check_health);
 
 
@@ -252,11 +257,14 @@ static void native_guard(void *context)
 
 static bool hardware_open(AudioPlayback *a)
 {
+    UsbPhaseTimingToken setup_timing=usb_phase_timing_begin(USB_PHASE_AUDIO_SETUP);
     raw_player_before_native();
     HardwareOperation operation = {a, false, false};
     a->native_operation = true;
     bool mapped = sram_with_native_mapping(hardware_native, &operation);
     a->native_operation = false;
+    usb_phase_timing_end(USB_PHASE_AUDIO_SETUP,setup_timing,
+        !mapped ? -2 : operation.ok ? 0 : a->hardware_result ? a->hardware_result : -1);
     if (!mapped || !operation.ok) {
         if (!a->notice) {
             char message[160];

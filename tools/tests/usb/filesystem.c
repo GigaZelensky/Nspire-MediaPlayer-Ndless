@@ -2,6 +2,7 @@
 #include "usb_storage.h"
 #include "usb_controller.h"
 #include "usb_fs_worker.h"
+#include "usb_phase_timing.h"
 #include "fatfs/ff.h"
 #include "fatfs/diskio.h"
 #include <assert.h>
@@ -78,7 +79,10 @@ int usb_controller_step(UsbCommand *r)
     if (!r->pending)
         return r->result;
     assert(r == owner);
-    if (++polls < 3)
+    /* Deliberately remain pending across the worker's8-tick slice so the
+     * cancellation tests can observe real in-flight ownership. Fast-device
+     * completion within one slice is covered separately by read_budget.c. */
+    if (++polls < 32)
         return 0;
     assert(lba < 131072 && blocks <= 131072 - lba);
     if (online)
@@ -132,9 +136,11 @@ static void check(const unsigned char *p, unsigned start, unsigned n)
     for (unsigned i = 0; i < n; ++i)
         assert(p[i] == pattern(start + i));
 }
+static uint32_t phase_now(void){return ticks;}
 int main(int argc, char **argv)
 {
     assert(argc == 2);
+    usb_phase_timing_init(phase_now);
     FILE *in = fopen(argv[1], "rb");
     assert(in);
     image = malloc(131072 * 512);
@@ -271,6 +277,13 @@ int main(int argc, char **argv)
     usb_volume_unmount();
     assert(disk_write(0, buffer, 0, 1) == RES_WRPRT);
     assert(disk_read(0, buffer, UINT64_MAX, 1) == RES_PARERR);
+#if NDVIDEO_USB_TIMINGS
+    UsbPhaseTimingStats phase;
+    assert(usb_phase_timing_snapshot(USB_PHASE_MOUNT,&phase) && phase.calls>=3);
+    assert(usb_phase_timing_snapshot(USB_PHASE_FOLDER_SCAN,&phase) && phase.calls==5 && phase.nonzero_results>=2);
+    assert(usb_phase_timing_snapshot(USB_PHASE_DIRECTORY_OPEN,&phase) && phase.calls>=3);
+    assert(usb_phase_timing_snapshot(USB_PHASE_DIRECTORY_READ,&phase) && phase.calls>=2);
+#endif
     free(image);
     printf("PASS: nested directories, random seeks, cooperative reads, in-flight cancellation, "
            "concurrent result ownership, detach/generation bounds; %u reads\n",

@@ -712,6 +712,17 @@ void usb_audio_describe(const UsbAudio *u, char *text, size_t capacity)
     if (u->tt_hub && length < capacity)
         snprintf(text + length, capacity - length, " TT=%u/%u", u->tt_hub, u->tt_port);
 }
+uint32_t usb_audio_output_key(const UsbAudio *u)
+{
+    if(!u)return 0;
+    /* Stable across USB address reassignment; separates direct/hub outputs
+     * and negotiated formats without any device query or string formatting. */
+    uint32_t h=2166136261U,fields[]={u->vendor,u->product,u->high_speed,u->max_power_ma,
+        u->parent!=0,u->tt_hub!=0,u->tt_multi,u->format.sample_rate,
+        u->format.sample_bits,u->format.channels};
+    for(unsigned i=0;i<sizeof(fields)/sizeof(*fields);++i)h=(h^fields[i])*16777619U;
+    return h;
+}
 bool usb_audio_close(UsbAudio *u)
 {
     if (!u)

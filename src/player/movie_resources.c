@@ -7,6 +7,7 @@
 #include "player_internal.h"
 #include "crash_recorder.h"
 #include "storage_read_stream.h"
+#include "header_diagnostic.h"
 #include "performance_clock.h"
 #include "../storage/usb/usb_storage.h"
 #if NDVIDEO_CODEC_MODULES
@@ -901,6 +902,8 @@ static bool debug_dump_report(const char *path, const Movie *movie, const char *
     fprintf(log_file, "hardware_identity asic=%08lx ndless_subtype_entry=%u ndless_subtype_now=%u source=validated_asic\n",
         (unsigned long)nspire_hardware_id(), nspire_initial_sdk_subtype(), nl_hwsubtype());
     storage_read_stream_debug(log_file);
+    if (failure && reason && !strcmp(reason,"open-failure"))
+        header_diagnostic_write(log_file);
     movie_audio_debug(movie,log_file);
     usb_storage_debug(log_file);
     usb_browser_debug(log_file);

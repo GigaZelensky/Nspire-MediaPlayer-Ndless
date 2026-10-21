@@ -1,6 +1,7 @@
 # nMedia Player
 
-A native media player for the **TI-Nspire CX, CX II and CX II-T**, powered by Ndless.
+A native media player for the **TI-Nspire CX and CX II line**, including
+CAS and regional variants, powered by Ndless.
 Watch videos with subtitles, play ordinary music files, browse calculator or USB
 storage, and listen through USB headphones, speakers or a DAC.
 
@@ -57,6 +58,7 @@ The `.nvp` format used by the current player is:
 - screen brightness control with `Shift` + `Up` / `Down` and an on-screen percentage overlay
 - adjustable warm night filter
 - idle dimming, screen-off and automatic standby
+- shared glass-and-ribbon wallpaper in the picker and music player, recolored with the theme
 - theme color profiles: `Amber`, `Blue`, `Green`, and `Red`
 - picker UI for videos and music, with separate file sizes and hover details
 - picker filename metadata tooltips from bracketed tags
@@ -64,7 +66,7 @@ The `.nvp` format used by the current player is:
 - ordinary WAV (PCM/IMA), MP3, FLAC, Ogg Vorbis, AAC and Opus music playback
 - USB audio output through compatible UAC1/UAC2 devices, directly or through supported hubs
 - music tags, JPEG/PNG covers, expandable album art and an information overlay
-- Flow, Vortex, Prism and Pulse music visualizations
+- Flow, Vortex, Prism, Pulse, stereo Oscilloscope and Spectrum music visualizations
 - shared animated volume controls with finer adjustment at low levels
 - opt-in debug log output and in-player memory/playback overlay
 
@@ -96,6 +98,16 @@ codec files to install.
 ## Battery Life
 
 Battery Life: ~9.5 hours of continuous H.264 playback at 100% brightness on a CX II-T.
+
+The battery icon and percentage appear in the library and playback controls.
+A bolt inside the icon indicates charging. On verified firmware the percentage
+uses fresh voltage and a smooth default curve, then gradually learns from normal
+use. No calibration run is required. It remains an estimate; **Info** shows its
+source and voltage. Original CX and unsupported firmware use the OS battery level.
+
+Battery learning stores two small settings files (under 6 KiB combined), without
+routine debug logs. `Ctrl+R` in the library resets only battery learning after a
+battery replacement, preserving media, history and other preferences.
 
 ## Controls
 
@@ -138,6 +150,7 @@ The list row shows `Rick and Morty S07E03`. Hover briefly to see the clean title
 
 ### Playback
 
+- `I`: show video, file, audio and battery information without pausing; `I` or `Esc` closes it
 - `Space`: play / pause with a small pause indicator, or restart when the movie has ended
 - touchpad: move cursor and show the UI
 - `Enter` / keypad `5` / touchpad click: play / pause, restart at end, click hovered controls, or seek inside the bottom UI band
@@ -181,8 +194,8 @@ playback returns to the paused or playing state from before the seek.
 | `Shift` + those vertical keys | Brightness |
 | `Ctrl+M` | Mute/unmute |
 | `P` / mode button | Play once, repeat this song, continue through folder |
-| `V` / view button | Cover, Flow, Vortex, Prism, Pulse |
-| `I` / Info | Tags, filename, source, size, duration and audio details without pausing |
+| `V` / view button | Cover, Flow, Vortex, Prism, Pulse, Oscilloscope, Spectrum |
+| `I` / Info | Tags, filename, source, size, duration, audio and battery details without pausing |
 | `C`, `N`, `Ctrl+Up/Down`, `O` | Theme, night filter/intensity, processor settings |
 | Timeline / cover | Drag to seek / expand cover; click or Esc closes the cover |
 | `Esc` | Close the overlay, cancel a drag or pending seek, or return to the picker |

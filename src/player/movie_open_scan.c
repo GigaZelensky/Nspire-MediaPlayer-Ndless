@@ -1,5 +1,6 @@
 #include "player_data.h"
 #include "player_internal.h"
+#include "header_diagnostic.h"
 #include "storage_read_stream.h"
 #include <errno.h>
 #include "movie/nvp_validation.h"
@@ -247,12 +248,14 @@ bool load_movie(const char *path, Movie *movie, LoadingProgress *loading_progres
         }
     }
     movie->decoded_local_frame = -1;
+    header_diagnostic_begin(path);
     debug_tracef("open start path=%s", path ? path : "(null)");
     loading_progress_tick(loading_progress, false);
 
     movie->file = path ? movie_file_open(path) : NULL;
     movie->encrypted = movie_crypto_keys(path) != NULL;
     if (!movie->file) {
+        header_diagnostic_result("file open",0,movie->encrypted,NULL,0,48,errno,false);
         debug_failf("open failed: %s (%d), errno=%d", storage_read_stream_open_stage(),
             storage_read_stream_open_status(), errno);
         goto fail;
@@ -260,16 +263,30 @@ bool load_movie(const char *path, Movie *movie, LoadingProgress *loading_progres
     movie->current_file_pos = 0;
     loading_progress_tick(loading_progress, false);
     uint8_t header_bytes[56];
-    if (movie_file_read(header_bytes, 1, 48, movie->file) != 48) {
+    size_t header_received=movie_file_read(header_bytes,1,48,movie->file);
+    if (header_received != 48) {
+        header_diagnostic_result("header read",movie_file_size(movie->file),movie->encrypted,
+            header_bytes,header_received,48,errno,false);
         debug_failf("open failed: header read"); goto fail;
     }
     unsigned version = header_bytes[4] | (unsigned)header_bytes[5] << 8;
     unsigned wire_bytes = nvp_header_wire_bytes(version);
-    if ((wire_bytes > 48 && movie_file_read(header_bytes+48,1,wire_bytes-48,movie->file)!=wire_bytes-48) ||
-        !nvp_header_parse(&movie->header,header_bytes,wire_bytes) ||
+    if(wire_bytes>48) {
+        size_t tail=movie_file_read(header_bytes+48,1,wire_bytes-48,movie->file);
+        header_received+=tail;
+        if(tail!=wire_bytes-48) {
+            header_diagnostic_result("extended header read",movie_file_size(movie->file),movie->encrypted,
+                header_bytes,header_received,wire_bytes,errno,false);
+            debug_failf("open failed: invalid header or file bounds");goto fail;
+        }
+    }
+    if (!nvp_header_parse(&movie->header,header_bytes,wire_bytes) ||
         !nvp_header_is_valid(&movie->header,(file_size=movie_file_size(movie->file)))) {
+        header_diagnostic_result("invalid header or bounds",movie_file_size(movie->file),movie->encrypted,
+            header_bytes,header_received,wire_bytes,0,false);
         debug_failf("open failed: invalid header or file bounds"); goto fail;
     }
+    header_diagnostic_result("header valid",file_size,movie->encrypted,header_bytes,header_received,wire_bytes,0,true);
     movie->current_file_pos = -1;
     movie->video_bytes=file_size;
     if(movie->header.version==MOVIE_VERSION_MEDIA) {

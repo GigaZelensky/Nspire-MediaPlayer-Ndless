@@ -59,6 +59,7 @@ jobs:
             libmpfr-dev \
             libtinfo-dev \
             python3-dev \
+            python3-pil \
             texinfo \
             xz-utils \
             zlib1g-dev
@@ -72,12 +73,29 @@ jobs:
       - name: Check USB native handoff and timer recovery
         run: |
           python3 tools/check_usb_runtime.py
+          python3 tools/check_usb_phase_timing.py
+          python3 tools/check_profile_reports.py
           python3 tools/check_timer_settle.py
 
       - name: Check quiet defaults and original-CX RAM fallback
         run: |
           python3 tools/check_release_defaults.py
           python3 tools/check_release_features.py
+          python3 tools/check_header_diagnostic.py
+          python3 tools/check_flashfx_layouts.py
+          python3 tools/check_wallpaper.py
+          python3 tools/check_battery_diagnostics.py
+          python3 tools/check_battery_adc.py
+          python3 tools/check_battery_calibration.py
+          python3 tools/check_battery_gauge.py
+          python3 tools/check_battery_native.py
+          python3 tools/check_battery_model.py
+          python3 tools/check_battery_ui.py
+          python3 tools/check_ui_compositing.py
+          python3 tools/check_ui_transitions.py
+          python3 tools/check_usb_binding_hints.py
+          python3 tools/check_picker_polish.py
+          python3 tools/check_video_info.py
 
       - name: Check NAND DMA ownership and recovery
         run: python3 tools/check_nand_dma.py

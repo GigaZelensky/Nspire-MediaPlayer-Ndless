@@ -714,6 +714,7 @@ static void playback_key_snapshot_sample(PlaybackKeySnapshot *snapshot, bool ref
     snapshot->plus = isKeyPressed(KEY_NSPIRE_PLUS);
     snapshot->minus = isKeyPressed(KEY_NSPIRE_MINUS);
     snapshot->f = isKeyPressed(KEY_NSPIRE_F);
+    snapshot->i = isKeyPressed(KEY_NSPIRE_I);
     snapshot->t = isKeyPressed(KEY_NSPIRE_T);
     snapshot->m = isKeyPressed(KEY_NSPIRE_M);
     snapshot->d = isKeyPressed(KEY_NSPIRE_D);
@@ -770,6 +771,7 @@ bool playback_key_snapshot_new_press(PlaybackKeySnapshot *snapshot)
     pending = key_snapshot_new_press(KEY_NSPIRE_PLUS, &snapshot->plus) || pending;
     pending = key_snapshot_new_press(KEY_NSPIRE_MINUS, &snapshot->minus) || pending;
     pending = key_snapshot_new_press(KEY_NSPIRE_F, &snapshot->f) || pending;
+    pending = key_snapshot_new_press(KEY_NSPIRE_I, &snapshot->i) || pending;
     pending = key_snapshot_new_press(KEY_NSPIRE_T, &snapshot->t) || pending;
     pending = key_snapshot_new_press(KEY_NSPIRE_M, &snapshot->m) || pending;
     pending = key_snapshot_new_press(KEY_NSPIRE_D, &snapshot->d) || pending;
