@@ -31,6 +31,8 @@ int main(void) {
             config=json.loads(subprocess.check_output(['make','--no-print-directory','build-config',
                 'PYTHON='+sys.executable,*case],cwd=ROOT,text=True))
             definitions=[x for x in config['compiler_flags'] if x.startswith('-D')]
+            fast_usb=int(bool(config['usb_storage'] or config['audio_codecs']))
+            assert '-DNDMEDIA_USB_FAST_ENUMERATION='+str(fast_usb) in definitions
             exe=work/'features.exe'
             subprocess.run([cc,'-std=c99','-O2','-Wall','-Wextra','-Werror','-I'+str(ROOT/'src'),*definitions,str(source),'-o',str(exe)],check=True)
             subprocess.run([str(exe)],check=True)

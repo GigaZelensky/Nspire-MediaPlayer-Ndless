@@ -50,7 +50,8 @@ enum {
     UI_OTG_A_IDLE,
     UI_OTG_WAIT_BCON,
     UI_OTG_WAIT_VFALL,
-    UI_OTG_INPUT_POLL
+    UI_OTG_INPUT_POLL,
+    UI_USB_DELAY
 };
 typedef struct {
     uint32_t function[UI_FUNCTIONS];

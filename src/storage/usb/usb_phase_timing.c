@@ -35,7 +35,8 @@ static const char *const names[USB_PHASE_COUNT] = {
     "host_wake", "ownership", "endpoints", "scsi_init", "mount",
     "directory_open", "directory_read", "folder_scan", "audio_setup",
     "discovery", "io_prepare", "fs_worker", "mount_fs", "mount_serial", "mount_root",
-    "disk_read", "fs_progress", "connection_total", "dialog_draw", "connection_to_first_usb_rows"
+    "disk_read", "fs_progress", "connection_total", "dialog_draw", "connection_to_first_usb_rows",
+    "native_pipe_abort", "native_pipe_close", "native_owner_busy"
 };
 static void invalidate_tokens(void)
 { if (!++generation) generation = 1; }

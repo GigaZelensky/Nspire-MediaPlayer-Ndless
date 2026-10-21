@@ -81,6 +81,12 @@ int main(int argc,char **argv)
         assert(load_history_store_from_path(history_file,&read));
         assert(read.audio_volume==33 && read.audio_muted && read.entries[0].frame==901);free_history_store(&read);
     }
+    /* Start a valid independent case after the rejected-corrupt-file test. */
+    assert(save_history_store_to_path(history_file,&stale));
+    g_ui_theme_id=UI_THEME_PURPLE;ui_queue_theme_save();flush_queued_preferences_save("purple");
+    assert(!g_pending_theme_save && load_history_store_from_path(history_file,&read));
+    assert(read.theme_id==UI_THEME_PURPLE && read.count==1 && read.entries[0].frame==901);
+    free_history_store(&read);
     free_history_store(&stale);remove(history_file);
     puts("PASS app-wide volume/mute history: legacy default, zero/full range, stale-snapshot merge, deferred writes, restart, clock/theme/resume preservation, failed-save retry and Lite compatibility");
     return 0;

@@ -81,8 +81,9 @@ static unsigned kernel_policy=7,now_ms,resume_attempts;static int resume_result;
 static bool clock_bindings_ok,clock_timer_rearmed,clock_entry_ok;static uint32_t clock_binding_hz;static uintptr_t clock_binding_counter;
 static bool standby_was_outer,native_clock,player_timer=true,audio_mode,tree_busy,lease,host_running=true;
 static unsigned native_waits;
-static unsigned soft_refusals,owner_pending;
-static bool publish_after_pending;
+static unsigned soft_refusals,owner_pending,busy_refusals,clock_step=100;
+static bool publish_after_pending,worker_publishes;
+static unsigned worker_ready_ms;
 static unsigned candidate,candidate_total=1,candidate_available=1;
 static bool accepting,late_child,quiet_reconnect;
 static unsigned late_attachments;
@@ -97,6 +98,8 @@ static unsigned native_critical_enter(void) {return 0xc0;}
 static void native_critical_leave(unsigned x) {}
 static unsigned TCT_Local_Control_Interrupts(unsigned p) {unsigned old=kernel_policy;kernel_policy=p;return old;}
 static bool native_usb_ui_active(void) {return false;}
+static void native_usb_ui_fast_enumeration_begin(void) {assert(native_clock);}
+static bool native_usb_ui_fast_enumeration_end(void) {return true;}
 static bool player_standby_guard_active(void) {return true;}
 static int native_usb_ui_acquire(void (*f)(void),void *c) {return 0;}
 static void native_usb_ui_release(void) {}
@@ -106,7 +109,7 @@ static void connection_checkpoint(UsbConnectWindow *w,const char *s,bool force) 
 static void render_window(UsbConnectWindow *w,bool force) {}
 static bool usb_storage_prepare_connection(void) {accepting=true;return true;}
 static bool usb_fs_prepare(void) {return true;}
-static uint32_t monotonic_clock_now_ms(void) {now_ms+=100;return now_ms;}
+static uint32_t monotonic_clock_now_ms(void) {now_ms+=clock_step;return now_ms;}
 static uint64_t monotonic_clock_now_ticks(void) {return now_ms*33ULL;}
 static uint32_t connection_seconds(void) {return now_ms/1000;}
 static bool host_device_present(void) {return true;}
@@ -128,6 +131,7 @@ static void progress(void *p) {}
 static void usb_fs_set_progress(void (*f)(void *),void *p) {}
 static bool usb_volume_mount(int *e) {assert(kernel_policy==7 && !native_clock && player_timer && lease && host_running);return true;}
 static int native_usb_ui_resume_host(void) {
+ if(busy_refusals){--busy_refusals;return -51;}
  if(soft_refusals){--soft_refusals;return -28;}
  if(owner_pending){--owner_pending;return NATIVE_USB_SESSION_PENDING;}
  if(publish_after_pending && !candidate_available)candidate_available=1;
@@ -136,6 +140,7 @@ static int native_usb_ui_resume_host(void) {
 static int native_usb_ui_reassert(void) {return 0;}
 static int native_usb_ui_wait(void) {
  assert(native_clock && kernel_policy==0 && !lease);++native_waits;tree_busy=false;
+ if(worker_publishes && now_ms>=worker_ready_ms)candidate_available=1;
  if(late_child && candidate==1 && candidate_available==1 && accepting) {
   candidate_available=2;++late_attachments;
  }
@@ -145,7 +150,7 @@ static bool usb_storage_park(void) {return true;}
 static bool performance_clock_start(void) {return true;}
 static int performance_clock_status(void) {return 0;}
 static void usb_storage_unpark(void) {}
-'''+function((root/'src/player/usb_browser.c').read_text(),'host_storage_ready')+body+'''
+'''+function((root/'src/player/usb_browser.c').read_text(),'host_storage_ready')+function((root/'src/player/usb_browser.c').read_text(),'host_retry_delay_ms')+body+'''
 int main(void) {
  assert(host_storage_ready(1U|(5U<<8)));
  assert(!host_storage_ready(1U|(0x80bU<<8)));
@@ -178,6 +183,20 @@ int main(void) {
  w=(UsbConnectWindow){.preconnected=true};connect_native(&w);
  assert(!w.connected && w.timed_out && !w.guard_error && resume_attempts>4 &&
         now_ms-pending_started<9000 && !native_clock && kernel_policy==7 && player_timer);
+ /* The native worker publishes on its own scheduler turn. A busy retry
+  * backoff must not delay that ready attachment or hammer the owner's locks. */
+ owner_pending=0;clock_step=1;candidate=0;candidate_available=0;
+ busy_refusals=100;worker_publishes=true;publish_after_pending=false;
+ unsigned fast_started=now_ms;worker_ready_ms=now_ms+100;
+ w=(UsbConnectWindow){.preconnected=true};connect_native(&w);
+ assert(w.connected && resume_attempts==1 && !w.guard_error &&
+        now_ms-fast_started<150 && !native_clock && kernel_policy==7 && player_timer);
+ worker_publishes=false;busy_refusals=0;owner_pending=3;publish_after_pending=true;
+ candidate=0;candidate_available=0;fast_started=now_ms;
+ w=(UsbConnectWindow){.preconnected=true};connect_native(&w);
+ assert(w.connected && !owner_pending && resume_attempts==4 && !w.guard_error &&
+        now_ms-fast_started<300 && !native_clock && kernel_policy==7 && player_timer);
+ printf("PASS connection retry latency: independent busy-worker publication stays prompt with one lock probe; queued owner polls recover in %u ms simulated time\\n",now_ms-fast_started);
  return 0;}
 '''
 with tempfile.TemporaryDirectory() as tmp:

@@ -2,6 +2,7 @@
 #include "../storage/usb/usb_registers.h"
 #include "../storage/usb/usb_phase_timing.h"
 #include "native_usb_ui_resolver.h"
+#include "native_usb_timing.h"
 #include "native_interrupts.h"
 #include "../platform/portable_reader_platform.h"
 #include <limits.h>
@@ -409,6 +410,36 @@ bool native_usb_ui_storage_binding_after(unsigned after,uint32_t *owner,uint32_t
 bool native_usb_ui_storage_binding(uint32_t *owner,uint32_t *device,uint32_t *interface)
 {return native_usb_ui_storage_binding_after(0,owner,device,interface);}
 
+#if NDMEDIA_USB_FAST_ENUMERATION
+static void timing_write(uint32_t at,uint32_t op){WORD(at)=op;}
+static void timing_sync(uint32_t first,uint32_t second)
+{
+    /* Clean only the two code lines. A whole-data-cache flush could write a
+     * stale DMA descriptor back over the native controller's progress. */
+    __asm__ volatile("mcr p15,0,%0,c7,c10,1"::"r"(first&~31U):"memory");
+    __asm__ volatile("mcr p15,0,%0,c7,c10,1"::"r"(second&~31U):"memory");
+    __asm__ volatile("mcr p15,0,%0,c7,c10,4\n\tmcr p15,0,%0,c7,c5,0\n\tb 1f\n1:"::"r"(0):"memory");
+}
+#endif
+void native_usb_ui_fast_enumeration_begin(void)
+{
+#if NDMEDIA_USB_FAST_ENUMERATION
+    unsigned mask=native_critical_enter();UsbHostTree tree;
+    if(resolved && !api.classic_cx && native_usb_ui_active() &&
+        portable_reader_platform_refresh(&mapping) && host_tree(&tree)) {
+        uint32_t resume=resume_method(tree.hub_owner,UI_HUB_RESUME);
+        uint32_t explore=resume?code_branch(resume+36U):0;
+        const PortableView *v=portable_reader_platform_view(&mapping);
+        if(explore && native_usb_ui_role_matches(v,explore,UI_HUB_EXPLORE)) {
+            uint32_t reset=code_branch(explore+408U);
+            (void)native_usb_timing_begin(v,explore,reset,(NativeUsbTimingIo){timing_write,timing_sync});
+        }
+    }
+    native_critical_leave(mask);
+#endif
+}
+bool native_usb_ui_fast_enumeration_end(void){return native_usb_timing_end();}
+
 static int enumerate_empty_root(const UsbHostTree *tree, const UsbRegisters *registers)
 {
     /* Resume scans with explore(hub, 0), which can retire changed children
@@ -592,6 +623,7 @@ void native_usb_ui_debug(FILE *file)
         return;
     unsigned saved = native_critical_enter();
     (void)portable_reader_platform_refresh(&mapping);
+    native_usb_timing_debug(file);
     uint32_t power_state, power_blocks = apd_blocks(&power_state);
     uint32_t event_bits = api.event_mask && memory(api.event_mask & ~3U, 4)
         ? HALF(api.event_mask) & 31U : UINT32_MAX;
@@ -1264,6 +1296,7 @@ bool native_usb_ui_clock(const volatile uint32_t **counter, uint32_t *hz,
 
 int native_usb_ui_release(void)
 {
+    if(!native_usb_timing_end())return -26;
     if (!native_usb_ui_active())
         return 0;
     if (!portable_reader_platform_refresh(&mapping))

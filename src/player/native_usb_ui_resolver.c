@@ -1,4 +1,5 @@
 #include "native_usb_ui_resolver.h"
+#include "native_usb_timing.h"
 #include <string.h>
 typedef struct {
     unsigned slot, bytes;
@@ -38,7 +39,7 @@ static bool witness(const PortableView *v, uint32_t at, const UiCodeWitness *p)
         return false;
     uint32_t hash = 2166136261U;
     for (unsigned offset = 0; offset < p->bytes; offset += 4) {
-        uint32_t op = word(v, at + offset);
+        uint32_t op = native_usb_timing_original(v,at+offset,word(v, at + offset));
         if ((p->slot & UI_WITNESS_ROLE) == UI_HUB_CONTROL && offset >= 0x30U && offset < 0x8cU) {
             if ((op & 3U) || op < at || op >= at + p->bytes) return false;
             op -= at;

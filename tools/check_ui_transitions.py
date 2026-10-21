@@ -43,6 +43,18 @@ int main(void)
     assert(ui_theme_transition_active() && ui_theme()->accent_mid==old);
     clock_ms+=90;assert(ui_theme()->accent_mid!=old && ui_theme()->accent_mid!=ui_theme_target()->accent_mid);
     clock_ms+=90;assert(!ui_theme_transition_active() && ui_theme()->accent_mid==ui_theme_target()->accent_mid);
+    bool saw_purple=false;
+    for(unsigned i=0;i<UI_THEME_COUNT;++i) {
+        uint16_t outgoing=ui_theme()->accent_mid;
+        ui_cycle_theme();assert(ui_theme_transition_active() && ui_theme()->accent_mid==outgoing);
+        clock_ms+=180;assert(!ui_theme_transition_active());
+        if(g_ui_theme_id==UI_THEME_PURPLE) {
+            saw_purple=true;
+            uint16_t c=ui_theme()->accent_mid;
+            assert((c&31U)>((c>>11)&31U) && ((c>>11)&31U)>((c>>6)&31U));
+        }
+    }
+    assert(saw_purple && g_ui_theme_id==UI_THEME_BLUE);
     cached=false;unsigned before=prepares;ui_cycle_theme();assert(prepares==before); /* Video keeps no wallpaper. */
     UiTransition chrome;ui_transition_init(&chrome,true);
     assert(ui_transition_chrome(&chrome,false,2000)==255 && !chrome.target_active);

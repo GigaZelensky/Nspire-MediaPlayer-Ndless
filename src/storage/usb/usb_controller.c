@@ -275,12 +275,20 @@ static void close_pipes(UsbController *c)
      * Consume ownership before calling native cleanup. */
     if(input || output)native_usb_ui_queue_capture("pipe_close_before",NULL);
     if (input) {
-        c->abort_pipe(input);
-        c->close_pipe(input);
+        UsbPhaseTimingToken timing=usb_phase_timing_begin(USB_PHASE_PIPE_ABORT);
+        int status=c->abort_pipe(input);
+        usb_phase_timing_end(USB_PHASE_PIPE_ABORT,timing,status);
+        timing=usb_phase_timing_begin(USB_PHASE_PIPE_CLOSE);
+        status=c->close_pipe(input);
+        usb_phase_timing_end(USB_PHASE_PIPE_CLOSE,timing,status);
     }
     if (output) {
-        c->abort_pipe(output);
-        c->close_pipe(output);
+        UsbPhaseTimingToken timing=usb_phase_timing_begin(USB_PHASE_PIPE_ABORT);
+        int status=c->abort_pipe(output);
+        usb_phase_timing_end(USB_PHASE_PIPE_ABORT,timing,status);
+        timing=usb_phase_timing_begin(USB_PHASE_PIPE_CLOSE);
+        status=c->close_pipe(output);
+        usb_phase_timing_end(USB_PHASE_PIPE_CLOSE,timing,status);
     }
     if(input || output)native_usb_ui_queue_capture("pipe_close_after",NULL);
 }

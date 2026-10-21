@@ -187,6 +187,17 @@ static bool host_storage_ready(uint32_t state)
 {
     return (state & (3U|4U|64U|(0x85U<<8)))==(1U|(5U<<8));
 }
+static uint32_t host_retry_delay_ms(int result,bool quiet)
+{
+    /* A busy native worker progresses independently of our resume calls.
+     * Attachment readiness is still checked every scheduler turn below;
+     * repeatedly taking its locks adds work without discovering it sooner. */
+    if(result==-51)return 250U;
+    /* An owner request we actually queued can be polled promptly. Hardware
+     * reset and power settling remain inside that authenticated owner. */
+    if(result==NATIVE_USB_SESSION_PENDING)return 50U;
+    return quiet?1000U:250U;
+}
 void usb_browser_note_disconnect(void)
 {
     usb_auto_connect_removed(&auto_connection,connection_presence(),monotonic_clock_now_ms());
@@ -588,6 +599,7 @@ static void connect_native(void *context)
     if (!prepared)
         goto done;
     connection_checkpoint(window, "driver registered", false);
+    native_usb_ui_fast_enumeration_begin();
     window->status = "Detecting the USB drive...";
     uint32_t entered = monotonic_clock_now_ms();
     uint32_t rtc_entered = connection_seconds();
@@ -596,7 +608,8 @@ static void connect_native(void *context)
     bool sampled = false, host_resumed = false;
     /* A newly inserted adapter may still be bringing up its native HCD.
      * Give that worker a chance before manually starting the same cold bus. */
-    uint32_t resume_after = entered + (window->preconnected ? 250U : 1000U);
+    uint32_t resume_after = entered + (window->preconnected ? 40U : 100U);
+    UsbPhaseTimingToken owner_busy_timing={0,0};
     uint32_t present_since = 0;
     uint32_t observed_state = host_connection_state(), attempted_state = observed_state;
     while (!window->cancelled) {
@@ -622,7 +635,7 @@ static void connect_native(void *context)
         uint32_t host_state = host_connection_state();
         if (host_state != observed_state) {
             observed_state = host_state;
-            resume_after = now + (window->preconnected ? 500U : 1000U);
+            resume_after = now + (window->preconnected ? 40U : 100U);
         }
         if (present && !present_since) present_since = now;
         if (!present) present_since = 0;
@@ -639,6 +652,8 @@ static void connect_native(void *context)
             break;
         }
         if (usb_storage_attachment_ready() && present && host_storage_ready(host_state)) {
+            usb_phase_timing_end(USB_PHASE_NATIVE_BUSY,owner_busy_timing,0);
+            owner_busy_timing=(UsbPhaseTimingToken){0,0};
             window->status = "Opening the USB drive...";
             { /* The completed native attachment callback is the readiness boundary. */
                 render_window(window, true);
@@ -697,7 +712,7 @@ static void connect_native(void *context)
                  * Keep accepting native callbacks until a usable volume or
                  * the deadline, and reoffer any previously unclaimed child. */
                 host_resumed = false;
-                    resume_after = monotonic_clock_now_ms() + 250U;
+                    resume_after = monotonic_clock_now_ms() + 50U;
             }
         } else {
             window->status = present ? "Detecting the USB drive..." : "Waiting for a USB drive...";
@@ -705,7 +720,7 @@ static void connect_native(void *context)
                 (quiet_reconnect || resume_attempts < 4 || resume_result == -51 ||
                  resume_result == NATIVE_USB_SESSION_PENDING) &&
                 (int32_t)(now - resume_after) >= 0 && (presence & USB_AUTO_ADAPTER) &&
-                (window->preconnected || !present || now - present_since >= 1000U)) {
+                (window->preconnected || !present || now - present_since >= 100U)) {
                 bool trace_recovery = resume_attempts == 0 || resume_result != -51 ||
                     host_state != attempted_state;
                 int previous_result = resume_result;
@@ -714,11 +729,17 @@ static void connect_native(void *context)
                 UsbPhaseTimingToken wake_timing=usb_phase_timing_begin(USB_PHASE_HOST_WAKE);
                 resume_result = native_usb_ui_resume_host();
                 usb_phase_timing_end(USB_PHASE_HOST_WAKE,wake_timing,resume_result);
+                if(resume_result==-51) {
+                    if(!owner_busy_timing.generation)owner_busy_timing=usb_phase_timing_begin(USB_PHASE_NATIVE_BUSY);
+                } else {
+                    usb_phase_timing_end(USB_PHASE_NATIVE_BUSY,owner_busy_timing,resume_result);
+                    owner_busy_timing=(UsbPhaseTimingToken){0,0};
+                }
                 ++resume_attempts;
                 host_resumed = resume_result == 0;
-                resume_after = monotonic_clock_now_ms() + (quiet_reconnect && resume_result != -51 ? 1000U : 250U);
+                resume_after = monotonic_clock_now_ms() + host_retry_delay_ms(resume_result,quiet_reconnect);
                 window->guard_error = native_usb_ui_reassert();
-                render_window(window, true);
+                render_window(window, false);
                 /* Lock contention performs no recovery operation. Keep trying
                  * until the window deadline, without filling flash with the
                  * same checkpoint on every short retry. */
@@ -745,6 +766,7 @@ static void connect_native(void *context)
         if (window->guard_error)
             break;
     }
+    usb_phase_timing_end(USB_PHASE_NATIVE_BUSY,owner_busy_timing,window->connected?0:resume_result);
     if(usb_host_session_active()) {
         if(!native_enabled) {
             if(!monotonic_clock_enter_native(os_counter,os_hz)) {window->guard_error=-24;goto done;}
@@ -765,6 +787,7 @@ static void connect_native(void *context)
         debug_tracef("USB clock restore failed status=%d", performance_clock_status());
     usb_storage_unpark();
 done:
+    if(!native_usb_ui_fast_enumeration_end())window->guard_error=-26;
     connection_checkpoint(window, window->connected ? "connected" : window->cancelled ? "cancelled" : "connection ended", false);
     monotonic_clock_leave_native();
     usb_storage_stop_accepting();

@@ -255,6 +255,7 @@ typedef enum {
     UI_THEME_BLUE,
     UI_THEME_GREEN,
     UI_THEME_RED,
+    UI_THEME_PURPLE,
     UI_THEME_COUNT
 } UiThemeId;
 

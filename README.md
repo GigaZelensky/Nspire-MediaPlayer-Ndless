@@ -59,7 +59,7 @@ The `.nvp` format used by the current player is:
 - adjustable warm night filter
 - idle dimming, screen-off and automatic standby
 - shared glass-and-ribbon wallpaper in the picker and music player, recolored with the theme
-- theme color profiles: `Amber`, `Blue`, `Green`, and `Red`
+- theme color profiles: `Amber`, `Blue`, `Green`, `Red`, and `Purple`
 - picker UI for videos and music, with separate file sizes and hover details
 - picker filename metadata tooltips from bracketed tags
 - resume history with saved playback, subtitle, and theme settings

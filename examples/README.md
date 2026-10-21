@@ -20,7 +20,9 @@ Licensing note:
 | --- | --- | --- |
 | ![Music player](screenshots/music-player.png) | ![It's Been So Long](screenshots/music-its-been-so-long.png) | ![Vortex visualization](screenshots/music-vortex.png) |
 
-The music images use the current music UI with representative tags/artwork.
+The music images show Sabina in Amber and It's Been So Long in Blue, using the
+current music UI with the tracks' tags, artwork and durations. Battery readings
+and playback positions are representative UI states.
 Visualizations are rendered by the production visualization code from decoded
 PCM samples. Album artwork retains its original rights.
 

@@ -33,6 +33,8 @@ bool native_usb_ui_clock(const volatile uint32_t **counter, uint32_t *hz,
                          bool (*progress)(void *), void *context);
 int native_usb_ui_release(void);
 bool native_usb_ui_active(void);
+void native_usb_ui_fast_enumeration_begin(void);
+bool native_usb_ui_fast_enumeration_end(void);
 const char *native_usb_ui_stage(void);
 void native_usb_ui_debug(FILE *);
 int native_usb_ui_resume_host_lease(void);
