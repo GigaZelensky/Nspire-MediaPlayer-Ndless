@@ -7,6 +7,20 @@ from encoder_gui.model import EncodeOptions,output_path,time_value
 from encoder_gui.worker import Task,encode_task
 import imageio_ffmpeg
 
+
+def encoding_children(pid):
+    import psutil
+    try:children=psutil.Process(pid).children(recursive=True)
+    except psutil.NoSuchProcess:return []
+    encoders=[]
+    for child in children:
+        # Metadata probes can exit between enumeration and cmdline(). Their
+        # disappearance does not mean the encoding worker has terminated.
+        try:
+            if '-progress' in child.cmdline():encoders.append(child)
+        except psutil.NoSuchProcess:continue
+    return encoders
+
 def wait(task,seconds=90):
     events=[];deadline=time.monotonic()+seconds
     while time.monotonic()<deadline:
@@ -91,10 +105,10 @@ def main():
         deadline=time.monotonic()+15;children=[];cancel_events=[]
         while time.monotonic()<deadline and task.process.is_alive():
             cancel_events.extend(task.messages())
-            try:children=[child for child in psutil.Process(task.process.pid).children(recursive=True) if '-progress' in child.cmdline()]
-            except psutil.NoSuchProcess:break
+            children=encoding_children(task.process.pid)
             if children:break
             time.sleep(.02)
+        cancel_events.extend(task.messages())
         assert children,('Cancellation test must interrupt an actual encoding pass, not its metadata probe',cancel_events[-8:])
         assert (staging/'scratch').is_dir()
         task.cancel();task.process.join(timeout=8)
