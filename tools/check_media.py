@@ -73,10 +73,12 @@ def check(work):
     run([reconnect_exe])
     playback = work / "playback.c"
     source = (ROOT / "src/audio/audio_playback.c").read_text()
-    playback_functions="\n".join(function(source,name) for name in (
+    playback_functions=function((ROOT/'src/player/usb_browser.c').read_text(),'usb_browser_audio_possible')+"\n"
+    playback_functions+="\n".join(function(source,name) for name in (
             "record_elapsed", "capture_transfer_fault", "pump_audio", "audio_playback_pump", "periodic_pump", "audio_playback_suspend", "audio_playback_pause", "audio_playback_seek",
             "audio_playback_retry", "audio_playback_can_reconnect", "audio_playback_cancelled", "audio_playback_active", "audio_playback_source_lost",
-            "audio_playback_position", "audio_playback_snapshot", "audio_playback_info", "audio_playback_mute", "tick_audio", "audio_playback_tick"))
+            "audio_playback_position", "audio_playback_snapshot", "audio_playback_info", "audio_playback_mute", "tick_audio",
+            "audio_playback_waiting_for_output", "wait_for_output", "audio_playback_tick"))
     playback_functions+="\n"+"\n".join(function(adapter,name) for name in (
         "movie_audio_suspend","movie_audio_pause","frame_sample","movie_audio_reanchor",
         "movie_audio_tick","movie_audio_source_lost","movie_audio_mute"))
@@ -89,13 +91,18 @@ def check(work):
     run([playback_exe])
     ui = (ROOT / "src/player/picker_ui.c").read_text()
     loop = (ROOT / "src/player/playback_loop.c").read_text()
+    prompt=loop.index("    if (startup_has_resume && resume_frame < movie.header.frame_count)")
+    prepare=loop.rfind("    loading_progress_init(",0,prompt)
+    assert loop.count('movie_audio_open(&movie,path,&loading_progress);')==1
+    assert prepare<loop.index('movie_audio_open(&movie,path,&loading_progress);')<prompt
     start = loop.index("    if (loading_snapshot) {\n        draw_movie_frame_background")
     end = loop.index("    finish_loading_transition", start)
     resume = work / "resume.c"
     resume.write_text((tests / "resume.c").read_text().replace(
         "/* PRODUCTION_LOADING */", function(ui, "loading_progress_init") + "\n" +
         function(ui, "loading_progress_tick")).replace(
-        "/* PRODUCTION_AUDIO_START */", loop[start:end]))
+        "/* PRODUCTION_AUDIO_PREPARE */",loop[prepare:prompt]).replace(
+        "/* PRODUCTION_AFTER_RESUME */", loop[start:end]))
     resume_exe = work / "resume.exe"
     run([*base, "-Werror", resume, "-o", resume_exe])
     run([resume_exe])

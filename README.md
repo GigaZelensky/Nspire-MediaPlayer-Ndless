@@ -95,15 +95,24 @@ codec files to install.
 - sound requires compatible USB audio hardware because the calculators have no built-in audio output
 - a Lite/custom build only plays its selected codecs; known unavailable video codecs appear in red in the library
 
+Videos play silently without waiting for an audio connection when no USB output
+is detected. After attaching an output, `Ctrl+M` or the speaker control can retry
+audio setup if it has not started automatically.
+
 ## Battery Life
 
 Battery Life: ~9.5 hours of continuous H.264 playback at 100% brightness on a CX II-T.
 
 The battery icon and percentage appear in the library and playback controls.
-A bolt inside the icon indicates charging. On verified firmware the percentage
-uses fresh voltage and a smooth default curve, then gradually learns from normal
+A bolt inside the icon indicates incoming power; a USB symbol indicates OTG host
+mode. On verified firmware the percentage uses fresh voltage and a smooth default
+curve, then gradually learns from normal
 use. No calibration run is required. It remains an estimate; **Info** shows its
-source and voltage. Original CX and unsupported firmware use the OS battery level.
+source and voltage. The meter never falls back to coarse OS percentages: it shows
+`--` until a usable voltage estimate is available, including when launched while
+charging, and retains it through brief missing samples. Charging readings do not
+train the discharge curve. Firmware without a supported voltage reader shows
+`--`; OS levels remain available only as diagnostics in Info.
 
 Battery learning stores two small settings files (under 6 KiB combined), without
 routine debug logs. `Ctrl+R` in the library resets only battery learning after a

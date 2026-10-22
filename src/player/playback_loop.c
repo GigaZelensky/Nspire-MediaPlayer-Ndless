@@ -312,6 +312,7 @@ int play_movie(
     PlaybackRenderGate render_gate = {0};
     uint32_t last_screenshot_revision = 0;
     uint32_t last_render_night_revision = 0;
+    uint32_t last_render_battery_revision = 0;
     uint32_t last_render_visibility = 0;
     uint32_t last_render_audio_revision = 0;
     int last_render_pointer_x = -1, last_render_pointer_y = -1;
@@ -493,6 +494,12 @@ int play_movie(
         nSDL_Font *subtitle_white, *subtitle_outline;
         subtitle_fonts_for_style(fonts, subtitle_font_index, &subtitle_white, &subtitle_outline);
     }
+    /* Prepare the soundtrack under the initial loading screen. The resume
+     * prompt animates directly into an already decoded frame; opening audio
+     * afterward would redraw Loading over that frame (or a freed backdrop).
+     * USB negotiation still waits for the normal playback/output check. */
+    loading_progress_init(&loading_progress, screen, loading_snapshot, fonts, "Loading", true);
+    movie_audio_open(&movie,path,&loading_progress);
     if (startup_has_resume && resume_frame < movie.header.frame_count) {
         int resume_choice = 1;
 
@@ -552,11 +559,6 @@ int play_movie(
     if (loading_snapshot) {
         draw_movie_frame_background(loading_snapshot, &movie, scale_mode, video_align_x, video_align_y, NULL, NULL);
     }
-    /* The resume prompt can consume/free loading_snapshot. Audio reads draw
-     * progress again, so their context must borrow the current surface rather
-     * than the pointer captured before that modal ran. */
-    loading_progress_init(&loading_progress, screen, loading_snapshot, fonts, "Loading", true);
-    movie_audio_open(&movie,path,&loading_progress);
     finish_loading_transition(screen, &loading_snapshot, fonts, "Loading");
     pointer_init(&pointer);
     pointer_update(&pointer);
@@ -2186,6 +2188,7 @@ int play_movie(
                     (uint32_t)(render_now_ms - seek_badge_started_ms) < SEEK_BADGE_ANIM_MS));
             bool collect_render_metrics = debug_should_collect_metrics();
             uint32_t render_night_revision = night_mode_revision();
+            uint32_t render_battery_revision = battery_meter_revision();
             bool render_pointer_changed = pointer_click || pointer_release_edge ||
                 playback_pointer_pixels_changed(last_render_pointer_visible, last_render_pointer_x,
                     last_render_pointer_y, pointer.visible, pointer.x, pointer.y);
@@ -2214,7 +2217,8 @@ int play_movie(
                 tab_repeat_step || seek_delta_ms || brightness_delta || speed_delta ||
                 render_memory_refresh || render_buffers_changed || render_visibility != last_render_visibility ||
                 screenshot_preview.revision != last_screenshot_revision ||
-                render_night_revision != last_render_night_revision;
+                render_night_revision != last_render_night_revision ||
+                ((ui_mixes.chrome || info_open) && render_battery_revision!=last_render_battery_revision);
             uint32_t capture_render_reasons = 0;
             if (playback_capture_active(&movie)) {
                 if (scheduled_frame_advanced) capture_render_reasons |= CAPTURE_RENDER_SCHEDULED_FRAME;
@@ -2246,6 +2250,7 @@ int play_movie(
                 playback_phase(&movie, PLAYER_CRASH_RENDER, paused, playback_rate);
                 if (playback_capture_active(&movie)) playback_capture_render_reason(&movie, capture_render_reasons);
                 last_render_night_revision = render_night_revision;
+                last_render_battery_revision = render_battery_revision;
                 last_screenshot_revision = screenshot_preview.revision;
                 last_render_visibility = render_visibility;
                 last_render_audio_revision = audio_controls_revision();

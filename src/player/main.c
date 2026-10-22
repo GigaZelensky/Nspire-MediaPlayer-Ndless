@@ -195,6 +195,10 @@ int main(int argc, char **argv)
         }
     }
 
+    /* First safe foreground sample, before the initial folder scan. The
+     * independently guarded ADC can seed the meter while metadata discovery
+     * continues in small slices; no blocking whole-firmware scan. */
+    battery_meter_tick(monotonic_clock_now_ms(),0,true);
     usb_phase_timing_end(USB_PHASE_APP_STARTUP,startup_timing,0);
     while (1) {
         resume_without_prompt = false;

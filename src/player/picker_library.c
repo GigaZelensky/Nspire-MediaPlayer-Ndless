@@ -161,7 +161,7 @@ void render_picker(SDL_Surface *screen, const Fonts *fonts, MovieFile *files, si
 #if NDMEDIA_BATTERY_GAUGE_TEST
     BatteryPowerInfo power;
     if(battery_diagnostics_power(now_ms,&power) && (power.charging || power.checking)) {
-        draw_battery_power_glyph(screen,240,3+header_offset,header_mix,power.checking);
+        draw_battery_power_glyph(screen,240,3+header_offset,header_mix,false);
         library_label(screen,fonts,252,4+header_offset,
             power.charging?"Charging":"Power",UI_COLOR_WHITE,header_mix);
     }

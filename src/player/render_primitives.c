@@ -1,11 +1,11 @@
 #include "player_internal.h"
 #include "wallpaper_image.h"
 
-void draw_battery_power_glyph(SDL_Surface *screen,int x,int y,uint8_t mix,bool checking)
+void draw_battery_power_glyph(SDL_Surface *screen,int x,int y,uint8_t mix,bool usb_host)
 {
     static const uint8_t bolt[8]={0x0c,0x18,0x18,0x3e,0x3c,0x0c,0x18,0x10};
-    static const uint8_t plug[8]={0x24,0x24,0x7e,0x7e,0x3c,0x18,0x18,0};
-    const uint8_t *rows=checking?plug:bolt;
+    static const uint8_t usb[8]={0x13,0x3b,0xd2,0x54,0x38,0x10,0x38,0x38};
+    const uint8_t *rows=usb_host?usb:bolt;
     if(!mix)return;
     for(int row=0;row<8;++row)for(int column=0;column<8;++column)
         if(rows[row]&(0x80U>>column)) {

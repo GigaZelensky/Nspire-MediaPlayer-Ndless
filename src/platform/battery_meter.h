@@ -9,6 +9,7 @@ void battery_meter_init(void);
  * acquisition, then passes false here. Never enter from a clock callback. */
 void battery_meter_tick(uint32_t now,uint32_t load_key,bool allow_acquisition);
 bool battery_meter_info(BatteryMeterInfo *);
+uint32_t battery_meter_revision(void);
 void battery_meter_debug(FILE *);
 uint32_t battery_meter_load_key(bool video,bool usb,uint32_t codec,uint32_t mhz,
                                 uint32_t brightness,bool screen_off,uint32_t volume,
@@ -21,6 +22,7 @@ bool battery_meter_save(void);
 static inline void battery_meter_init(void){}
 static inline void battery_meter_tick(uint32_t n,uint32_t k,bool a){(void)n;(void)k;(void)a;}
 static inline bool battery_meter_info(BatteryMeterInfo *o){if(o)*o=(BatteryMeterInfo){0};return false;}
+static inline uint32_t battery_meter_revision(void){return 0;}
 static inline void battery_meter_debug(FILE *f){(void)f;}
 static inline uint32_t battery_meter_load_key(bool v,bool u,uint32_t c,uint32_t m,uint32_t b,
  bool s,uint32_t l,uint32_t r,uint32_t h,uint32_t t)

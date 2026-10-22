@@ -56,9 +56,11 @@ void draw_video_info(SDL_Surface *screen,const Fonts *fonts,const Movie *movie,c
     BatteryMeterInfo battery;
     if(battery_meter_info(&battery) && battery.percent_valid) {
         snprintf(text,sizeof(text),"Battery %u%%%s",(unsigned)(battery.percent_tenths+5)/10,
-            battery.charging?" / charging":battery.checking?" / checking power":battery.estimated?" / estimated":" / OS level");
+            battery.charging?" / charging":battery.checking?" / checking power":battery.external_power?" / external power":battery.usb_host?" / USB OTG host":" / estimated");
         info_line(target,fonts,x,y,text,true);y+=14;
-        if(battery.voltage_valid)snprintf(text,sizeof(text),"%lu.%03lu V / OS %lu%%",
+        if(battery.voltage_valid && battery.os_percent>100)snprintf(text,sizeof(text),"%lu.%03lu V / smoothed default curve",
+            (unsigned long)battery.millivolts/1000,(unsigned long)battery.millivolts%1000);
+        else if(battery.voltage_valid)snprintf(text,sizeof(text),"%lu.%03lu V / OS %lu%%",
             (unsigned long)battery.millivolts/1000,(unsigned long)battery.millivolts%1000,(unsigned long)battery.os_percent);
         else snprintf(text,sizeof(text),"Fresh battery voltage not available");
     } else {snprintf(text,sizeof(text),"Battery reading not available");info_line(target,fonts,x,y,text,true);y+=14;text[0]=0;}

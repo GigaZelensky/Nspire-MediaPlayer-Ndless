@@ -6,6 +6,7 @@
 #include <errno.h>
 #include "audio/audio_playback.h"
 #include "audio/movie_audio.h"
+#include "storage/usb/usb_autoconnect.h"
 typedef struct { uint64_t position; } UsbAudio;
 #include "audio/audio_buffer.h"
 typedef struct SDL_Surface { int unused; } SDL_Surface;
@@ -24,6 +25,8 @@ struct AudioPlayback {
     uint32_t last_seek_ms, last_prefill_ms, last_start_ms;
     unsigned restart_count, seek_count;
     bool running, failed, need_seek, mute, usb_failed, primary_saved;
+    bool waiting_for_output,output_requested;
+    uint32_t output_poll_after;
     int source_error;
     char transfer_fault[384];
     char source_path[256];
@@ -67,7 +70,13 @@ static int audio_decoder_step(void *d, uint64_t p)
     return 1;
 }
 static const char *audio_decoder_error(void *d) { (void)d; return "decoder failure"; }
-static uint32_t monotonic_clock_now_ms(void) { return 0; }
+static uint32_t fake_now;
+static unsigned presence=USB_AUTO_ADAPTER|USB_AUTO_DEVICE,presence_reads;
+static unsigned native_children;
+static unsigned connection_presence(void){++presence_reads;return presence;}
+static void native_usb_ui_bus_snapshot(uint32_t tree[8])
+{memset(tree,0,8*sizeof(*tree));tree[0]=1;tree[7]=native_children;}
+static uint32_t monotonic_clock_now_ms(void) { return fake_now; }
 static bool progress(void *a) { (void)a; return true; }
 static bool usb_path(const char *path){return !strncmp(path,"usb:",4);}
 static bool storage_idle=true,health_ok=true;
@@ -180,6 +189,51 @@ int main(void)
     audio_playback_pump(&a);
     assert(a.failed && !a.running && a.usb_failed && a.position==device.position);
     assert(strstr(a.transfer_fault,"live device probe timeout"));
+    /* A local video with a soundtrack, but no OTG adapter: no modal, host
+     * wake, seek, prefill, failed state or transfer report. The video clock
+     * can advance independently while passive insertion checks are bounded. */
+    MovieAudio silent={.decoder=&silent,.need_seek=true,.num=1,.den=1,
+        .buffer={.sample_rate=1000,.sample_count=10000,.pcm_capacity=4096}};
+    Movie local={.audio=&silent,.header={24,1},.audio_track={1000,10000}};
+    presence=0;fake_now=0;
+    unsigned old_opens=opens,old_dialogs=dialogs,old_seeks=seeks,old_steps=decoder_steps;
+    unsigned old_presence=presence_reads;
+    for(unsigned t=0;t<500;t+=20) {
+        fake_now=t;local.current_frame=t*24/1000;
+        movie_audio_tick(&local,false,1,1);
+        assert(audio_playback_waiting_for_output(&silent) && !silent.failed && !silent.usb && !silent.running);
+    }
+    assert(opens==old_opens && dialogs==old_dialogs && seeks==old_seeks && decoder_steps==old_steps);
+    assert(presence_reads==old_presence+1 && !silent.usb_failed && !silent.transfer_fault[0]);
+    /* A later insertion must join the current video sample, never replay the
+     * first half-second. An adapter alone is sufficient: sleeping ports are
+     * not mistaken for proven absence. */
+    presence=USB_AUTO_ADAPTER;fake_now=500;local.current_frame=12;
+    health_ok=true;movie_audio_tick(&local,false,1,1);
+    assert(silent.running && !silent.waiting_for_output && !silent.failed);
+    assert(opens==old_opens+1 && dialogs==old_dialogs+1 && device.position==((uint64_t)500<<32));
+    presence=USB_AUTO_UNKNOWN;assert(!usb_browser_audio_possible());
+    presence=0;assert(!usb_browser_audio_possible());
+    MovieAudio unknown={.decoder=&unknown,.need_seek=true,.num=1,.den=1,
+        .buffer={.sample_rate=1000,.sample_count=10000,.pcm_capacity=4096}};
+    /* Exact failure state from the calculator: all four sampled registers
+     * were zero, with no native child. Unknown must not enter the 8s wake. */
+    UsbRegisters r;assert(usb_registers_for_asic(0x202,&r));
+    presence=usb_auto_connect_presence(&r,0,0,0,0);assert(presence==USB_AUTO_UNKNOWN);
+    audio_playback_tick(&unknown,false,1,1);
+    assert(!unknown.running && unknown.waiting_for_output && !unknown.failed && opens==old_opens+1);
+    assert(dialogs==old_dialogs+1);
+    /* A confirmed child is positive evidence even while the PHY is gated. */
+    native_children=1;fake_now+=500;audio_playback_tick(&unknown,false,1,1);
+    assert(unknown.running && !unknown.waiting_for_output && opens==old_opens+2);
+    native_children=0;
+    MovieAudio manual={.decoder=&manual,.need_seek=true,.num=1,.den=1,
+        .buffer={.sample_rate=1000,.sample_count=10000,.pcm_capacity=4096}};
+    audio_playback_tick(&manual,false,1,1);assert(manual.waiting_for_output && opens==old_opens+2);
+    audio_playback_mute(&manual);assert(manual.output_requested && !manual.mute);
+    audio_playback_tick(&manual,false,1,1);
+    assert(manual.running && !manual.waiting_for_output && !manual.output_requested && opens==old_opens+3);
+    puts("PASS no-output video: no modal/host/decode work, bounded polls, late insertion joins current frame, captured all-zero PHY stays quiet, native child and explicit M retry still connect");
     puts("PASS live health queries run only at a quiescent foreground boundary; loss preserves position/fault and triggers recovery");
     puts("PASS playback retains headset for pause/seek/rate changes; native suspend closes; pause failure cleans up");
     return 0;

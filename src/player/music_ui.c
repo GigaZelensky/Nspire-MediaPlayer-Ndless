@@ -640,20 +640,27 @@ static void info_panel(SDL_Surface *s, const Fonts *f, const char *path,
     if(battery_meter_info(&meter)) {
         if(meter.charging || meter.checking)
             snprintf(text,sizeof(text),"Battery: %s",meter.charging?"charging":"checking battery");
+        else if(meter.external_power)
+            snprintf(text,sizeof(text),"Battery: external USB power");
+        else if(meter.usb_host)
+            snprintf(text,sizeof(text),"Battery: USB OTG host / powering accessories");
         else if(!meter.percent_valid)
             snprintf(text,sizeof(text),"Battery: waiting for fresh voltage");
         else if(meter.voltage_valid)
             snprintf(text,sizeof(text),"Battery estimate %u%% / %lu.%02lu V",
                 (unsigned)(meter.percent_tenths+5)/10,(unsigned long)meter.millivolts/1000,
                 (unsigned long)(meter.millivolts%1000)/10);
-        else snprintf(text,sizeof(text),"Battery %u%% / cached OS level",(unsigned)(meter.percent_tenths+5)/10);
+        else snprintf(text,sizeof(text),"Battery %u%% / last voltage estimate",(unsigned)(meter.percent_tenths+5)/10);
         music_label(target,f,r.x+9,y,text,278,true,255);y+=12;
-        if(meter.charging || meter.checking)
+        if(meter.charging || meter.checking || meter.external_power)
             snprintf(text,sizeof(text),"Charging voltage excluded from learning");
-        else if(meter.source!=BATTERY_METER_OS)
+        else if(!meter.percent_valid)
+            snprintf(text,sizeof(text),"Waiting for a usable voltage estimate");
+        else if(meter.os_percent>100)
+            snprintf(text,sizeof(text),"Smoothed default curve");
+        else
             snprintf(text,sizeof(text),"%s / OS %lu%%",meter.source==BATTERY_METER_LEARNED?
                 "Default curve + local learning":"Smoothed default curve",(unsigned long)meter.os_percent);
-        else snprintf(text,sizeof(text),"OS %lu%%; waiting for a discharge sample",(unsigned long)meter.os_percent);
     } else snprintf(text,sizeof(text),"Battery: native reading not available");
     music_label(target,f,r.x+9,y,text,278,true,255);y+=12;
 #endif
@@ -747,7 +754,7 @@ void music_ui_render(SDL_Surface *s, const Fonts *f, const char *path, AudioPlay
                 (unsigned long)(battery.millivolts%1000)/10);
         else snprintf(text,sizeof(text),"--");
         /* Status only: it shares the white header text and does no I/O. */
-        if(external)draw_battery_power_glyph(s,207,15,255,power.checking);
+        if(external)draw_battery_power_glyph(s,207,15,255,false);
         else {
             box(s,204,15,14,1,UI_COLOR_WHITE);box(s,204,22,14,1,UI_COLOR_WHITE);
             box(s,204,16,1,6,UI_COLOR_WHITE);box(s,217,16,1,6,UI_COLOR_WHITE);

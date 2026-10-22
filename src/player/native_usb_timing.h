@@ -2,8 +2,8 @@
 #define NMEDIA_NATIVE_USB_TIMING_H
 #include "../platform/portable_resolver.h"
 #include <stdio.h>
-/* Enabled by the build for USB storage/audio. Standalone resolver consumers
- * keep the read-only path unless they explicitly select this feature. */
+/* Dedicated tests may select shorter waits. Production and standalone
+ * resolver consumers leave the firmware instructions untouched. */
 #ifndef NDMEDIA_USB_FAST_ENUMERATION
 #define NDMEDIA_USB_FAST_ENUMERATION 0
 #endif

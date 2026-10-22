@@ -37,6 +37,8 @@ void audio_playback_suspend(AudioPlayback *);
 bool audio_playback_seek(AudioPlayback *, uint32_t sample);
 bool audio_playback_retry(AudioPlayback *, uint32_t sample);
 bool audio_playback_active(const AudioPlayback *);
+/* Absent or not yet detected output is idle, not a transfer/setup failure. */
+bool audio_playback_waiting_for_output(const AudioPlayback *);
 bool audio_playback_source_lost(const AudioPlayback *);
 uint64_t audio_playback_position(const AudioPlayback *);
 bool audio_playback_info(const AudioPlayback *, AudioPlaybackInfo *);

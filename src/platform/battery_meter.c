@@ -1,6 +1,7 @@
 #include "battery_meter.h"
 #if NDMEDIA_BATTERY_METER
 #include "battery_diagnostics.h"
+#include "battery_power.h"
 #include "../player/player_data.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +12,8 @@ static BatteryNative native;
 static BatteryMeterInfo visible;
 static uint32_t last_poll;
 static bool visible_valid,polled;
+static bool power_polled,power_known,power_present,power_host,appearance_valid;
+static uint32_t last_power_poll,revision,appearance;
 static int saved_slot=-1;
 /* Settings only: no CSV, no report, no per-frame/per-sample disk writes. */
 static const char *const names[]={"nMedia-battery-a.dat.tns","nMedia-battery-b.dat.tns"};
@@ -18,6 +21,8 @@ void battery_meter_init(void)
 {
     battery_model_init(&model);battery_native_init(&native);
     visible=(BatteryMeterInfo){0};visible_valid=polled=false;last_poll=0;saved_slot=-1;
+    power_polled=power_known=power_present=power_host=appearance_valid=false;
+    last_power_poll=revision=appearance=0;
 }
 uint32_t battery_meter_load_key(bool video,bool usb,uint32_t codec,uint32_t mhz,
                                uint32_t brightness,bool off,uint32_t volume,
@@ -33,6 +38,13 @@ uint32_t battery_meter_load_key(bool video,bool usb,uint32_t codec,uint32_t mhz,
 void battery_meter_tick(uint32_t now,uint32_t key,bool acquire)
 {
     battery_model_context(&model,now,key);
+    bool power_changed=false;
+    if(!power_polled || now-last_power_poll>=250U) {
+        bool present=false,host=false,known=battery_usb_power(&present,&host);
+        power_changed=known!=power_known || (known && (present!=power_present || host!=power_host));
+        power_known=known;power_present=present;power_host=host;last_power_poll=now;power_polled=true;
+        battery_model_power(&model,now,known,present,host);
+    }
     bool due=!polled || now-last_poll>=1000;
     if(!native.complete || due) {
         BatteryNativeSnapshot snapshot;
@@ -45,12 +57,22 @@ void battery_meter_tick(uint32_t now,uint32_t key,bool acquire)
             battery_model_sample(&model,r.now_ms,r.rtc,r.sequence,r.millivolts,r.charge_mode,key);
         else {model.anchor_valid=false;model.load_key=0;}
     }
-    if(due) {
-        visible_valid=battery_model_info(&model,now,&visible);last_poll=now;polled=true;
+    if(due || power_changed) {
+        visible_valid=battery_model_info(&model,now,&visible);
+        if(due){last_poll=now;polled=true;}
+        uint32_t state=(visible_valid?1U:0U) | (visible.percent_valid?2U:0U) |
+            (visible.charging?4U:0U) | (visible.checking?8U:0U) | (visible.external_power?16U:0U) |
+            (visible.usb_host?32U:0U);
+        if(visible.percent_valid)state|=((visible.percent_tenths+5U)/10U)<<8 |
+            ((14U*visible.percent_tenths+500U)/1000U)<<16;
+        if(!appearance_valid || state!=appearance) {
+            appearance=state;appearance_valid=true;if(!++revision)++revision;
+        }
     }
 }
 bool battery_meter_info(BatteryMeterInfo *out)
 {if(out)*out=visible;return out && visible_valid;}
+uint32_t battery_meter_revision(void){return revision;}
 void battery_meter_debug(FILE *file)
 {
     if(file)fprintf(file,"battery_meter_binding initialized=%u complete=%u words=%lu caps=%08lx errors=%08lx native_valid=%u visible=%u fresh=%u percent_valid=%u percent_tenths=%u\n",

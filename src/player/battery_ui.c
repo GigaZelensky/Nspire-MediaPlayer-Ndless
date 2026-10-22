@@ -21,13 +21,12 @@ bool battery_ui_animating(void)
 #endif
 }
 
-void draw_battery_meter(SDL_Surface *s,const Fonts *f,int x,int y,uint8_t mix)
-{
 #if NDMEDIA_BATTERY_METER
+static void draw_battery_meter_contents(SDL_Surface *s,const Fonts *f,int x,int y,uint8_t mix)
+{
     BatteryMeterInfo battery;
     if(!mix)return;
     if(!battery_meter_info(&battery))battery=(BatteryMeterInfo){0};
-    mix=(unsigned)mix*battery_presence_mix()/255;
     char text[12];int label=x+23;
     {
         SDL_Rect edges[]={{x+1,y-1,16,1},{x+1,y+8,16,1},{x,y,1,8},{x+17,y,1,8},{x+18,y+2,2,4}};
@@ -37,8 +36,12 @@ void draw_battery_meter(SDL_Surface *s,const Fonts *f,int x,int y,uint8_t mix)
         }
         for(unsigned i=0;i<sizeof(edges)/sizeof(*edges);++i)
             fill_rect_rgb565_mix(s,edges+i,UI_COLOR_WHITE,mix);
-        if(battery.charging || battery.checking)
-            draw_battery_power_glyph(s,x+5,y,mix,battery.checking);
+        /* Connection symbols follow live PHY evidence, never a cached charge
+         * task flag left over from a previous PC connection. */
+        if(battery.external_power)
+            draw_battery_power_glyph(s,x+5,y,mix,false);
+        else if(battery.usb_host)
+            draw_battery_power_glyph(s,x+5,y,mix,true);
         else if(battery.percent_valid) {
             unsigned width=(14*battery.percent_tenths+500)/1000;
             if(width) {SDL_Rect fill={x+2,y+1,(Uint16)width,6};
@@ -49,6 +52,14 @@ void draw_battery_meter(SDL_Surface *s,const Fonts *f,int x,int y,uint8_t mix)
     }
     draw_ui_label_tint(s,f,label+1,y+1,text,UI_COLOR_BLACK,mix);
     draw_ui_label_tint(s,f,label,y,text,UI_COLOR_WHITE,mix);
+}
+#endif
+
+void draw_battery_meter(SDL_Surface *s,const Fonts *f,int x,int y,uint8_t mix)
+{
+#if NDMEDIA_BATTERY_METER
+    if(!mix)return;
+    draw_battery_meter_contents(s,f,x,y,(unsigned)mix*battery_presence_mix()/255);
 #else
     (void)s;(void)f;(void)x;(void)y;(void)mix;
 #endif
@@ -76,17 +87,17 @@ int draw_video_battery_badge(SDL_Surface *s,const Fonts *f,int right,int y,uint8
     if(battery.percent_valid)snprintf(label,sizeof(label),"%u%%",(unsigned)(battery.percent_tenths+5)/10);
     else snprintf(label,sizeof(label),"--");
     int width=23+nSDL_GetStringWidth(f->white,label)+8,left=right-width;
-    /* Status, not a button: flat body, two-pixel corner cuts, no raised face,
-     * reflection, hover or pressed treatment. Same 16 px height as Fit/Speed. */
-    Uint16 top=blend_rgb565(ui_theme()->gunmetal,UI_COLOR_WHITE,38);
-    Uint16 bottom=blend_rgb565(ui_theme()->gunmetal,UI_COLOR_BLACK,45);
-    uint8_t body_mix=(unsigned)mix*battery_presence_mix()/255;
-    if(body_mix)for(int row=0;row<16;++row) {
-        int inset=row==0 || row==15?2:row==1 || row==14?1:0;
-        SDL_Rect span={left+inset,y+row,width-2*inset,1};
-        fill_rect_rgb565_mix(s,&span,row==0 || row==15?ui_theme()->row_divider:rgb565_lerp(top,bottom,row,15),body_mix);
-    }
-    draw_battery_meter(s,f,left+4,y+4,mix);
+    uint8_t visible_mix=(unsigned)mix*battery_presence_mix()/255;
+    if(!visible_mix)return left-6;
+    SDL_Rect bounds={left,y,width,16},clip;
+    SDL_Surface *target;int dx,dy;
+    SDL_Surface *layer=begin_faded_region_draw(s,&bounds,visible_mix,&target,&clip,&dx,&dy);
+    SDL_Rect badge=offset_sdl_rect(&bounds,dx,dy);
+    /* Use the same idle glass face, reflection and corner outline as Fit/Speed.
+     * Composite the complete status badge once so its contents fade with it. */
+    draw_soft_glass_panel_mix(target,&badge,UI_COLOR_GUNMETAL,0);
+    draw_battery_meter_contents(target,f,badge.x+4,badge.y+4,255);
+    end_faded_region_draw(s,layer,&bounds,&clip,visible_mix);
     return left-6;
 #else
     (void)s;(void)f;(void)y;(void)mix;return right;

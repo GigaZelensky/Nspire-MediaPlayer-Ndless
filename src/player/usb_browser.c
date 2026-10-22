@@ -173,6 +173,16 @@ bool usb_browser_adapter_present(void)
     unsigned presence=connection_presence();
     return presence!=USB_AUTO_UNKNOWN && (presence&USB_AUTO_ADAPTER);
 }
+bool usb_browser_audio_possible(void)
+{
+    unsigned presence=connection_presence();
+    if(presence!=USB_AUTO_UNKNOWN)return (presence&USB_AUTO_ADAPTER)!=0;
+    /* A gated, empty bank reads all zeros on the real calculator. Unknown
+     * is not an attachment event. Already enumerated devices can still be
+     * identified through the authenticated native tree without waking it. */
+    uint32_t tree[8];native_usb_ui_bus_snapshot(tree);
+    return tree[0] && tree[7];
+}
 static uint32_t host_connection_state(void)
 {
     UsbRegisters r;

@@ -33,6 +33,8 @@ struct AudioPlayback {
     uint32_t last_seek_ms, last_prefill_ms, last_start_ms;
     unsigned restart_count, seek_count;
     bool mute, running, failed, need_seek, native_operation, notice, usb_failed, primary_saved;
+    bool waiting_for_output, output_requested;
+    uint32_t output_poll_after;
     const char *hardware_stage;
     int hardware_result;
     int source_error;
@@ -632,9 +634,32 @@ void audio_playback_tick_loading(AudioPlayback *a, LoadingProgress *loading, boo
     a->loading = NULL;
 }
 
+bool audio_playback_waiting_for_output(const AudioPlayback *a)
+{ return a && a->waiting_for_output && !a->failed; }
+
+static bool wait_for_output(AudioPlayback *a)
+{
+    /* The mute control explicitly retries if an inserted device is hidden by
+     * a gated PHY. Automatic playback never wakes an unknown, empty bus. */
+    if(a->output_requested) {
+        a->output_requested=a->waiting_for_output=false;
+        return false;
+    }
+    uint32_t now=monotonic_clock_now_ms();
+    if(a->waiting_for_output && (int32_t)(now-a->output_poll_after)<0)return true;
+    a->waiting_for_output=!usb_browser_audio_possible();
+    a->output_poll_after=now+500U;
+    return a->waiting_for_output;
+}
+
 void audio_playback_tick(AudioPlayback *a, bool paused, unsigned num, unsigned den)
 {
     if (!a) return;
+    /* No OTG output means there is nothing to negotiate. In particular do
+     * this before a loading modal, decoder seek/prefill or native host wake.
+     * Absent/unreadable hardware stays quiet; an OTG ID or native child is
+     * required for automatic discovery. Recheck slowly for later insertion. */
+    if(!a->usb && !a->failed && !paused && wait_for_output(a))return;
     uint32_t sample = (uint32_t)(a->position >> 32);
     bool seek_reads = a->need_seek && sample < a->buffer.sample_count &&
         (sample < a->buffer.pcm_begin || sample >= a->buffer.pcm_end);
@@ -714,7 +739,7 @@ const char *audio_playback_status(AudioPlayback *a)
 bool audio_playback_level(const AudioPlayback *a, AudioPlaybackLevel *level)
 {
     if (!a || !a->decoder) return false;
-    if (level) *level=(AudioPlaybackLevel){a->volume,a->mute,a->failed};
+    if (level) *level=(AudioPlaybackLevel){a->volume,a->mute || a->waiting_for_output,a->failed};
     return true;
 }
 
@@ -742,7 +767,8 @@ void audio_playback_mute(AudioPlayback *a)
 {
     if (!a) return;
     if (a->failed) { audio_playback_retry(a,(uint32_t)(a->position>>32)); return; }
-    a->mute=!a->mute;
+    if(a->waiting_for_output) {a->output_requested=true;a->mute=false;}
+    else a->mute=!a->mute;
     history_set_audio_preference(a->volume,a->mute);
     if (a->usb) usb_audio_volume(a->usb,a->mute?0:a->volume);
 }

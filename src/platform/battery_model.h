@@ -33,24 +33,30 @@ typedef struct {
     BatteryProfile profile;
     BatteryNativeSnapshot native;
     BatteryRunSummary run;
-    uint32_t native_ms,native_started_ms,reading_ms,last_sequence,filtered_mv,filter_q8,fresh_mode;
+    uint32_t native_ms,reading_ms,last_sequence,filtered_mv,filter_q8,fresh_mode;
     uint32_t load_key,context_key,context_ms,anchor_ms,anchor_mv,last_mv,stable_ms;
     uint32_t last_rtc,display_ms,display_q8;
     bool native_valid,fresh_valid,context_valid,anchor_valid,display_valid;
+    bool power_seen,power_known,power_external,power_host;
 } BatteryModel;
+/* Keep the legacy OS source ID for stored-report compatibility. The live
+ * meter never substitutes a coarse OS level for a voltage estimate. */
 typedef enum { BATTERY_METER_OS, BATTERY_METER_GENERAL, BATTERY_METER_LEARNED } BatteryMeterSource;
 typedef struct {
     BatteryMeterSource source;
     uint32_t millivolts,percent_tenths,remaining_minutes,coverage_percent;
-    uint32_t os_percent;
-    bool percent_valid,voltage_valid,estimated,charging,checking,learning;
+    uint32_t os_percent; /* Diagnostics only; UINT32_MAX while unavailable. */
+    bool percent_valid,voltage_valid,estimated,charging,checking,learning,external_power,usb_host;
 } BatteryMeterInfo;
 
 void battery_model_init(BatteryModel *);
 void battery_model_native(BatteryModel *,uint32_t now,const BatteryNativeSnapshot *);
+void battery_model_power(BatteryModel *,uint32_t now,bool known,bool external,bool host);
 void battery_model_context(BatteryModel *,uint32_t now,uint32_t key);
 /* key identifies a stable workload, including screen/brightness. Zero means
- * no qualified workload; cached ADC data must never enter this function. */
+ * no qualified workload; cached ADC data must never enter this function.
+ * The independently verified fresh ADC can seed the default estimate before
+ * native metadata resolves. Learning still requires valid native metadata. */
 void battery_model_sample(BatteryModel *,uint32_t now,uint32_t rtc,uint32_t sequence,
                           uint32_t millivolts,uint32_t charge_mode,uint32_t key);
 bool battery_model_info(BatteryModel *,uint32_t now,BatteryMeterInfo *);

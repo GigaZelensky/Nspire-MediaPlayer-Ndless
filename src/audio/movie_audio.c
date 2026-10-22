@@ -35,7 +35,14 @@ static uint32_t frame_sample(const Movie *m)
 void movie_audio_reanchor(const Movie *m)
 { if (m && m->audio) audio_playback_seek(m->audio,frame_sample(m)); }
 void movie_audio_tick(const Movie *m, bool paused, unsigned num, unsigned den)
-{ if (m) {context(m);audio_playback_tick(m->audio,paused,num,den);} }
+{
+    if(!m)return;
+    /* A video advances silently while its output is absent. If a headset is
+     * attached later, join this frame instead of starting the soundtrack at 0. */
+    if(!paused && audio_playback_waiting_for_output(m->audio))
+        movie_audio_reanchor(m);
+    context(m);audio_playback_tick(m->audio,paused,num,den);
+}
 void movie_audio_pump(const Movie *m)
 { if (m) audio_playback_pump(m->audio); }
 void movie_audio_idle(const Movie *m)

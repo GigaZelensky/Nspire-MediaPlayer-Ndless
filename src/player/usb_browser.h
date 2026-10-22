@@ -6,6 +6,9 @@ bool usb_browser_connect(SDL_Surface *, const Fonts *, PointerState *,
 int usb_browser_retry(SDL_Surface *, const Fonts *, PointerState *, LoadingProgress *);
 bool usb_browser_device_present(void);
 bool usb_browser_adapter_present(void);
+/* Positive passive evidence only: OTG ID or an enumerated native child.
+ * An unreadable idle PHY alone must not trigger a connection wait. */
+bool usb_browser_audio_possible(void);
 void usb_browser_note_disconnect(void);
 bool usb_browser_auto_pending(uint32_t now);
 void usb_browser_library_presented(void);

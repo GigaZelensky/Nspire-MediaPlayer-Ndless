@@ -21,6 +21,7 @@ void audio_playback_suspend(AudioPlayback *a){(void)a;}
 bool audio_playback_seek(AudioPlayback *a,uint32_t s){(void)a;(void)s;return false;}
 bool audio_playback_retry(AudioPlayback *a,uint32_t s){(void)a;(void)s;return false;}
 bool audio_playback_active(const AudioPlayback *a){(void)a;return false;}
+bool audio_playback_waiting_for_output(const AudioPlayback *a){(void)a;return false;}
 bool audio_playback_source_lost(const AudioPlayback *a){(void)a;return false;}
 uint64_t audio_playback_position(const AudioPlayback *a){(void)a;return 0;}
 bool audio_playback_info(const AudioPlayback *a,AudioPlaybackInfo *i){(void)a;if(i)memset(i,0,sizeof(*i));return false;}

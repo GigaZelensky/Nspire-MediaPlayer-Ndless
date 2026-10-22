@@ -51,13 +51,18 @@ static void run(bool prompt_consumes_snapshot)
     LoadingProgress loading_progress;
     loading_progress_init(&loading_progress,screen,loading_snapshot,fonts,"Loading",true);
     assert(!loading_progress.render && !loading_progress.cancelled && !loading_progress.context);
+    /* Soundtrack reads and their progress belong to the initial loading
+     * screen, before the resume modal consumes that screen's backdrop. */
+    /* PRODUCTION_AUDIO_PREPARE */
+    unsigned before_resume=redraws;
     if(prompt_consumes_snapshot) {
         /* Tombstone the surface consumed by the real prompt. Reusing it in
          * the renderer fails deterministically without dereferencing freed RAM. */
         backdrop.alive=false;
         loading_snapshot=NULL;
     }
-    /* PRODUCTION_AUDIO_START */
+    /* PRODUCTION_AFTER_RESUME */
+    assert(redraws==before_resume); /* no second loading screen on Continue */
 }
 int main(void)
 {
@@ -69,6 +74,6 @@ int main(void)
     l.render=custom_draw;l.context=&custom_draws;
     loading_progress_tick(&l,true);
     assert(custom_draws==1 && redraws==2);
-    puts("PASS resume-to-audio handoff redraws only the current live backdrop after the modal consumes its snapshot");
+    puts("PASS soundtrack prepared before resume modal; Continue never reopens Loading or reuses a consumed backdrop");
     return 0;
 }

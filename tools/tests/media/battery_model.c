@@ -66,8 +66,9 @@ int main(void)
  out=info(&b);assert(out.percent_tenths==before && !b.anchor_valid);
  for(unsigned i=0;i<30;++i){sample(&b,3700,1,22,5000);out=info(&b);}
  assert(out.percent_tenths<before && out.percent_tenths>500);
+ unsigned held=out.percent_tenths;
  sample(&b,4200,2,22,5000);out=info(&b);
- assert(out.charging && !out.estimated && !b.anchor_valid);
+ assert(out.charging && out.estimated && out.percent_tenths==held && !b.anchor_valid);
  sample(&b,4100,6,22,5000);assert(info(&b).checking && !b.anchor_valid);
  sample(&b,3700,1,22,5000);out=info(&b);
  assert(out.source==BATTERY_METER_GENERAL && out.percent_tenths<590);
@@ -109,7 +110,9 @@ int main(void)
  battery_model_init(&b);now=0;cycle(&b,5000,11);cycle(&b,5000,11);cycle(&b,5000,11);
  rtc+=61U*86400U;sample(&b,3800,1,11,5000);
  assert(info(&b).source==BATTERY_METER_GENERAL && !b.profile.loads[0].segments);
- assert(!battery_model_info(&b,now+15001,&out));
+ unsigned retained=info(&b).percent_tenths;
+ assert(battery_model_info(&b,now+15001,&out) && out.percent_valid && out.estimated &&
+   out.percent_tenths==retained && !out.voltage_valid);
  battery_model_reset(&b);assert(b.profile.dirty && !b.profile.loads[0].key);
  /* Last-run summary keeps actual accepted raw voltages, separating library
   * and playback peaks and excluding raised charging voltage. */
@@ -126,6 +129,27 @@ int main(void)
  le32(bytes+4,1);le32(bytes+8,2904);le32(bytes+2900,checksum(bytes,2900));
  assert(battery_profile_decode(&restored,bytes,2904));
  assert(restored.generation==7 && !restored.last_run.valid_samples && !restored.last_run.max_mv);
+ /* A charging launch has a genuine continuous estimate without waiting for
+  * cable removal. Rising terminal voltage must not train a discharge curve. */
+ battery_model_init(&b);now=0;
+ battery_model_power(&b,now,true,true,false);
+ sample(&b,3800,2,11,5000);out=info(&b);
+ assert(out.percent_valid && out.estimated && out.external_power && out.charging &&
+  out.source==BATTERY_METER_GENERAL && out.percent_tenths>735 && out.percent_tenths<770);
+ unsigned initial=out.percent_tenths;
+ for(unsigned i=0;i<24;++i) {
+  unsigned prior=out.percent_tenths;
+  sample(&b,4000,2,11,5000);out=info(&b);
+  assert(out.percent_tenths>=prior && out.percent_tenths-prior<40);
+  assert(out.source==BATTERY_METER_GENERAL && !out.learning && !out.remaining_minutes);
+ }
+ assert(out.percent_tenths>initial && out.percent_tenths<1000 && b.run.valid_samples==25 &&
+  !b.run.discharge_samples && !b.anchor_valid && !b.profile.loads[0].key);
+ unsigned charged=out.percent_tenths;
+ battery_model_power(&b,now+1,true,false,false);
+ sample(&b,3800,1,11,5000);out=info(&b);
+ assert(out.percent_tenths==charged && !out.external_power && !out.charging);
+ puts("PASS charging launch: fresh voltage seeds a smooth estimate; charging never trains discharge or learned runtime; unplug preserves continuity");
  puts("PASS continuous smoothed default, no required calibration, conservative partial learning, load/charge/gap exclusion, ageing, expiry and CRC safety");
  return 0;
 }

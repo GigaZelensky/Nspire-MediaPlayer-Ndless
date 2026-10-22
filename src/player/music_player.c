@@ -110,6 +110,7 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
          k7 = isKeyPressed(KEY_NSPIRE_7), k9 = isKeyPressed(KEY_NSPIRE_9), on = false;
     uint32_t draw_at = 0;
     bool redraw = true, keyboard_was_held = enter || k5,theme_was_animating=false;
+    bool output_was_waiting=false;
     int result = PLAY_MOVIE_RESULT_EXIT;
     for (;;)
     {
@@ -285,6 +286,12 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
             redraw = true;
         }
         audio_playback_tick(audio, controls.paused || controls.scrubbing, 1, 1);
+        bool output_waiting=audio_playback_waiting_for_output(audio);
+        if(output_waiting && !output_was_waiting) {
+            music_ui_status(&ui,"Connect USB audio / Ctrl+M retries",now);
+            redraw=true;
+        }
+        output_was_waiting=output_waiting;
         audio_playback_info(audio, &info);
 #if NDVIDEO_BATTERY_ACQUISITION || NDMEDIA_BATTERY_SERVICE
         music_battery_maintenance(audio,&info,&now);

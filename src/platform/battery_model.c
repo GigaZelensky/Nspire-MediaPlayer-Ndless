@@ -38,7 +38,6 @@ void battery_model_reset(BatteryModel *b)
 void battery_model_native(BatteryModel *b,uint32_t now,const BatteryNativeSnapshot *s)
 {
     if(!s || !(s->capabilities&BATTERY_NATIVE_PERCENT) || s->percent>100 || s->level_index>=7)return;
-    if(!b->native_valid)b->native_started_ms=now;
     b->native=*s;b->native_ms=now;b->native_valid=true;
     if((s->capabilities&(BATTERY_NATIVE_THRESHOLDS|BATTERY_NATIVE_CALIBRATION))==
         (BATTERY_NATIVE_THRESHOLDS|BATTERY_NATIVE_CALIBRATION)) {
@@ -46,6 +45,27 @@ void battery_model_native(BatteryModel *b,uint32_t now,const BatteryNativeSnapsh
         if(b->profile.binding && id!=b->profile.binding)battery_model_reset(b);
         b->profile.binding=id;
     }
+}
+void battery_model_power(BatteryModel *b,uint32_t now,bool known,bool external,bool host)
+{
+    if(!known && !b->power_seen)return;
+    if(known!=b->power_known || (known && (external!=b->power_external || host!=b->power_host))) {
+        b->stable_ms=now;b->anchor_valid=false;b->load_key=0;
+    }
+    if(known)b->power_seen=true;
+    b->power_known=known;b->power_external=known && external;b->power_host=known && host;
+}
+static uint32_t power_mode(const BatteryModel *b,uint32_t reported)
+{
+    /* Docking power is independent of USB. Otherwise a measured USB source
+     * overrides stale charge-task metadata; an unreadable source is unknown. */
+    if(b->power_seen) {
+        if(b->native.charge_mode==4 || b->native.charge_mode==5)return b->native.charge_mode;
+        if(!b->power_known)return 0;
+        if(!b->power_external)return 1;
+        if(reported<2 || reported>6)return 0;
+    }
+    return reported;
 }
 void battery_model_context(BatteryModel *b,uint32_t now,uint32_t key)
 {
@@ -73,7 +93,8 @@ static BatteryLoad *load(BatteryModel *b,uint32_t key,uint32_t day)
 void battery_model_sample(BatteryModel *b,uint32_t now,uint32_t rtc,uint32_t seq,
                           uint32_t mv,uint32_t mode,uint32_t key)
 {
-    if(!seq || seq==b->last_sequence || mv<MIN_MV || mv>MAX_MV || !b->native_valid)return;
+    if(!seq || seq==b->last_sequence || mv<MIN_MV || mv>MAX_MV)return;
+    mode=power_mode(b,mode);
     battery_model_context(b,now,key);b->last_sequence=seq;
     bool continuous=b->fresh_valid && now-b->reading_ms<=MAX_GAP_MS && rtc>=b->last_rtc &&
         rtc-b->last_rtc<=MAX_GAP_MS/1000+1 && mode==b->fresh_mode;
@@ -81,9 +102,10 @@ void battery_model_sample(BatteryModel *b,uint32_t now,uint32_t rtc,uint32_t seq
     if(b->run.valid_samples!=UINT32_MAX)++b->run.valid_samples;
     b->filter_q8=continuous?(mv*256U+8*b->filter_q8)/9:mv*256U;
     b->filtered_mv=(b->filter_q8+128)/256;
-    if(!continuous){b->stable_ms=now;b->anchor_valid=false;b->display_valid=false;}
-    if(mode!=1 || !(b->native.capabilities&BATTERY_NATIVE_CHARGE_MODE) || b->native.charge_mode!=1) {
-        b->anchor_valid=false;b->load_key=0;b->display_valid=false;return;
+    if(!continuous){b->stable_ms=now;b->anchor_valid=false;}
+    if(!b->native_valid || now-b->native_ms>MAX_GAP_MS || mode!=1 ||
+        !(b->native.capabilities&BATTERY_NATIVE_CHARGE_MODE) || power_mode(b,b->native.charge_mode)!=1) {
+        b->anchor_valid=false;b->load_key=0;return;
     }
     BatteryRunSummary *r=&b->run;
     if(!r->discharge_samples) {
@@ -182,26 +204,35 @@ bool battery_model_info(BatteryModel *b,uint32_t now,BatteryMeterInfo *out)
 {
     if(!out)return false;
     *out=(BatteryMeterInfo){0};
-    if(!b->native_valid || now-b->native_ms>15000)return false;
-    out->charging=(b->native.capabilities&BATTERY_NATIVE_CHARGE_MODE) && b->native.charge_mode>=2 && b->native.charge_mode<=5;
-    out->checking=(b->native.capabilities&BATTERY_NATIVE_CHARGE_MODE) && b->native.charge_mode==6;
+    out->source=BATTERY_METER_GENERAL;
+    out->external_power=b->power_known && b->power_external;
+    out->usb_host=b->power_known && b->power_host;
+    /* Keep the last genuine estimate through source changes and missing
+     * samples. Coarse OS levels are diagnostic metadata, never a fallback. */
+    if(b->display_valid) {
+        out->percent_valid=out->estimated=true;out->percent_tenths=(b->display_q8+128)/256;
+    }
+    bool native_recent=b->native_valid && now-b->native_ms<=MAX_GAP_MS;
+    uint32_t mode=native_recent?power_mode(b,b->native.charge_mode):0;
+    out->charging=native_recent && (b->native.capabilities&BATTERY_NATIVE_CHARGE_MODE) && mode>=2 && mode<=5;
+    out->checking=native_recent && (b->native.capabilities&BATTERY_NATIVE_CHARGE_MODE) && mode==6;
     bool recent=b->fresh_valid && now-b->reading_ms<=15000;
     out->voltage_valid=recent;out->millivolts=recent?b->filtered_mv:0;
-    out->percent_valid=true;out->os_percent=b->native.percent;
-    out->source=BATTERY_METER_OS;out->percent_tenths=b->native.percent*10;
-    if(!recent || out->charging || out->checking || b->fresh_mode!=1 ||
-        !(b->native.capabilities&BATTERY_NATIVE_CHARGE_MODE) || b->native.charge_mode!=1) {
-        /* On fresh-capable firmware wait for its first conversion instead of
-         * flashing cached OS100 just before the live estimate appears. */
-        if(!recent && !out->charging && !out->checking &&
-            (b->native.capabilities&BATTERY_NATIVE_CALIBRATION) && now-b->native_started_ms<15000)
-            out->percent_valid=false;
-        return true;
-    }
-    uint32_t floor=reserve(b),target=battery_curve_usable(b->filtered_mv,floor);
-    out->source=BATTERY_METER_GENERAL;out->estimated=true;
+    out->os_percent=native_recent?b->native.percent:UINT32_MAX;
+    if(!recent)return native_recent || out->percent_valid || out->external_power || out->usb_host;
+    /* A fresh voltage can seed the general estimate even on a PC cable.
+     * Charging voltage is only an estimate, never discharge-learning data
+     * or evidence for a learned remaining runtime. */
+    bool discharging=native_recent && !out->external_power && !out->charging && !out->checking &&
+        b->fresh_mode==1 && (b->native.capabilities&BATTERY_NATIVE_CHARGE_MODE) && mode==1;
+    /* The voltage service authenticates its own ADC and per-device trim.
+     * Its first genuine result need not wait for the independent native
+     * metadata scan. Only the default curve is used until that scan finishes. */
+    uint32_t floor=native_recent?reserve(b):BATTERY_CURVE_EMPTY_MV;
+    uint32_t target=battery_curve_usable(b->filtered_mv,floor);
+    out->source=BATTERY_METER_GENERAL;out->percent_valid=out->estimated=true;
     const BatteryLoad *p=NULL;
-    if((b->native.capabilities&BATTERY_NATIVE_CALIBRATION) && b->load_key && now-b->stable_ms>=SETTLE_MS)
+    if(discharging && (b->native.capabilities&BATTERY_NATIVE_CALIBRATION) && b->load_key && now-b->stable_ms>=SETTLE_MS)
         for(unsigned i=0;i<BATTERY_LOADS;++i)if(b->profile.loads[i].key==b->load_key)p=b->profile.loads+i;
     out->learning=p!=NULL;
     if(p && !expired(b->last_rtc/86400U,p->last_day) &&
