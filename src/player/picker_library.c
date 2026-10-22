@@ -112,7 +112,7 @@ static void library_footer(SDL_Surface *screen, const Fonts *fonts, const MovieF
                            size_t count, int offset, uint8_t mix)
 {
     SDL_Rect panel = {6, 218 + offset, 308, 18};
-    library_panel(screen, &panel, ui_theme()->footer_panel, mix);
+    library_panel(screen, &panel, ui_theme()->footer_panel, (unsigned)mix*150/255);
     SDL_Rect accent = {8, 218 + offset, 304, 1};
     fill_rect_rgb565_mix(screen, &accent, ui_theme()->footer_accent_top, mix);
     library_label(screen, fonts, 12, 224 + offset,
