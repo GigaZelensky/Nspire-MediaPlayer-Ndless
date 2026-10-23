@@ -21,6 +21,10 @@ extern const uint32_t usb_audio_rates[USB_AUDIO_RATE_COUNT];
  * Returns ranked alternatives; UAC2 rates are negotiated with its clock. */
 unsigned usb_audio_formats(const uint8_t *config, size_t length, bool high_speed,
                            UsbAudioFormat *out, unsigned capacity);
+/* Preserve channel count, then prefer sufficient precision and the smallest
+ * subslot; retain lower-bit alternatives if the device rejects a setting. */
+void usb_audio_rank_precision(UsbAudioFormat *, unsigned count, unsigned source_bits,
+                              unsigned source_channels);
 bool usb_audio_find_format(const uint8_t *config, size_t length, UsbAudioFormat *out);
 const uint8_t *usb_audio_control_unit(const uint8_t *config, size_t length,
                                       uint8_t control_interface, uint8_t id);

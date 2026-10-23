@@ -48,14 +48,7 @@ static void init_itd(UsbAudio *u, Itd *itd, uint8_t *buffer, unsigned endpoint, 
     itd->buffer[1] = (uint32_t)(page + 4096) | packet | ((endpoint & 0x80) ? 1U << 11 : 0);
     itd->buffer[2] = (uint32_t)(page + 8192) | 1;
 }
-static void pcm_sample(uint8_t *dst, int sample, unsigned bytes)
-{
-    /* USB PCM is left justified within its subslot. Multiplication avoids
-     * undefined left-shifts of negative signed samples. */
-    uint32_t value = (uint32_t)((int64_t)sample * (1U << (8 * (bytes - 2))));
-    for (unsigned i = 0; i < bytes; ++i)
-        dst[i] = (uint8_t)(value >> (8 * i));
-}
+#include "pcm_format.h"
 static bool feedback_frame(UsbAudio *u, unsigned sequence)
 {
     unsigned period = u->format.feedback_period_uframes;
@@ -69,8 +62,8 @@ static unsigned volume_gain_q15(unsigned volume)
      * is exact; compute only when the slider changes, not for each sample. */
     return (volume*volume*32768U+5000U)/10000U;
 }
-static int pcm_gain(int sample,unsigned gain_q15)
-{ return sample*(int)gain_q15/32768; }
+static int32_t pcm_gain(int32_t sample,unsigned gain_q15)
+{ return audio_pcm_gain(sample,gain_q15); }
 static bool pack_frame(UsbAudio *u, unsigned sequence)
 {
     unsigned slot = sequence & (RING - 1);
@@ -90,16 +83,17 @@ static bool pack_frame(UsbAudio *u, unsigned sequence)
             return false;
         }
         for (unsigned i = 0; i < frames; ++i) {
-            int16_t sample[2] = {0, 0};
+            int32_t sample[2] = {0, 0};
             if (sequence >= u->prime_frames) {
-                audio_buffer_channels(u->stream, u->generated_position, sample);
+                audio_buffer_channels_s32(u->stream, u->generated_position, sample);
                 u->generated_position += u->step;
             }
-            for (unsigned channel = 0; channel < f->channels; ++channel)
-                pcm_sample(packet + used + (i * f->channels + channel) * f->sample_bytes,
-                           pcm_gain(f->channels == 1 ? (sample[0] + sample[1]) / 2 : sample[channel],
-                               u->gain_q15),
-                           f->sample_bytes);
+            for (unsigned channel = 0; channel < f->channels; ++channel) {
+                int32_t value = f->channels == 1
+                    ? (int32_t)(((int64_t)sample[0] + sample[1]) / 2) : sample[channel];
+                audio_pcm_pack(packet + used + (i * f->channels + channel) * f->sample_bytes,
+                               pcm_gain(value, u->gain_q15), f->sample_bytes, f->sample_bits);
+            }
         }
         itd->transaction[micro] =
             ACTIVE | (bytes << 16) | (((uint32_t)(uintptr_t)packet + used) & 4095);

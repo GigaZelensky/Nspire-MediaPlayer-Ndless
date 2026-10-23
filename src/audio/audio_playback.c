@@ -186,6 +186,7 @@ static void hardware_native(void *context)
         usb_audio_set_state_lookup(native_usb_ui_bus_device_state, NULL);
         usb_audio_set_progress(progress, a);
         usb_audio_prefer_rate(a->buffer.sample_rate);
+        usb_audio_prefer_precision(a->buffer.source_bits, a->buffer.channels);
         const char *status = NULL;
         a->hardware_stage = "headset discovery/configuration";
         a->usb = usb_audio_open(monotonic_clock_now_ms, &status);
@@ -721,8 +722,9 @@ size_t audio_playback_snapshot(const AudioPlayback *a,int16_t *out,size_t frames
         if(index>=b->sample_count || (b->pcm_capacity &&
            (index<b->pcm_begin || index>=b->pcm_end)))break;
         size_t slot=b->pcm_capacity?index%b->pcm_capacity:index;
-        const int16_t *p=b->pcm+slot*b->channels;
-        out[2*i]=p[0];out[2*i+1]=p[b->channels==1?0:1];++copied;
+        size_t sample=slot*b->channels;
+        out[2*i]=audio_buffer_sample_s16(b,sample);
+        out[2*i+1]=audio_buffer_sample_s16(b,sample+(b->channels==1?0:1));++copied;
     }
     return copied;
 }

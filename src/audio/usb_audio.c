@@ -83,6 +83,8 @@ static void stage_event(const char *stage)
         stage_callback(stage);
 }
 static uint32_t preferred_rate;
+static unsigned preferred_bits = 16;
+static unsigned preferred_channels = 2;
 static bool (*route_lookup)(void *, uint8_t, UsbAudioRoute *);
 static void *route_context;
 static bool (*state_lookup)(void *, uint8_t, int, UsbDeviceState *);
@@ -100,6 +102,11 @@ void usb_audio_set_route_lookup(bool (*lookup)(void *, uint8_t, UsbAudioRoute *)
 void usb_audio_prefer_rate(uint32_t rate)
 {
     preferred_rate = rate;
+}
+void usb_audio_prefer_precision(unsigned bits, unsigned channels)
+{
+    preferred_bits = bits < 16 ? 16 : bits > 32 ? 32 : bits;
+    preferred_channels = channels == 1 ? 1 : 2;
 }
 static unsigned rate_index(unsigned index)
 {

@@ -212,6 +212,28 @@ static unsigned score(const UsbAudioFormat *f)
     return (f->sync_type != 1 ? 1000 : 0) + (f->channels == 2 ? 100 : 0) +
            (4 - f->sample_bytes) * 10 + (f->protocol == 0 ? 1 : 0);
 }
+static unsigned precision_cost(const UsbAudioFormat *f, unsigned bits, unsigned channels)
+{
+    unsigned difference = f->sample_bits >= bits ? f->sample_bits - bits
+                                               : 100 + bits - f->sample_bits;
+    return (f->channels == channels ? 0 : 2048) + difference * 8 + f->sample_bytes;
+}
+void usb_audio_rank_precision(UsbAudioFormat *formats, unsigned count, unsigned bits,
+                              unsigned channels)
+{
+    bits = bits < 16 ? 16 : bits > 32 ? 32 : bits;
+    channels = channels == 1 ? 1 : 2;
+    for (unsigned i = 1; i < count; ++i) {
+        UsbAudioFormat format = formats[i];
+        unsigned position = i;
+        while (position && precision_cost(&format, bits, channels) <
+                               precision_cost(formats + position - 1, bits, channels)) {
+            formats[position] = formats[position - 1];
+            --position;
+        }
+        formats[position] = format;
+    }
+}
 
 unsigned usb_audio_formats(const uint8_t *c, size_t n, bool hs, UsbAudioFormat *out, unsigned cap)
 {

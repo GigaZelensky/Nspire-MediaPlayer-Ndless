@@ -366,6 +366,7 @@ probe_pass:
             u->max_power_ma = u->config[8] * 2;
             unsigned count =
                 usb_audio_formats(u->config, size, u->high_speed, formats, USB_AUDIO_MAX_FORMATS);
+            usb_audio_rank_precision(formats, count, preferred_bits, preferred_channels);
             if (active_probe) {
                 active_probe->formats = count;
                 active_probe->stage = "parse playback formats";

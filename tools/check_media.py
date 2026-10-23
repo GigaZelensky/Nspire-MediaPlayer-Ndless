@@ -113,6 +113,8 @@ def check(work):
     decoder = work / "decode.exe"
     from audio_build import build_decoder
     build_decoder(compiler,ROOT,tests/"decode.c",decoder)
+    from check_audio_precision import check as check_audio_precision
+    check_audio_precision(work / "precision")
     controls=work/"music-controls.exe"
     run([*base,"-Werror",tests/"music_controls.c",ROOT/"src/player/music_controls.c","-o",controls])
     run([controls])

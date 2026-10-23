@@ -22,7 +22,10 @@ struct AudioDecoder {
     mp3dec_ex_t mp3;
     mp3dec_io_t mp3_io;
     ExtraAudio *extra;
-    int16_t block[1024 * 2];
+    union {
+        int16_t s16[1024 * 2];
+        drwav_int32 s32[1024 * 2];
+    } block;
     uint64_t read_bytes;
     uint32_t steps, max_step_ms;
     uint32_t logical_frames;
@@ -154,7 +157,7 @@ AudioDecoder *audio_decoder_open(AudioBuffer *s, AudioInput input, AudioDecodeSt
     strcpy(last_stream_report, "opening");
     stats->encoded_bytes = input.bytes > UINT32_MAX ? UINT32_MAX : (uint32_t)input.bytes;
     uint8_t signature[4];
-    unsigned rate = 0, channels = 0;
+    unsigned rate = 0, channels = 0, source_bits = 16;
     uint64_t frames = 0;
     if (!seek_absolute(d, 0) || read_input(d, signature, 4) != 4 || !seek_absolute(d, 0))
         goto failed;
@@ -167,6 +170,9 @@ AudioDecoder *audio_decoder_open(AudioBuffer *s, AudioInput input, AudioDecodeSt
         channels = d->wav.channels;
         frames = d->wav.totalPCMFrameCount;
         stats->codec = d->wav.translatedFormatTag == 17 ? 1 : 0;
+        if (d->wav.translatedFormatTag == DR_WAVE_FORMAT_PCM ||
+            d->wav.translatedFormatTag == DR_WAVE_FORMAT_IEEE_FLOAT)
+            source_bits = d->wav.bitsPerSample;
 #else
         d->error="WAV audio is not included in this build";goto failed;
 #endif
@@ -179,6 +185,7 @@ AudioDecoder *audio_decoder_open(AudioBuffer *s, AudioInput input, AudioDecodeSt
         channels = d->flac->channels;
         frames = d->flac->totalPCMFrameCount;
         stats->codec = 3;
+        source_bits = d->flac->bitsPerSample;
 #else
         d->error="FLAC is not included in this build";goto failed;
 #endif
@@ -239,7 +246,9 @@ AudioDecoder *audio_decoder_open(AudioBuffer *s, AudioInput input, AudioDecodeSt
         capacity = 65536;
     if (capacity < 2048 || capacity > 131072)
         goto failed;
-    s->pcm = malloc((size_t)capacity * channels * sizeof(int16_t));
+    s->source_bits = source_bits;
+    s->pcm_bits = source_bits > 16 ? 32 : 16;
+    s->pcm = malloc((size_t)capacity * channels * (s->pcm_bits / 8));
     if (!s->pcm)
         goto failed;
     s->sample_count = frames ? (uint32_t)frames : UINT32_MAX;
@@ -283,20 +292,22 @@ int audio_decoder_step(AudioDecoder *d, uint64_t consumed)
     uint64_t got;
     bool decode_failed=false;
     if (NDMEDIA_WITH_WAV && d->wav_open)
-        got = drwav_read_pcm_frames_s16(&d->wav, count, d->block);
+        got = s->pcm_bits == 32 ? drwav_read_pcm_frames_s32(&d->wav, count, d->block.s32)
+                               : drwav_read_pcm_frames_s16(&d->wav, count, d->block.s16);
     else if (NDMEDIA_WITH_FLAC && d->flac)
-        got = drflac_read_pcm_frames_s16(d->flac, count, d->block);
+        got = s->pcm_bits == 32 ? drflac_read_pcm_frames_s32(d->flac, count, d->block.s32)
+                               : drflac_read_pcm_frames_s16(d->flac, count, d->block.s16);
     else if (d->extra) {
         unsigned filled=0;
         while (filled<count) {
-            int n=d->extra->ops->read(d->extra,d->block+(size_t)filled*s->channels,count-filled);
+            int n=d->extra->ops->read(d->extra,d->block.s16+(size_t)filled*s->channels,count-filled);
             if (n<0 || (unsigned)n>count-filled) {decode_failed=true;break;}
             if (!n) break;
             filled+=(unsigned)n;
         }
         got=filled;
     } else if (NDMEDIA_WITH_MP3)
-        got = mp3dec_ex_read(&d->mp3, d->block, (size_t)count * s->channels) / s->channels;
+        got = mp3dec_ex_read(&d->mp3, d->block.s16, (size_t)count * s->channels) / s->channels;
     else {got=0;decode_failed=true;}
     uint32_t elapsed = d->now() - start, read_delta = d->stats->read_ms - read_before;
     if (elapsed > d->max_step_ms)
@@ -313,11 +324,22 @@ int audio_decoder_step(AudioDecoder *d, uint64_t consumed)
     unsigned first = s->pcm_capacity - offset;
     if (first > got)
         first = (unsigned)got;
-    memcpy(s->pcm + (size_t)offset * s->channels, d->block,
-           (size_t)first * s->channels * sizeof(int16_t));
-    if (got > first)
-        memcpy(s->pcm, d->block + (size_t)first * s->channels,
-               ((size_t)got - first) * s->channels * sizeof(int16_t));
+    if (s->pcm_bits == 32) {
+        /* Ndless int32_t is long, while the decoder libraries use int. Assign
+         * samples rather than aliasing either type through the other's pointer. */
+        int32_t *out = s->pcm;
+        for (size_t i = 0; i < (size_t)first * s->channels; ++i)
+            out[(size_t)offset * s->channels + i] = d->block.s32[i];
+        for (size_t i = 0; i < ((size_t)got - first) * s->channels; ++i)
+            out[i] = d->block.s32[(size_t)first * s->channels + i];
+    } else {
+        int16_t *out = s->pcm;
+        memcpy(out + (size_t)offset * s->channels, d->block.s16,
+               (size_t)first * s->channels * sizeof(*out));
+        if (got > first)
+            memcpy(out, d->block.s16 + (size_t)first * s->channels,
+                   ((size_t)got - first) * s->channels * sizeof(*out));
+    }
     s->pcm_end += (uint32_t)got;
     if (got < count || s->pcm_end == s->sample_count) {
         d->eof = true;

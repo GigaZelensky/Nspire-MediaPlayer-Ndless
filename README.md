@@ -194,6 +194,12 @@ playback returns to the paused or playing state from before the seek.
 
 ### Music Playback
 
+PCM WAV files support 8-, 16-, 24- and 32-bit integer samples. High-bit-depth WAV
+and FLAC keep their precision in a 32-bit integer buffer through resampling and
+volume control. USB output prefers a compatible format with sufficient bit depth;
+it rounds to fewer bits only when the selected output requires it. The existing
+16-bit decoding paths remain in use for lossy music codecs and 16-bit sources.
+
 | Key / pointer | Action |
 | --- | --- |
 | `Space` | Pause/resume |

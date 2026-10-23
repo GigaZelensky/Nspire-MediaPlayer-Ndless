@@ -12,6 +12,7 @@ void usb_audio_set_state_lookup(bool (*)(void *, uint8_t, int, UsbDeviceState *)
 void usb_audio_set_progress(bool (*)(void *), void *);
 void usb_audio_set_stage_callback(void (*)(const char *));
 void usb_audio_prefer_rate(uint32_t);
+void usb_audio_prefer_precision(unsigned bits, unsigned channels);
 void usb_audio_probe_only(bool enabled);
 void usb_audio_topology_debug(FILE *);
 void usb_audio_hub_debug(FILE *);

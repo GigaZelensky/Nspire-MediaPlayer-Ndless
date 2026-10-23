@@ -373,6 +373,34 @@ int main(void)
         check(!pcm_gain(sample,0),"zero volume is not silent");
     }
     puts("PASS perceptual volume curve: finer low gain, monotonic controls, exact mute and bit-perfect unity maximum");
+    for (unsigned bits=24;bits<=32;bits+=8) {
+        reset(0);
+        const char *message=NULL;
+        UsbAudio *u=usb_audio_open(now,&message);
+        check(u!=NULL,"wide PCM output open");
+        int32_t *wide=malloc(20000*2*sizeof(*wide));
+        check(wide!=NULL,"wide PCM fixture allocation");
+        int32_t value=bits==24?0x12345600:0x12345678;
+        for(unsigned i=0;i<20000*2;++i)wide[i]=value;
+        AudioBuffer buffer={.pcm=wide,.pcm_bits=32,.source_bits=bits,
+                            .sample_count=20000,.sample_rate=48000,.channels=2};
+        u->format.sample_bytes=bits/8;u->format.sample_bits=bits;
+        u->format.max_packet=48*2*(bits/8);
+        check(usb_audio_start(u,&buffer,0,1,1,100),"wide PCM output start");
+        u->generated_position=0;u->packet_phase=0;
+        check(pack_frame(u,u->prime_frames),"wide PCM output packing");
+        uint8_t *packet=u->packets+(u->prime_frames&(RING-1))*PACKET_STRIDE;
+        check(!memcmp(packet,bits==24?"\x56\x34\x12":"\x78\x56\x34\x12",bits/8),
+              "wide PCM lost source low bits in real USB schedule");
+        /* The same source can use a 16-bit-only endpoint, rounding just here. */
+        u->format.sample_bytes=2;u->format.sample_bits=16;u->format.max_packet=192;
+        u->generated_position=0;u->packet_phase=0;
+        check(pack_frame(u,u->prime_frames),"16-bit output fallback");
+        check(!memcmp(packet,"\x34\x12",2),"16-bit fallback quantization");
+        check(usb_audio_close(u),"wide PCM cleanup");
+        free(wide);
+    }
+    puts("PASS real USB packet scheduling preserves PCM24/32 low bits and falls back to PCM16");
     for(unsigned mode=27;mode<=29;++mode) {
         reset(mode);usb_test_irq_disable=0;
         const char *message=NULL;
