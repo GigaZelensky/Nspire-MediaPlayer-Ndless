@@ -2132,14 +2132,13 @@ void draw_movie_frame_background_rects(
 
 void draw_accent_info_panel(SDL_Surface *screen,const SDL_Rect *r)
 {
-    /* A framed dialog, with an inset body rather than a tooltip's flat slab.
-     * Keep the accent line, without a separate glossy header strip. */
-    fill_rect_rgb565(screen,r,ui_theme()->gunmetal);
-    draw_rect_outline_rgb565(screen,r,blend_rgb565(ui_theme()->gunmetal,UI_COLOR_WHITE,80));
-    SDL_Rect body={r->x+2,r->y+3,r->w-4,r->h-5};
-    fill_rect_rgb565(screen,&body,ui_theme()->modal_panel);
-    SDL_Rect bottom={r->x+1,r->y+r->h-2,r->w-2,1};
-    fill_rect_rgb565(screen,&bottom,blend_rgb565(ui_theme()->gunmetal,UI_COLOR_BLACK,120));
-    SDL_Rect accent={r->x+2,r->y+1,r->w-4,2};
+    if(!screen || !r || r->w<6 || r->h<6)return;
+    /* Shared rounded dialog frame; keep the text area quiet and unbanded. */
+    fill_soft_panel_backplate(screen,r,ui_theme()->menu_border);
+    SDL_Rect panel={r->x+1,r->y+1,r->w-2,r->h-2};
+    draw_soft_glass_panel(screen,&panel,UI_COLOR_GUNMETAL,false);
+    SDL_Rect body={r->x+2,r->y+4,r->w-4,r->h-6};
+    fill_rect_rgb565(screen,&body,ui_theme()->menu_panel);
+    SDL_Rect accent={r->x+3,r->y+2,r->w-6,2};
     draw_vertical_gradient(screen,&accent,UI_COLOR_ACCENT,UI_COLOR_ACCENT_DEEP);
 }

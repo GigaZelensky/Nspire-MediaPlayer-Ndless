@@ -55,6 +55,9 @@ def check(out):
             "ui_transition_value_with_ease", "ui_transition_value", "ui_transition_update_ex",
             "ui_transition_update", "ui_transition_update_press_ex", "ui_transition_update_press")))
     hover_source = hover_source.replace("/* PRODUCTION_MUSIC_UPDATE */", function(music, "music_ui_update"))
+    hover_source = hover_source.replace("/* PRODUCTION_MUSIC_BRIGHTNESS */", "\n".join((
+        function(ui, "status_overlay_update_timing"), function(music, "music_ui_status"),
+        function(music, "music_ui_brightness"))))
     hover_source = hover_source.replace("/* PRODUCTION_MUSIC_BUTTON */", "\n".join(
         function(music, name) for name in ("music_corner_pixel", "music_button")))
     hover = out / "music-hover.c"

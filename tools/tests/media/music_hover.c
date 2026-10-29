@@ -16,6 +16,10 @@
 #define UI_PRESS_RELEASE_ANIM_MS 84U
 #define SEEK_BADGE_EXIT_ANIM_MS 105U
 #define STATUS_BADGE_EXIT_ANIM_MS 95U
+#define STATUS_OVERLAY_MS 1200U
+#define LCD_BRIGHTNESS_FADE_MS 160U
+#define TAB_HOLD_FRAME_REPEAT_DELAY_MS 250U
+#define TAB_HOLD_FRAME_REPEAT_FALLBACK_INTERVAL_MS 80U
 typedef enum {PLAYBACK_MODE_ONCE, PLAYBACK_MODE_REPEAT, PLAYBACK_MODE_AUTO_NEXT} PlaybackMode;
 typedef struct {
     bool initialized, target_active;
@@ -30,6 +34,19 @@ typedef struct {
 /* PRODUCTION_TRANSITIONS */
 static uint32_t monotonic_clock_now_ms(void) {return 0;}
 /* PRODUCTION_MUSIC_UPDATE */
+
+typedef struct {int unused;} DisplayPowerState;
+static DisplayPowerState g_display_power_state;
+static uint32_t brightness_raw;
+static uint32_t current_lcd_brightness(void) {return brightness_raw;}
+static uint32_t display_power_logical_brightness(const DisplayPowerState *s) {(void)s;return brightness_raw;}
+static void display_power_cancel_brightness_restore(DisplayPowerState *s) {(void)s;}
+static uint32_t lcd_brightness_step_target_from(uint32_t raw, int direction) {
+    int next=(int)raw+direction*25;return next<0?0:next>255?255:(uint32_t)next;
+}
+static void set_lcd_brightness(int raw) {brightness_raw=(uint32_t)raw;}
+static unsigned lcd_brightness_percent(uint32_t raw) {return (255-raw)*100/255;}
+/* PRODUCTION_MUSIC_BRIGHTNESS */
 
 typedef uint16_t Uint16;
 typedef struct {int x, y, w, h;} SDL_Rect;
@@ -113,4 +130,38 @@ static void check_corners(void) {
     for (int i = 0; i < 40; ++i) assert(!pixels[i] && !pixels[31*40+i]);
     puts("PASS delayed music labels, independent highlight/fade, retarget/hold/wrap and connected symmetric corner strokes");
 }
-int main(void) {check_hover(); check_corners(); return 0;}
+static void check_brightness(void) {
+    MusicUi ui={0};brightness_raw=150;
+    music_ui_brightness(&ui,true,false,true,false,1000);
+    assert(ui.status_at==1000 && ui.brightness_active);
+    for(uint32_t now=1010;now<=1410;now+=10) {
+        bool was_active=ui.brightness_active;uint32_t until=ui.status_until;
+        music_ui_brightness(&ui,true,false,false,false,now);
+        assert(ui.status_at==1000);
+        assert(ui.status_until==(was_active || ui.brightness_active?now+STATUS_OVERLAY_MS:until));
+        assert(strncmp(ui.status,"BRIGHT ",7)==0);
+    }
+    music_ui_brightness(&ui,false,false,false,false,1570);
+    assert(!ui.brightness_active && ui.status_at==1000);
+    /* Separate taps and direction changes update the same visible badge. */
+    music_ui_brightness(&ui,false,true,false,true,1650);
+    assert(ui.status_at==1000);
+    music_ui_brightness(&ui,true,false,true,false,1700);
+    assert(ui.status_at==1000);
+    music_ui_brightness(&ui,false,false,false,false,1860);
+    /* Replacing another message, or returning after exit, starts a new badge. */
+    music_ui_status(&ui,"Play once",2000);
+    music_ui_brightness(&ui,true,false,true,false,2010);
+    assert(ui.status_at==2010);
+    music_ui_brightness(&ui,false,false,false,false,2170);
+    uint32_t later=ui.status_until+STATUS_BADGE_EXIT_ANIM_MS+1;
+    music_ui_brightness(&ui,true,false,true,false,later);
+    assert(ui.status_at==later);
+    /* The same continuity holds when the millisecond clock wraps. */
+    memset(&ui,0,sizeof(ui));
+    music_ui_brightness(&ui,true,false,true,false,UINT32_MAX-100);
+    music_ui_brightness(&ui,true,false,true,false,30);
+    assert(ui.status_at==UINT32_MAX-100 && ui.status_until==30+STATUS_OVERLAY_MS);
+    puts("PASS music brightness holds one entrance across fade, repeats, taps, direction changes and clock wrap");
+}
+int main(void) {check_hover(); check_corners(); check_brightness(); return 0;}

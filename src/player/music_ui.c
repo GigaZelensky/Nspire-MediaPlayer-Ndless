@@ -241,9 +241,10 @@ void music_ui_brightness(MusicUi *ui, bool up, bool down, bool up_edge, bool dow
         int raw = (int)ui->brightness_from +
                   ((int)ui->brightness_to - (int)ui->brightness_from) * mix / 255;
         set_lcd_brightness(raw);
-        char status[48];
-        snprintf(status, sizeof(status), "BRIGHT %u%%", lcd_brightness_percent(raw));
-        music_ui_status(ui, status, now);
+        bool keep_badge = strncmp(ui->status, "BRIGHT ", 7) == 0 &&
+            (int32_t)(now - (ui->status_until + STATUS_BADGE_EXIT_ANIM_MS)) < 0;
+        snprintf(ui->status, sizeof(ui->status), "BRIGHT %u%%", lcd_brightness_percent(raw));
+        status_overlay_update_timing(now, !keep_badge, &ui->status_at, &ui->status_until);
         if (mix == 255)
             ui->brightness_active = false;
     }
@@ -599,7 +600,6 @@ static void info_panel(SDL_Surface *s, const Fonts *f, const char *path,
     int dx, dy;
     SDL_Surface *layer = begin_faded_region_draw(s, &panel, mix, &target, &clip, &dx, &dy);
     SDL_Rect r = offset_sdl_rect(&panel, dx, dy);
-    fill_rect_rgb565(target, &r, ui_theme()->tooltip_base);
     draw_accent_info_panel(target,&r);
     char text[256], size[32], duration[24];
     int y = r.y + 9;
