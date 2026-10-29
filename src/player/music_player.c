@@ -107,6 +107,7 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
          clock = isKeyPressed(KEY_NSPIRE_O), scratch = isKeyPressed(KEY_NSPIRE_SCRATCHPAD),
          info_key = isKeyPressed(KEY_NSPIRE_I), mode_key = isKeyPressed(KEY_NSPIRE_P),
          visual_key = isKeyPressed(KEY_NSPIRE_V), theme_key = isKeyPressed(KEY_NSPIRE_C),
+         screenshot_key = isKeyPressed(KEY_NSPIRE_S),
          k7 = isKeyPressed(KEY_NSPIRE_7), k9 = isKeyPressed(KEY_NSPIRE_9), on = false;
     uint32_t draw_at = 0;
     bool redraw = true, keyboard_was_held = enter || k5,theme_was_animating=false;
@@ -115,6 +116,8 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
     for (;;)
     {
         uint32_t now = monotonic_clock_now_ms();
+        if (screenshot_preview_tick(&ui.screenshot, now))
+            redraw = true;
         bool pad_captured = (controls.capture && !controls.capture_keyboard) ||
                             audio_controls_touchpad_captured();
         if (pad_captured)
@@ -138,6 +141,7 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
              mute_edge = key_pressed_edge(KEY_NSPIRE_M, &mute);
         bool clock_edge = key_pressed_edge(KEY_NSPIRE_O, &clock);
         bool theme_edge = key_pressed_edge(KEY_NSPIRE_C, &theme_key);
+        bool screenshot_edge = key_pressed_edge(KEY_NSPIRE_S, &screenshot_key);
         bool scratch_edge = key_pressed_edge(KEY_NSPIRE_SCRATCHPAD, &scratch);
         bool mode_edge = key_pressed_edge(KEY_NSPIRE_P, &mode_key),
              visual_edge = key_pressed_edge(KEY_NSPIRE_V, &visual_key);
@@ -150,7 +154,7 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
             enter_edge || pad5 || up_edge || down_edge || k8_edge || k2_edge || left_edge ||
             right_edge || k4_edge || k6_edge || back || toggle || tab_edge || mute_edge ||
             clock_edge || theme_edge || scratch_edge || mode_edge || visual_edge || info_edge ||
-            previous_edge || next_edge || on_edge || ctrl || shift || any_key_pressed();
+            previous_edge || next_edge || on_edge || screenshot_edge || ctrl || shift || any_key_pressed();
         bool was_off=g_display_power_state.off;
         bool woke=music_screen_power(screen,now,wake_activity,on_edge,controls.paused);
         if(!was_off && g_display_power_state.off){++ui.screen_offs;ui.screen_off_position=info.position;}
@@ -355,6 +359,7 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
                     up=isKeyPressed(KEY_NSPIRE_UP);down=isKeyPressed(KEY_NSPIRE_DOWN);
                     k2=isKeyPressed(KEY_NSPIRE_2);k8=isKeyPressed(KEY_NSPIRE_8);
                     k4=isKeyPressed(KEY_NSPIRE_4);k6=isKeyPressed(KEY_NSPIRE_6);
+                    screenshot_key=isKeyPressed(KEY_NSPIRE_S);
                     keyboard_was_held=enter||k5;
                     redraw=true;draw_at=0;
                     continue;
@@ -392,7 +397,7 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
         }
         bool activity = pointer.moved || pressed || back || toggle || tab_edge || up_edge ||
                         down_edge || k8_edge || k2_edge || left_edge || right_edge || action.kind ||
-                        night;
+                        night || screenshot_edge;
         if (pressed || action.kind)
             ui.chrome_until = now + 2400;
         if (activity)
@@ -403,6 +408,7 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
         if (g_display_power_state.off)
         {
             audio_playback_pump(audio);
+            player_service_writes(NULL);
             player_delay_ms(4);
             continue;
         }
@@ -412,10 +418,11 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
         bool theme_animating=ui_theme_transition_active();
         if(theme_animating!=theme_was_animating)redraw=true;
         theme_was_animating=theme_animating;
-        uint32_t interval = ui.animating || theme_animating || battery_ui_animating() || audio_controls_animating() ? 16
+        uint32_t interval = ui.animating || theme_animating || battery_ui_animating() || audio_controls_animating() ||
+                            screenshot_preview_animating(&ui.screenshot, now) ? 16
                             : ui.view && !controls.paused              ? 40
                                                                        : 125;
-        if ((redraw && now - draw_at >= 16) || now - draw_at >= interval)
+        if (screenshot_edge || (redraw && now - draw_at >= 16) || now - draw_at >= interval)
         {
             uint32_t started = monotonic_clock_now_ms();
             music_ui_render(screen, fonts, path, audio, &info, &controls, &pointer, &ui, now);
@@ -428,6 +435,13 @@ int play_audio_file(SDL_Surface *screen, const Fonts *fonts, const char *path, c
             redraw = false;
         }
         audio_playback_pump(audio);
+        if (screenshot_edge)
+        {
+            request_screenshot(screen, path, &ui.screenshot);
+            redraw = true;
+            audio_playback_pump(audio);
+        }
+        player_service_writes(NULL);
         player_delay_ms(4);
     }
     if (result != PLAY_MOVIE_RESULT_AUTO_NEXT)

@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def check(out):
     out.mkdir(parents=True, exist_ok=True)
+    from check_music_screenshots import check as check_screenshots
+    check_screenshots(out / "screenshots")
     compiler = shutil.which("gcc") or shutil.which("clang")
     assert compiler, "Host C compiler required"
     flags = [compiler, "-std=c99", "-O2", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT / "src")]

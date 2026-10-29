@@ -30,6 +30,7 @@ typedef struct {
     int x, y;
     bool visible, moved, press_edge, release_edge, down;
 } PointerState;
+typedef struct {int unused;} ScreenshotPreviewState;
 /* PRODUCTION_MUSIC_STATE */
 /* PRODUCTION_TRANSITIONS */
 static uint32_t monotonic_clock_now_ms(void) {return 0;}

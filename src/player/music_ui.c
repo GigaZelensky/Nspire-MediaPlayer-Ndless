@@ -177,6 +177,7 @@ void music_ui_open(MusicUi *ui, const char *path, LoadingProgress *loading)
 }
 void music_ui_close(MusicUi *ui)
 {
+    clear_screenshot_preview(&ui->screenshot);
     remembered_view = ui->view;
     remembered_mode = ui->mode;
     free(ui->cover);
@@ -889,6 +890,7 @@ void music_ui_render(SDL_Surface *s, const Fonts *f, const char *path, AudioPlay
     night_mode_draw_status_at(s,f,8,status_live?58:36,now);
     expanded_art(s, f, ui);
     audio_controls_draw(s, f, audio, true, now);
+    draw_screenshot_preview_osd(s, f, &ui->screenshot, now);
     if (pointer->visible && (!ui->view || chrome))
         draw_cursor(s, pointer->x, pointer->y);
     present_screen(s);

@@ -130,7 +130,7 @@ inactive while entering a password.
 | Key | Action |
 | --- | --- |
 | `C` | Cycle theme color |
-| `S` | Save a BMP screenshot, including player error dialogs (disabled for encrypted video) |
+| `S` | Save a BMP screenshot, including music, cover art, visualizations, Info and player error dialogs (disabled for encrypted video) |
 | `O` | Open processor speed settings; also available from the picker's MHz label |
 | `Scratchpad` | Save state and open OS Scratchpad |
 

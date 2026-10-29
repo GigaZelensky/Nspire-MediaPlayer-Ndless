@@ -20,6 +20,7 @@ enum
 typedef struct
 {
     AudioMetadata tags;
+    ScreenshotPreviewState screenshot;
     uint16_t *cover;
     MusicVisual *visual;
     UiTransition hover[MUSIC_CONTROL_COUNT], press[MUSIC_CONTROL_COUNT], info, queue, tooltip, art, chrome;
