@@ -1935,6 +1935,8 @@ def probe_embedded_subtitle_tracks(input_path: Path) -> list[EmbeddedSubtitleTra
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         if completed.returncode == 0:
             try:
@@ -1964,10 +1966,12 @@ def probe_embedded_subtitle_tracks(input_path: Path) -> list[EmbeddedSubtitleTra
         [ffmpeg, "-hide_banner", "-i", str(input_path)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     tracks = []
     subtitle_ordinal = 0
-    for line in completed.stderr.splitlines():
+    for line in (completed.stderr or "").splitlines():
         if " Subtitle:" not in line:
             continue
         language_match = re.search(r"Stream #\d+:\d+(?:\(([^)]+)\))?: Subtitle:", line)
@@ -1997,9 +2001,10 @@ def extract_embedded_subtitle_track(input_path: Path, output_path: Path, track_i
         f"0:s:{track_index}",
         str(output_path),
     ]
-    completed = subprocess.run(command, capture_output=True, text=True)
+    completed = subprocess.run(command, capture_output=True, text=True,
+                               encoding="utf-8", errors="replace")
     if completed.returncode != 0:
-        raise RuntimeError(completed.stderr.strip() or f"ffmpeg subtitle extraction failed for track {track_index}")
+        raise RuntimeError((completed.stderr or "").strip() or f"ffmpeg subtitle extraction failed for track {track_index}")
     return output_path
 
 
@@ -2254,6 +2259,8 @@ def probe_video(input_path: Path) -> VideoProbe:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         if completed.returncode == 0:
             try:
@@ -2309,8 +2316,10 @@ def probe_video(input_path: Path) -> VideoProbe:
         [ffmpeg, "-hide_banner", "-i", str(input_path)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
-    stderr = completed.stderr
+    stderr = completed.stderr or ""
     width = 0
     height = 0
     display_width = 0

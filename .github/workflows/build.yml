@@ -273,8 +273,8 @@ jobs:
 
       - name: Check GUI and native encoding
         run: |
-          python -m unittest discover -s tools/tests -p test_encoder_process_poll.py
-          if ($LASTEXITCODE -ne 0) { throw 'Encoder process polling checks failed' }
+          python -m unittest discover -s tools/tests -p 'test_encoder_*.py'
+          if ($LASTEXITCODE -ne 0) { throw 'Encoder regression checks failed' }
           python tools/check_encoder_gui.py --screenshots build/encoder-check/screenshots
           if ($LASTEXITCODE -ne 0) { throw 'Encoder GUI checks failed' }
 

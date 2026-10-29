@@ -40,13 +40,26 @@ def source_fixture(work):
         '-t','3','-map','0:v','-map','1:a','-map','2:a','-map','3:s','-map','4:s','-c:v','libx264',
         '-preset','ultrafast','-c:a','aac','-c:s','srt','-metadata:s:a:0','language=eng',
         '-metadata:s:a:1','language=spa','-metadata:s:a:1','title=Second soundtrack',
-        '-metadata:s:s:0','language=eng','-metadata:s:s:1','language=spa',str(source)],check=True,timeout=30)
+        '-metadata:s:s:0','language=eng','-metadata:s:s:1','language=spa',
+        '-metadata','title=Closing quote \u201d and Japanese \u65e5\u672c\u8a9e',str(source)],check=True,timeout=30)
     return source
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--screenshots',type=Path);args=parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='nmedia-gui-check-') as temporary:
         work=Path(temporary);source=source_fixture(work)
+        # Exercise the bundled-only path in the packaged EXE as well. A system
+        # ffprobe must not mask locale-dependent decoding of FFmpeg metadata.
+        import encode_ndless_video as encoder
+        find_ffprobe=encoder.ffprobe_path
+        try:
+            encoder.ffprobe_path=lambda:None
+            fallback=encoder.probe_video(source)
+            assert (fallback.storage_width,fallback.storage_height)==(384,216)
+            assert len(encoder.probe_embedded_subtitle_tracks(source))==2
+        finally:
+            encoder.ffprobe_path=find_ffprobe
+        print('PASS bundled-only Unicode metadata probes independent of the Windows code page')
         result,events=wait(Task({'task':'probe','path':str(source)}))
         assert result and not [e for e in events if e['kind']=='error'],events
         info=next(e['info'] for e in events if e['kind']=='source');preview=next(e['image'] for e in events if e['kind']=='preview')
